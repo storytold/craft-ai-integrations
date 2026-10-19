@@ -1,0 +1,21 @@
+# AGENTS.txt — tools/mutation
+
+Deliberate-bug checks: each case breaks one safety rule in the source, runs the one test that
+should notice, and puts the source back.
+
+- **Run cases exclusively.** The scripts snapshot and restore source files, so do not edit, format
+  or build those files while a run is in progress. Afterwards, read the restored source and rerun
+  the focused tests.
+- **A case is caught only if the mutated code compiled and the test run failed.** A mutant that
+  does not compile counts as not caught, so every survivor is either a test gap (fix the test) or
+  a bad mutant (fix the mutant). No survivor is ignored.
+
+    python tools/mutation/mutation_check.py u2           # one group
+    python tools/mutation/mutation_check.py u2 stale      # cases whose name contains "stale"
+
+Group ids are historical labels; the header of each test file says what it covers. Cargo runs
+serially inside the harness, targeted with `-p`, with `-j 8`.
+
+Logs go to `tools/mutation/verification/` (not committed) after passing through `scrub.py`,
+which replaces a Windows or Unix profile folder with `%USERPROFILE%` so no account name is
+written. Do not commit local verification logs.

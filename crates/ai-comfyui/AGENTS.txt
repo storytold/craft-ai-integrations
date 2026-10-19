@@ -1,0 +1,53 @@
+# AGENTS.txt — craft-ai-comfyui
+
+The ComfyUI adapter and its workflow library: imported API-format graphs kept as JSON files one
+per workflow, validated again on every load.
+
+- **Workflow ids are not file names.** An id is a model id that arrives inside an imported
+  file, so whoever shares a workflow picks it. Stored file names are derived (`file_name`):
+  cleaned characters plus a hash of the exact id — never `dir.join(id)`. The hash width is a
+  threat-model decision: 32-bit FNV is grindable against the 40-character truncation, so this
+  surface uses 64-bit. (`ai-native`'s consent `file_name` is a different surface — app-written
+  ids — and its 32-bit idiom is assessed separately.)
+- **One workflow per id, resolved by stored id, never by reconstructing a name.** `save` and
+  `remove` enumerate the directory and match the id stored inside each file; they never build a
+  legacy `{id}.json` path from an untrusted id. Files written before derived names (and
+  launcher-written files of any name) must stay replaceable and removable.
+- **Loading and reconciling must agree on what a stored workflow is.** `load_specs` and
+  `files_storing` share `is_workflow_file` and `workflow_stem`: a file `load()` never shows must
+  never be deleted by `remove` or tidied by `save`, and a workflow the person can see must
+  always be reachable. Two code paths that must agree on a predicate share the code, not a
+  copy of it — copying is how they drifted twice (json extension filter, non-UTF-8 stems).
+- **Fail before mutating.** `save` scans before writing and propagates the scan error, so a
+  failed scan leaves the library untouched; `remove` stays best-effort — an unreadable
+  directory behaves like a missing file. Damaged files are skipped by every scan, not fatal.
+- **A partial scan must never drive a mutation.** A directory entry that cannot be produced
+  (`read_dir` iteration failing partway — real on network mounts and FUSE) is a scan failure,
+  not a skip: `files_storing` propagates it like an unreadable directory, because `save` acting
+  on a partial listing would leave duplicates and `remove` would report success while skipping
+  files. One unreadable or damaged *file* is different — it stays skippable. `load_specs` keeps
+  its documented skip-not-fatal read contract: a read may report what it could list; a
+  mutation must not act on a partial one. `.flatten()` over a `Result`-yielding iterator is
+  how this bug hides — it turns "the listing broke" into "nothing more to see".
+- **File names do not confer ownership.** What a file stores is decided by its content, so a
+  derived destination can sit occupied by a different workflow (a hand-edited id inside, or a
+  launcher-written file at that name). `save` checks its destination before writing and refuses
+  rather than overwrite a workflow the scan cannot identify; `remove` only ever touches files
+  it identifies by stored id, so an occupied destination is out of its reach by construction.
+- **Write a destination whole, through a temporary file renamed into place.** A direct
+  write to a stored workflow file can be interrupted, leaving truncated JSON at the derived
+  name; no scan identifies it, the ownership refusal then blocks every later save of that id,
+  and `remove` cannot see it — the workflow is wedged until the file is deleted by hand.
+  `save` writes the full JSON to a temp file *in the library directory* (same filesystem, so
+  the rename is atomic; no `json` extension, so no scan ever considers it), flushes with
+  `sync_all`, then renames onto the destination — the shape `ai-native`'s `atomic_write`
+  already uses. `tempfile` is an existing dependency. Never write a stored file in place.
+- **These safety rules carry deliberate-bug checks** — the `wf` group in
+  [tools/mutation/README.md](../../tools/mutation/README.md).
+- **`src/library.rs` is above the 500-line soft limit** (within the 700 ceiling) with two
+  responsibilities (spec parsing, library storage); splitting it is queued follow-up work —
+  land only small fixes there until the split, and grow nothing else into it.
+- **The non-UTF-8-name regression test is Linux-only** (`target_os = "linux"`, not `unix`):
+  its premise is a file name the filesystem accepts but `to_str` refuses, which ext4 allows and
+  macOS APFS refuses to create at all (EILSEQ — it failed macos CI that way). `workflow_stem`'s
+  `"workflow"` fallback stays as defensive depth on platforms that cannot exercise it.

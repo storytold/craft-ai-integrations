@@ -1,0 +1,13 @@
+# AGENTS.txt — craft-ai-comfy-env
+
+Finds an existing ComfyUI Desktop install, inventories its model files and node packs, downloads
+missing model files into it, and keeps accepted model licences apart from installed files.
+
+- **Nothing here downloads from a real source or touches a real ComfyUI install without an
+  explicit go.** Tests run against scripted servers and fixture files.
+- **Downloads are checksummed.** Model files carry size, SHA-256, source and licence; a node pack
+  archive whose folders differ only in case is refused, and licence records that are damaged are
+  reported, not silently repaired.
+- **Safety rules here carry deliberate-bug checks** — the model-source, node-pack and licence
+  groups in [tools/mutation/README.md](../../tools/mutation/README.md). If you change a rule the
+  harness checks, update its cases.

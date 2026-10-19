@@ -1,0 +1,8 @@
+# AGENTS.txt — craft-ai-http
+
+The one TLS setting every hosted call and download uses: the platform's certificate check.
+
+- **Any new hosted request or download in the workspace goes through this setting.** Do not build
+  a TLS agent anywhere else.
+- A test in this crate fails if any crate builds an agent without the platform verifier, so adding
+  a bypassed or hand-rolled agent will not pass CI — do not try to work around it.

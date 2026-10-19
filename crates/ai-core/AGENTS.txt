@@ -1,0 +1,17 @@
+# AGENTS.txt — craft-ai-core
+
+The data model and the provider trait: connections, capabilities, requests, jobs, consent,
+history, the shared store format, and the conformance checks every provider must pass.
+
+Constraints that are specific to this crate:
+
+- **Serde only.** No I/O, no async runtime. Desktop-only code belongs in `ai-native`.
+- **Must compile for wasm32-unknown-unknown.** CI checks it, and a web launcher reads this model.
+  Check with `cargo check -p craft-ai-core --target wasm32-unknown-unknown --locked`.
+- **This crate is provisional.** It is proposed for `storytold/craft-libs`; until that review
+  finishes, do not widen the shared contract here. Contract changes go through the craft-libs
+  review, not a quiet edit.
+
+Every new provider anywhere in the workspace must pass this crate's conformance checks
+(`run_lifecycle`, `run_cancel`, `run_rejects`, `run_unknown_job`) — see
+[docs/ADOPT-A-TOOL.md](../../docs/ADOPT-A-TOOL.md).

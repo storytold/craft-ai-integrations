@@ -1,0 +1,88 @@
+# AGENTS.txt
+
+Guidance for AI coding agents working in this repository. It is written to be read on its own;
+where it and the code disagree, the code and its tests are right.
+
+## What this repository is
+
+One AI connection for every Craft app: a person sets up a tool and its model once, and every app
+that has that tool uses it with no further setup. This workspace is the runtime half of the Craft
+AI layer — provider adapters, secret stores, the app-facing client, local runtime setup and
+reusable egui widgets.
+
+The pure contract in `crates/ai-core` (connections, capabilities, requests, jobs, consent, the
+shared store format) is proposed for `storytold/craft-libs` and is **provisional until that review
+finishes**. Nothing here is a final API, and a change here should not quietly widen that contract.
+
+Which crate owns what: [docs/LAYOUT.md](docs/LAYOUT.md). The shared-tool contract and its limits:
+[docs/PLATFORM-CONTRACT.md](docs/PLATFORM-CONTRACT.md).
+
+## Commands
+
+Builds are heavy. Target the crate you changed, run one cargo process at a time, `-j 8`; do not
+run workspace-wide builds locally — CI does that.
+
+    cargo test -p craft-ai-<crate> -j 8
+    cargo clippy -p craft-ai-<crate> --all-targets --locked -j 8 -- -D warnings
+    cargo fmt --all --check
+
+`craft-ai-core` and `craft-ai-features` must compile for wasm (a web launcher reads them):
+
+    cargo check -p craft-ai-core --target wasm32-unknown-unknown --locked
+    cargo check -p craft-ai-features --target wasm32-unknown-unknown --locked
+
+Tests that touch the real OS keychain are `#[ignore]`d and run only on request:
+
+    cargo test -p craft-ai-native -- --ignored keychain_round_trip
+
+Nothing runs against a real provider, a real download or a real ComfyUI without an explicit go
+from the person asking.
+
+## Rules for every change
+
+- **Test first.** Write the failing test, then the code. Ship tests with new logic, especially
+  pure functions.
+- **Safety rules get a deliberate-bug check.** Break the rule on purpose and confirm a test fails
+  ([tools/mutation/](tools/mutation/)). No surviving mutant is ignored.
+- **Small files.** Under 500 lines each, 700 at the very most. A file near the limit is doing too
+  much; split it by responsibility.
+- **No `unsafe`.** The workspace forbids it. No `unwrap`, `expect` or `panic` in shipped code —
+  every `lib.rs` denies them; `clippy.toml` allows them in tests.
+- **No secrets in the repository or in logs.** Keys go through the secret stores in `ai-native`.
+- **When two code paths must agree on what a set contains, share the code that decides.** A
+  copied predicate drifts; the workflow library's loader and reconciler diverged twice
+  (extension filter, non-UTF-8 stems) before their predicates were extracted into shared
+  helpers. When they disagree, one path deletes files the other never showed.
+- **Gate a test to where its premise holds.** A test that constructs a platform-specific
+  situation (a non-UTF-8 file name, a permission error, a symlink) must carry the narrowest
+  `cfg` that covers the filesystems where that situation exists — not a broad family. The
+  workflow library's non-UTF-8-name test was gated `unix` and failed macOS CI: APFS refuses
+  to create a non-UTF-8 name at all (EILSEQ), so the premise exists only on byte-transparent
+  filesystems like ext4, and the test is `target_os = "linux"`. A `cfg` wider than the premise
+  turns a pass into a setup panic on another platform.
+- **Do not claim more than was run.** Say plainly what was tested live, what was tested against
+  a scripted server, and what is only proposed.
+
+## Commits and pull requests
+
+Commit messages use a conventional prefix, with the crate in brackets where one crate is
+affected:
+
+    feat(ai-client): resolve the selected local backend and model
+    fix(ai-openai): stop retrying on a 4xx
+    docs: add LAYOUT.md
+
+Changes reach `main` through a pull request only. Merges are squash or rebase; history stays
+linear.
+
+## Guides
+
+- [docs/LAYOUT.md](docs/LAYOUT.md) — what lives where, in this repository and out of it
+- [docs/PLATFORM-CONTRACT.md](docs/PLATFORM-CONTRACT.md) — the shared-tool contract, its ownership
+  boundary and its deliberate limits
+- [docs/ADOPT-A-TOOL.md](docs/ADOPT-A-TOOL.md) — add a service or a tool, or use one from an app;
+  the runnable version is `crates/ai-client/tests/third_party_adoption.rs`
+- [docs/ADD-AN-ENGINE.md](docs/ADD-AN-ENGINE.md) — add a model to a built-in engine
+- [tools/mutation/README.md](tools/mutation/README.md) — the deliberate-bug harness and its groups
+- [docs/STATUS.md](docs/STATUS.md) — what has and has not been verified; `docs/design/` holds
+  design notes

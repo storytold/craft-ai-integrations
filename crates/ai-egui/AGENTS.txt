@@ -1,0 +1,9 @@
+# AGENTS.txt — craft-ai-egui
+
+Theme-neutral egui widgets — status, model picker, consent prompt, job progress, connection
+panel, history — for apps that have no chrome of their own.
+
+- **Needs Rust 1.95.**
+- **Widgets are theme-neutral.** No app colours, no assumptions about the host app's look; apps
+  decide where and how the widgets appear.
+- Examples run on sample data only: `cargo run -p craft-ai-egui --example picker_demo`.

@@ -1,0 +1,14 @@
+# AGENTS.txt — craft-ai-native
+
+Desktop-only crate: secret stores (OS keychain, passphrase-encrypted file, environment), the shared
+store file with its locked atomic writer, and the consent and history files.
+
+- **No secrets in the repository or in logs.** Every key goes through these stores and nowhere
+  else.
+- **Tests that touch the real OS keychain are `#[ignore]`d.** Run them only on request:
+  `cargo test -p craft-ai-native -- --ignored keychain_round_trip`.
+- **Writes to the shared store go through the locked atomic writer.** Concurrent saves must not
+  swap or delete each other's key; a new key is written outside the file lock, into a slot of its
+  own. These safety rules carry deliberate-bug checks — see
+  [tools/mutation/README.md](../../tools/mutation/README.md) and the secret-store chain notes in
+  the repository docs.
