@@ -456,6 +456,44 @@ fn a_bundle_file_lands_in_its_own_sub_folder_with_no_stray_part_file() {
     assert_eq!(names(&dir.path().join("Bundle")), ["m.safetensors"]);
 }
 
+/// Makes `link` a directory link to `target`. Fails where the machine does not allow links.
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return std::os::windows::fs::symlink_dir(target, link);
+}
+
+/// A bundle sub-folder that links outside the destination takes no download and no part file.
+#[test]
+fn a_bundle_folder_that_links_outside_the_destination_is_refused() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    if link_dir(outside.path(), &dir.path().join("Bundle")).is_err() {
+        eprintln!("skipped: this machine does not allow directory links");
+        return;
+    }
+    let mut file = model(&data, &format!("{}/m", origin(&server)));
+    file.filename = "Bundle/m.safetensors".into();
+    let err = run(
+        &downloader(),
+        &file,
+        dir.path(),
+        None,
+        &AtomicBool::new(false),
+    )
+    .0
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+    assert!(
+        names(outside.path()).is_empty(),
+        "nothing may be written through the link"
+    );
+    assert_eq!(server.count(), 0, "nothing may be fetched for it");
+}
+
 #[test]
 fn verify_catches_a_changed_or_truncated_file() {
     let data = body();

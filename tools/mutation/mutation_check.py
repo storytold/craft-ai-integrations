@@ -187,6 +187,8 @@ U3 = [
     ('bundle-path-allows-dot-names', DOWNLOAD, "&& !part.starts_with('.')", '&& true', E, 'download', 'file_names_that_could_escape'),
     ('bundle-path-depth-unbounded', DOWNLOAD, 'if parts.len() > 3 {', 'if parts.len() > 3000 {', E, 'download', 'file_names_that_could_escape'),
     ('bundle-path-allows-empty-parts', DOWNLOAD, '!part.is_empty()', 'true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-parent-link-followed', DOWNLOAD, '(Ok(root), Ok(actual)) => actual.starts_with(root),', '(Ok(_), Ok(_)) => true,', E, 'download', 'links_outside_the_destination'),
+    ('bundle-parent-check-skipped', DOWNLOAD, 'if !parent_stays_inside(dest_dir, parent) {', 'if false {', E, 'download', 'links_outside_the_destination'),
     ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
     ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
 ]

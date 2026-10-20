@@ -158,6 +158,11 @@ impl Downloader {
         let parent = target.parent().unwrap_or(dest_dir);
         std::fs::create_dir_all(parent)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not create the model folder"))?;
+        if !parent_stays_inside(dest_dir, parent) {
+            return Err(AiError::invalid(
+                "the model folder is outside the destination",
+            ));
+        }
         if check == Check::Expect
             && std::fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() == file.size_bytes)
         {
@@ -379,6 +384,18 @@ impl Downloader {
 /// keep its files together in one folder (`Florence-2-large/model.safetensors`). A name that is
 /// empty, starts with a dot, or holds a backslash, colon or control character is refused, which
 /// rules out `..`, absolute paths and drive letters.
+/// Whether `parent`, with every link resolved, is still inside `dest_dir`. A bundle sub-folder that
+/// is a link to somewhere else would otherwise take the part file and the final rename with it.
+fn parent_stays_inside(dest_dir: &Path, parent: &Path) -> bool {
+    match (
+        std::fs::canonicalize(dest_dir),
+        std::fs::canonicalize(parent),
+    ) {
+        (Ok(root), Ok(actual)) => actual.starts_with(root),
+        _ => false,
+    }
+}
+
 pub fn safe_relative(name: &str) -> Option<PathBuf> {
     let parts: Vec<&str> = name.split('/').collect();
     if parts.len() > 3 {
