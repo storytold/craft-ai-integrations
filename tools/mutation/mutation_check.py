@@ -75,7 +75,7 @@ U1 = [
     ('form-header-dropped', DRAFT, 'enabled: self.enabled,\n            key_header,\n        };', 'enabled: self.enabled,\n            key_header: None,\n        };', M, 'custom_connection', 'named_header_is_kept'),
     ('edit-loses-header', DRAFT, 'key_header: c.key_header.clone().unwrap_or_default(),', 'key_header: String::new(),', M, 'custom_connection', 'named_header_is_kept'),
     ('custom-test-wrong-provider', CUSTOM, 'self.provider.trim() == "openai-compatible"', 'self.provider.trim() == "openai"', M, 'custom_connection', 'starts_from_the_other'),
-    ('custom-billing-assumed-free', DRAFT, 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
+    ('custom-billing-assumed-free', C + 'ai-core/src/draft/presets.rs', 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
     ('named-key-sent-as-bearer', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(_) => ("Authorization".to_owned(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('named-key-value-prefixed', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(name) => (name.clone(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('redirects-followed', HTTP, '.max_redirects(0)', '.max_redirects(5)', O, 'custom', 'redirect_never_carries'),
@@ -381,8 +381,8 @@ SD = [
     ('volcengine-address-accepted', SD_LIB, 'base != "' + BYTEPLUS + '"', 'base != "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
     ('query-string-allowed', SD_LIB, "base.contains(['?', '#'])", 'false', SDC, 'provider', ''),
     ('old-model-served', SD_LIB, 'const MODEL: &str = "dreamina-seedance-2-0-260128";', 'const MODEL: &str = "doubao-seedance-2-0-260128";', SDC, 'provider', ''),
-    ('preset-points-at-volcengine', DRAFT_RS, 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
-    ('preset-named-volcengine', DRAFT_RS, 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
+    ('preset-points-at-volcengine', C + 'ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
+    ('preset-named-volcengine', C + 'ai-core/src/draft/presets.rs', 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
 ]
 
 VTX_LIB = C + 'ai-vertex/src/lib.rs'
@@ -417,7 +417,7 @@ LR = [
     ('broken-choice-looks-unbound', LOCAL_RS, 'Err(error) => return Err(AiError::unsupported(error.to_string())),', 'Err(_error) => return Ok(None),', CL, 'local_routes', 'a_broken_choice'),
     ('remote-route-leaked', LOCAL_RS, 'if resolved.connection.locality != Locality::Local {', 'if false {', CL, 'local_routes', 'a_remote_choice'),
     ('native-route-treated-as-comfyui', LOCAL_RS, 'if route.provider != "comfyui" {', 'if false {', CL, 'local_routes', 'an_endpoint_cannot'),
-    ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {', 'if false {', CL, 'local_routes', 'a_selected_native'),
+    ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, 'local_routes', 'a_selected_native'),
     ('picker-offers-uninstalled-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', '} else if !client.has_adapter(&connection.provider) {', '} else if false {', CL, 'local_routes', 'a_selected_native'),
     ('picker-false-setup-for-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', 'state != GroupState::Ready && state != GroupState::NeedsAdapter', 'state != GroupState::Ready', CL, 'local_routes', 'a_selected_native'),
 ]
@@ -444,7 +444,7 @@ CT_STORE = C + 'ai-core/src/store.rs'
 T = 'custom_tool_conformance'
 # Declared custom tool, two app clients (tests/custom_tool_conformance.rs).
 CT = [
-    ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {', 'if false {', CL, T, 'without_the_adapter'),
+    ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, T, 'without_the_adapter'),
     ('picker-hides-missing-adapter', CT_PICKER, 'RoleStatus::Unavailable { reason } => Some(reason),', 'RoleStatus::Unavailable { reason } => {\n                    let _ = reason;\n                    None\n                }', CL, T, 'without_the_adapter'),
     ('consent-not-enforced', CT_CLIENT, 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
     ('request-not-forwarded', CT_CLIENT, 'provider.submit(&plan.model, &plan.request) {', 'provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())) {', CL, T, 'two_apps_run'),
@@ -454,6 +454,7 @@ CT = [
 ]
 
 from mutation_u2 import U2, U2_EQUIVALENT  # noqa: E402
+from mutation_contract import CA  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -515,7 +516,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'s21': S21, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
+GROUPS = {'s21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
