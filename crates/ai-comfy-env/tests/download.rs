@@ -402,6 +402,8 @@ fn internal_and_plain_http_sources_are_refused_by_default() {
 #[test]
 fn file_names_that_could_escape_the_folder_are_refused() {
     let data = body();
+    // A scripted local server, so a validator that is broken still cannot reach the internet.
+    let server = range_server(data.clone(), true);
     let dir = tempfile::tempdir().unwrap();
     for name in [
         "../evil.safetensors",
@@ -417,7 +419,7 @@ fn file_names_that_could_escape_the_folder_are_refused() {
         "",
         "C:x",
     ] {
-        let mut file = model(&data, "https://example.com/m");
+        let mut file = model(&data, &format!("{}/m", origin(&server)));
         file.filename = name.into();
         let err = run(
             &downloader(),
@@ -431,6 +433,7 @@ fn file_names_that_could_escape_the_folder_are_refused() {
         assert_eq!(err.kind, ErrorKind::InvalidRequest, "{name}");
     }
     assert!(names(dir.path()).is_empty());
+    assert_eq!(server.count(), 0, "a refused name must never be fetched");
 }
 
 #[test]
@@ -477,20 +480,12 @@ fn a_bundle_folder_that_links_outside_the_destination_is_refused() {
     }
     let mut file = model(&data, &format!("{}/m", origin(&server)));
     file.filename = "Bundle/Deeper/m.safetensors".into();
-    let err = run(
-        &downloader(),
-        &file,
-        dir.path(),
-        None,
-        &AtomicBool::new(false),
-    )
-    .0
-    .unwrap_err();
+    let cancel = AtomicBool::new(false);
+    let err = downloader()
+        .fetch(&file, dir.path(), None, &cancel, &mut |_| {})
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidRequest);
-    assert!(
-        names(outside.path()).is_empty(),
-        "nothing may be written through the link"
-    );
+    assert!(names(outside.path()).is_empty(), "wrote through the link");
     assert_eq!(server.count(), 0, "nothing may be fetched for it");
 }
 
