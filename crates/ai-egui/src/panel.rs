@@ -72,11 +72,14 @@ impl ConnectionPanel {
             if tested.trim() == self.form.draft.endpoint.trim() {
                 match answer {
                     Ok(report) => {
-                        self.form.test = TestLine::Passed {
-                            models: report.models.len(),
-                            millis: u64::try_from(report.elapsed.as_millis()).unwrap_or(u64::MAX),
-                        };
-                        self.form.draft.set_models(report.models);
+                        let models = report.models.len();
+                        if self.form.draft.set_models(&tested, report.models) {
+                            self.form.test = TestLine::Passed {
+                                models,
+                                millis: u64::try_from(report.elapsed.as_millis())
+                                    .unwrap_or(u64::MAX),
+                            };
+                        }
                     }
                     Err(e)
                         if e.kind == ErrorKind::Unsupported

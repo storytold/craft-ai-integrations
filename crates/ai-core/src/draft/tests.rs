@@ -263,7 +263,7 @@ fn models_found_at_the_new_address_are_kept() {
     )];
     let mut moved = ConnectionDraft::from_connection(&saved);
     moved.endpoint = "https://other.example.com/v1".into();
-    moved.models = found.clone();
+    assert!(moved.set_models("https://other.example.com/v1", found.clone()));
     assert_eq!(
         moved
             .prepare(std::slice::from_ref(&saved))
@@ -279,7 +279,7 @@ fn a_retest_that_finds_the_same_models_keeps_them() {
     let saved = saved_openai();
     let mut moved = ConnectionDraft::from_connection(&saved);
     moved.endpoint = "https://other.example.com/v1".into();
-    moved.set_models(saved.models.clone());
+    assert!(moved.set_models("https://other.example.com/v1", saved.models.clone()));
     assert_eq!(
         moved
             .prepare(std::slice::from_ref(&saved))
@@ -298,7 +298,8 @@ fn models_found_before_the_address_changed_are_dropped() {
         "Llama X",
     )];
     let mut d = ConnectionDraft::from_connection(&saved);
-    d.set_models(found);
+    let address = d.endpoint.clone();
+    assert!(d.set_models(&address, found));
     d.endpoint = "https://other.example.com/v1".into();
     assert!(
         d.prepare(std::slice::from_ref(&saved))

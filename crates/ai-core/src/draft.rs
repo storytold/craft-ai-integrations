@@ -10,7 +10,8 @@
 //!   newline would otherwise reach an HTTP header.
 //! - **Editing keeps what was not touched.** Leaving the key box empty keeps the saved key; the
 //!   models saved with a connection are dropped when the address changes, because they belong to
-//!   the old one. Models found by a test at the new address are kept.
+//!   the old one. Models found by a test at the new address are kept. A late answer from another
+//!   address is dropped rather than credited to the address now in the form.
 //! - **Messages are for people.** Every [`DraftError`] names the field and says what to do, and
 //!   never contains the key.
 //!
@@ -49,6 +50,8 @@ pub struct Preset {
 
 pub use presets::PRESETS;
 use presets::preset_models;
+
+mod presets;
 
 /// Which box a problem belongs to, so a form can mark it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,15 +122,12 @@ pub struct ConnectionDraft {
     /// Header that carries the key; empty sends it as `Authorization: Bearer`.
     pub key_header: String,
     pub enabled: bool,
-    /// Models found by a test, carried onto the saved connection.
+    /// Models carried onto the saved connection. A new custom draft may declare models by hand;
+    /// models found by a test must use [`set_models`](Self::set_models) to record their address.
     pub models: Vec<ModelInfo>,
     /// Editing: the saved key's locator, and whether a key was saved at all.
     secret: Option<SecretRef>,
-    original_endpoint: Option<String>,
-    /// Editing: the models the connection had when the form opened, which belong to the original
-    /// address.
-    loaded_models: Vec<ModelInfo>,
-    /// The address `models` were last set for through [`set_models`](Self::set_models).
+    /// The address `models` were loaded, preset or last set for.
     models_for: Option<String>,
 }
 
@@ -145,8 +145,6 @@ impl Default for ConnectionDraft {
             enabled: true,
             models: Vec::new(),
             secret: None,
-            original_endpoint: None,
-            loaded_models: Vec::new(),
             models_for: None,
         }
     }
@@ -169,13 +167,15 @@ impl fmt::Debug for ConnectionDraft {
 impl ConnectionDraft {
     /// A new connection started from a preset.
     pub fn from_preset(preset: &Preset) -> Self {
+        let models = preset_models(preset);
         Self {
             label: preset.name.to_owned(),
             provider: preset.provider.to_owned(),
             endpoint: preset.endpoint.to_owned(),
             billing: preset.billing,
             uses_key: preset.needs_key,
-            models: preset_models(preset),
+            models_for: (!models.is_empty()).then(|| preset.endpoint.trim().to_owned()),
+            models,
             ..Self::default()
         }
     }
@@ -194,29 +194,29 @@ impl ConnectionDraft {
             enabled: c.enabled,
             models: c.models.clone(),
             secret: c.auth.secret_ref().cloned(),
-            original_endpoint: c.endpoint.clone(),
-            loaded_models: c.models.clone(),
-            models_for: None,
+            models_for: c.endpoint.as_deref().map(|e| e.trim().to_owned()),
         }
     }
 
-    /// Replaces `models` with what a test found at the address now in the form. They are kept on
-    /// save unless the address changes again afterwards.
-    pub fn set_models(&mut self, models: Vec<ModelInfo>) {
+    /// Records models found by a test at `address`, the field value when the test started.
+    /// An answer for an address no longer in the form is refused without changing its models.
+    /// The caller must not substitute the current field value for the tested address.
+    #[must_use]
+    pub fn set_models(&mut self, address: &str, models: Vec<ModelInfo>) -> bool {
+        if address.trim() != self.endpoint.trim() {
+            return false;
+        }
         self.models = models;
         self.models_for = Some(self.endpoint.trim().to_owned());
+        true
     }
 
-    /// False when the address moved since the form opened and `models` are still the old
-    /// address's: neither found by a test at this address nor different from what was loaded.
+    /// Known provenance must match the saved address, including after repeated edits.
+    /// A new custom draft can carry manually declared models without prior provenance.
     fn models_fit(&self, address: &str) -> bool {
-        let moved = self
-            .original_endpoint
+        self.models_for
             .as_deref()
-            .is_some_and(|o| o != address);
-        !moved
-            || self.models_for.as_deref() == Some(address)
-            || (self.models_for.is_none() && self.models != self.loaded_models)
+            .is_none_or(|origin| origin == address)
     }
 
     /// Where this would send data, as far as the address can tell. `None` while it is not a usable
@@ -371,7 +371,6 @@ use ids::{new_id, new_secret_ref};
 
 mod custom;
 mod ids;
-mod presets;
 
 #[cfg(test)]
 mod tests;

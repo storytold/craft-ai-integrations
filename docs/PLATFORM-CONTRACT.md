@@ -1,6 +1,6 @@
 # Suite-wide AI contract for app maintainers
 
-**Status:** provisional. The contract crate (`craft-ai-core`) is under review in `storytold/craft-libs` and is not yet accepted there, and no app mounts the shared flow end to end. See [STATUS.md](STATUS.md) for what is tested and what is open.
+**Status:** the initial contract crate (`craft-ai-core`) has landed in `storytold/craft-libs`. This workspace still carries a local copy with additional consent terms and model folders; its upstream safety fixes are aligned, but the dependency switch has prerequisites in [CORE-SYNC.md](CORE-SYNC.md). No production app adoption is established by the contract merge. See [STATUS.md](STATUS.md) for what is tested and what is open.
 
 ## Ownership boundary
 
