@@ -433,6 +433,7 @@ fn file_names_that_could_escape_the_folder_are_refused() {
 }
 
 #[test]
+/// A bundle file lands in its own sub folder with no stray part file.
 fn a_bundle_file_lands_in_its_own_sub_folder_with_no_stray_part_file() {
     let data = body();
     let server = range_server(data.clone(), true);

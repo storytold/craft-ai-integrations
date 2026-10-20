@@ -49,6 +49,7 @@ fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
 }
 
 #[test]
+/// The scan lists model files small bundle files and node packs.
 fn the_scan_lists_model_files_small_bundle_files_and_node_packs() {
     let dir = tree();
     let inv = scan(&ComfyInstall::at(&dir.path().join("Comfy")).unwrap());
