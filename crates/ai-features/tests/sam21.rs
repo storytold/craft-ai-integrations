@@ -126,6 +126,8 @@ fn every_part_of_the_workflow_is_disclosed_and_none_of_it_gates_anything() {
         note.contains("downloads it from Hugging Face by itself"),
         "the add-on's own download must be disclosed"
     );
+    // The readiness scan compares names and sizes only, so the note must not claim a hash check.
+    assert!(!note.contains("is checked before"), "{note}");
     // A recipe whose parts have not been reviewed lists none rather than implying a clean bill.
     assert!(f.locals[0].components.is_empty());
 }

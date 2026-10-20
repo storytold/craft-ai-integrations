@@ -79,7 +79,7 @@ fn components() -> Vec<Component> {
                 "Apache-2.0, as declared by its publisher",
                 "https://github.com/kijai/ComfyUI-segment-anything-2/blob/main/LICENSE",
                 Some(
-                    "If the checkpoint file is missing, this add-on downloads it from Hugging Face by itself. The file is checked before a Craft app may use the model.",
+                    "If the checkpoint file is missing, this add-on downloads it from Hugging Face by itself. Craft's readiness scan compares file names and sizes; it does not by itself check the SHA-256 of an installed file.",
                 ),
             ),
         },
