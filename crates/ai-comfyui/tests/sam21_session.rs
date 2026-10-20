@@ -4,6 +4,7 @@ use craft_ai_comfyui::Sam21Session;
 use serde_json::{Value, json};
 use support::{Reply, Server};
 
+/// A small grey PNG used as both the source image and the returned mask.
 fn png() -> Vec<u8> {
     let mut data = vec![];
     let mut encoder = png::Encoder::new(&mut data, 64, 64);
@@ -18,6 +19,7 @@ fn png() -> Vec<u8> {
 }
 
 #[test]
+/// Installed sam21 returns a real nonempty selection mask.
 #[ignore = "requires a separate running local ComfyUI with SAM 2.1 and Florence-2"]
 fn installed_sam21_returns_a_real_nonempty_selection_mask() {
     let url = std::env::var("CRAFT_TEST_COMFYUI_URL").expect("local server address");
@@ -40,6 +42,7 @@ fn installed_sam21_returns_a_real_nonempty_selection_mask() {
 }
 
 #[test]
+/// Selected sam21 segments the image with florence and returns an exact mask.
 fn selected_sam21_segments_the_image_with_florence_and_returns_an_exact_mask() {
     let mask = png();
     let server_mask = mask.clone();
@@ -84,6 +87,7 @@ fn selected_sam21_segments_the_image_with_florence_and_returns_an_exact_mask() {
 }
 
 #[test]
+/// Cancelling sam21 removes only its queued prompt.
 fn cancelling_sam21_removes_only_its_queued_prompt() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -134,6 +138,7 @@ fn cancelling_sam21_removes_only_its_queued_prompt() {
 }
 
 #[test]
+/// Sam21 refuses before uploading when the detector is not in comfyui.
 fn sam21_refuses_before_uploading_when_the_detector_is_not_in_comfyui() {
     // Another Florence-2 variant is installed, but not the one the graph asks for.
     let server = Server::start(|r| {
@@ -159,6 +164,7 @@ fn sam21_refuses_before_uploading_when_the_detector_is_not_in_comfyui() {
     );
 }
 
+/// A scripted ComfyUI that reports `device` (or none) and serves one mask.
 fn device_server(device: Option<&'static str>, view_type: &'static str) -> Server {
     let mask = png();
     Server::start(move |r| {
@@ -180,6 +186,7 @@ fn device_server(device: Option<&'static str>, view_type: &'static str) -> Serve
     })
 }
 
+/// A session that has verified the server and prepared a test image.
 fn prepared(server: &Server) -> Result<Sam21Session, craft_ai_core::AiError> {
     let mut session = Sam21Session::new(server.url.trim_end_matches("/v1")).unwrap();
     session.verify_server().unwrap();
@@ -188,6 +195,7 @@ fn prepared(server: &Server) -> Result<Sam21Session, craft_ai_core::AiError> {
 }
 
 #[test]
+/// The graph uses the device comfyui reports and full precision off cuda.
 fn the_graph_uses_the_device_comfyui_reports_and_full_precision_off_cuda() {
     for (device, precision) in [("cuda", "fp16"), ("cpu", "fp32"), ("mps", "fp32")] {
         let server = device_server(Some(device), "output");
@@ -206,6 +214,7 @@ fn the_graph_uses_the_device_comfyui_reports_and_full_precision_off_cuda() {
 }
 
 #[test]
+/// An unreported or unsupported device is refused before the image is uploaded.
 fn an_unreported_or_unsupported_device_is_refused_before_the_image_is_uploaded() {
     for device in [None, Some("xpu"), Some("")] {
         let server = device_server(device, "output");
@@ -218,6 +227,7 @@ fn an_unreported_or_unsupported_device_is_refused_before_the_image_is_uploaded()
 }
 
 #[test]
+/// A bad result is reported as sam 2 1 not sam 3.
 fn a_bad_result_is_reported_as_sam_2_1_not_sam_3() {
     let server = device_server(Some("cuda"), "user");
     let error = prepared(&server).unwrap().ground("person").unwrap_err();

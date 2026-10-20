@@ -35,16 +35,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// An `object_info` reply whose Florence2ModelLoader lists `choices`.
     fn nodes(choices: Value) -> Value {
         json!({"Florence2ModelLoader": {"input": {"required": {"model": [choices, {}]}}}})
     }
 
     #[test]
+    /// Accepts a loader that lists the detector.
     fn accepts_a_loader_that_lists_the_detector() {
         assert!(require_detector(&nodes(json!(["other", "Florence-2-large"]))).is_ok());
     }
 
     #[test]
+    /// Refuses a loader without it or without choices.
     fn refuses_a_loader_without_it_or_without_choices() {
         assert!(require_detector(&nodes(json!(["Florence-2-Flux-Large"]))).is_err());
         assert!(require_detector(&nodes(json!([]))).is_err());

@@ -44,14 +44,17 @@ fn device_for(stats: &Value) -> Result<(&'static str, &'static str), AiError> {
 pub struct Sam21Canceller(Arc<AtomicU64>);
 
 impl Sam21Canceller {
+    /// Cancels the prompt this session is waiting on.
     pub fn cancel(&self) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// The current cancel count, noted before a prompt is queued.
     fn mark(&self) -> u64 {
         self.0.load(Ordering::SeqCst)
     }
 
+    /// Whether a cancel arrived after `mark` was taken.
     fn fired_since(&self, mark: u64) -> bool {
         self.0.load(Ordering::SeqCst) != mark
     }
@@ -64,6 +67,7 @@ pub struct Sam21Session {
     canceller: Sam21Canceller,
 }
 impl Sam21Session {
+    /// Opens a session on a loopback ComfyUI address. Nothing is sent yet.
     pub fn new(base: &str) -> Result<Self, AiError> {
         let endpoint =
             Endpoint::parse(base).map_err(|_| AiError::invalid("invalid ComfyUI address"))?;
@@ -86,6 +90,7 @@ impl Sam21Session {
     pub fn canceller(&self) -> Sam21Canceller {
         self.canceller.clone()
     }
+    /// Confirms the port is serving ComfyUI and nothing else.
     pub fn verify_server(&self) -> Result<(), AiError> {
         let stats = self.http.get_json("/system_stats")?;
         if stats
@@ -99,6 +104,7 @@ impl Sam21Session {
         }
         Ok(())
     }
+    /// Checks the device and installed nodes, then uploads the image for later selections.
     pub fn prepare(&mut self, image: &[u8]) -> Result<(), AiError> {
         self.prepared = None;
         if image.len() < 8
@@ -141,6 +147,7 @@ impl Sam21Session {
         });
         Ok(())
     }
+    /// Selects the subject named by `text` and returns a PNG mask the size of the source.
     pub fn ground(&self, text: &str) -> Result<Vec<u8>, AiError> {
         let p = self
             .prepared
@@ -230,6 +237,7 @@ impl Sam21Session {
         }
     }
 
+    /// True once a cancel arrived since `started`. It then also removes this session's own queued prompt.
     fn cancelled(&self, id: &str, started: u64) -> bool {
         if !self.canceller.fired_since(started) {
             return false;
