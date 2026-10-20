@@ -16,7 +16,7 @@ const REQUIRED: &[&str] = &[
     "SAM3CombinePoints",
     "SAM3Segmentation",
     "MaskToImage",
-    "SaveImage",
+    "PreviewImage",
 ];
 
 pub struct Sam3Point {
@@ -79,6 +79,8 @@ impl Sam3Point {
             "6":{"class_type":"MaskToImage","inputs":{"mask":["5",0]}},
             "7":{"class_type":"SaveImage","inputs":{"images":["6",0],"filename_prefix":"craft-sam3-mask"}}
         });
+        let mut graph = graph;
+        crate::scratch::route_sinks(&mut graph)?;
         let response = self.http.post("/prompt", &json!({"prompt":graph}))?;
         let id = response
             .get("prompt_id")

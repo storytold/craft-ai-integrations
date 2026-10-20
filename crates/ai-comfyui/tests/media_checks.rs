@@ -217,6 +217,7 @@ fn inpaint_workflow() -> Workflow {
     .unwrap()
 }
 
+/// A scripted ComfyUI with the inpaint nodes installed that accepts uploads to the scratch area.
 fn inpaint_server() -> Server {
     Server::start(|r| {
         match r.path.as_str() {
@@ -239,7 +240,7 @@ fn inpaint_server() -> Server {
             };
             Reply::Json(
                 200,
-                json!({"name":name,"subfolder":"","type":"input"}).to_string(),
+                json!({"name":name,"subfolder":"","type":"temp"}).to_string(),
             )
         }
         "/prompt" => Reply::Json(200, r#"{"prompt_id":"inpaint-job"}"#.into()),
@@ -289,6 +290,7 @@ fn write(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBu
     path
 }
 
+/// A source and mask given as local file handles are read and uploaded exactly like inline bytes.
 #[test]
 fn a_local_file_handle_is_read_and_uploaded_like_inline_bytes() {
     let dir = tempfile::tempdir().unwrap();
@@ -318,8 +320,8 @@ fn a_local_file_handle_is_read_and_uploaded_like_inline_bytes() {
         .find(|r| r.path == "/prompt")
         .unwrap()
         .body_json()["prompt"];
-    assert_eq!(graph["2"]["inputs"]["image"], "returned-source.png");
-    assert_eq!(graph["3"]["inputs"]["image"], "returned-mask.png");
+    assert_eq!(graph["2"]["inputs"]["image"], "returned-source.png [temp]");
+    assert_eq!(graph["3"]["inputs"]["image"], "returned-mask.png [temp]");
 }
 
 #[test]

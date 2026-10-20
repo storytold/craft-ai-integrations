@@ -85,6 +85,7 @@ fn candidates_keep_server_order_masks_scores_and_bounds_aligned() {
     assert_eq!(found.highest_scoring(), Some(1));
 }
 
+/// Candidate requests send their points in pixels and ask for every candidate mask.
 #[test]
 fn the_graph_sends_points_in_pixels_and_asks_for_every_candidate() {
     let server = candidate_server("[0.2,0.9,0.5]", NODES);
@@ -112,7 +113,7 @@ fn the_graph_sends_points_in_pixels_and_asks_for_every_candidate() {
     assert_eq!(seg["inputs"]["output_best_mask"], false);
     assert_eq!(seg["inputs"]["refinement_iterations"], 0);
     assert_eq!(graph["4"]["inputs"]["mask"], json!(["3", 0]));
-    assert_eq!(graph["5"]["class_type"], "SaveImage");
+    assert_eq!(graph["5"]["class_type"], "PreviewImage");
     assert_eq!(graph["6"]["inputs"]["string_b"], json!(["3", 4]));
     assert_eq!(graph["8"]["inputs"]["source"], json!(["6", 0]));
 }

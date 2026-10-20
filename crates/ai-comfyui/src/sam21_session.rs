@@ -15,7 +15,7 @@ const REQUIRED: &[&str] = &[
     "DownloadAndLoadSAM2Model",
     "Sam2Segmentation",
     "MaskToImage",
-    "SaveImage",
+    "PreviewImage",
 ];
 struct Prepared {
     filename: String,
@@ -175,6 +175,8 @@ impl Sam21Session {
             "7":{"class_type":"MaskToImage","inputs":{"mask":["6",0]}},
             "8":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":sink}}
         });
+        let mut graph = graph;
+        crate::scratch::route_sinks(&mut graph)?;
         let started = self.canceller.mark();
         let response = self.http.post("/prompt", &json!({"prompt":graph}))?;
         let id = response

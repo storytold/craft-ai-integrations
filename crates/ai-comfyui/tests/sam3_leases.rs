@@ -20,12 +20,12 @@ fn hover_server() -> Server {
         "/object_info" => Reply::Json(
             200,
             json!({"LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-                   "MaskToImage":{},"SaveImage":{}})
+                   "MaskToImage":{},"PreviewImage":{}})
             .to_string(),
         ),
         "/upload/image" => Reply::Json(
             200,
-            json!({"name":"source.png","type":"input","subfolder":""}).to_string(),
+            json!({"name":"source.png","type":"temp","subfolder":""}).to_string(),
         ),
         "/prompt" => Reply::Json(200, json!({"prompt_id":"lease-1"}).to_string()),
         "/history/lease-1" => Reply::Json(
