@@ -464,7 +464,7 @@ fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     return std::os::windows::fs::symlink_dir(target, link);
 }
 
-/// A bundle sub-folder that links outside the destination takes no download and no part file.
+/// A bundle sub-folder that links outside the destination takes no download, no part file and no new folder.
 #[test]
 fn a_bundle_folder_that_links_outside_the_destination_is_refused() {
     let data = body();
@@ -476,7 +476,7 @@ fn a_bundle_folder_that_links_outside_the_destination_is_refused() {
         return;
     }
     let mut file = model(&data, &format!("{}/m", origin(&server)));
-    file.filename = "Bundle/m.safetensors".into();
+    file.filename = "Bundle/Deeper/m.safetensors".into();
     let err = run(
         &downloader(),
         &file,
