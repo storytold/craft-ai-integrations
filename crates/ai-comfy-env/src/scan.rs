@@ -48,6 +48,7 @@ pub fn scan(install: &ComfyInstall) -> Inventory {
     }
 }
 
+/// Collects the model and small bundle files under `dir`, down to a fixed depth.
 fn walk(root: &Path, dir: &Path, depth: usize, folder: &str, out: &mut Vec<InstalledFile>) {
     if depth > MAX_DEPTH {
         return;

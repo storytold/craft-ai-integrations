@@ -141,6 +141,7 @@ impl Downloader {
         self.fetch_checked(file, dest_dir, token, cancel, progress, Check::Observe)
     }
 
+    /// Downloads one file into `dest_dir`, resuming a part file, and checks it according to `check`.
     fn fetch_checked(
         &self,
         file: &ModelFile,
@@ -313,6 +314,7 @@ impl Downloader {
         self.copy(response, &mut out, start, file.size_bytes, cancel, progress)
     }
 
+    /// Streams the response body into the part file, reporting progress and honouring cancel.
     fn copy(
         &self,
         response: ureq::http::Response<ureq::Body>,

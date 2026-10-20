@@ -8,6 +8,7 @@ fn touch(path: &Path, bytes: usize) {
     fs::write(path, vec![7u8; bytes]).unwrap();
 }
 
+/// Builds a throwaway ComfyUI folder for the scan tests.
 fn tree() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("Comfy");
@@ -34,6 +35,7 @@ fn tree() -> tempfile::TempDir {
     dir
 }
 
+/// A folder with model files is an install; other folders are not.
 #[test]
 fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
     let dir = tree();

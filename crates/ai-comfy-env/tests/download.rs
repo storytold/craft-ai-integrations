@@ -398,6 +398,7 @@ fn internal_and_plain_http_sources_are_refused_by_default() {
     assert_eq!(server.count(), 0);
 }
 
+/// File names that could escape the destination folder are refused.
 #[test]
 fn file_names_that_could_escape_the_folder_are_refused() {
     let data = body();
