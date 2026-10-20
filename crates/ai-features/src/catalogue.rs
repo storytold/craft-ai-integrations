@@ -35,7 +35,7 @@ fn feature(id: &str, title: &str, summary: &str, capability: &str) -> Option<Fea
         capability: CapabilityId::parse(capability).ok()?,
         inputs: Vec::new(),
         uses: Vec::new(),
-        local: None,
+        locals: Vec::new(),
         cloud: Vec::new(),
     })
 }
@@ -108,7 +108,7 @@ fn try_builtin() -> Option<Vec<Feature>> {
         ("EffectCraft", "Roto and matte"),
     ]);
     select.inputs = vec![InputRole::Source, InputRole::Prompt];
-    select.local = Some(sam3());
+    select.locals = vec![sam3()];
 
     let mut background = feature(
         "remove-background",

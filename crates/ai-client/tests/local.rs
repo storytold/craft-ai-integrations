@@ -190,7 +190,7 @@ fn only_a_local_address_and_only_a_runnable_local_recipe_are_accepted() {
     );
     // A recipe that cannot run yet is not offered as ready.
     let mut later = feature("select-subject");
-    if let Some(local) = later.local.as_mut() {
+    if let Some(local) = later.locals.first_mut() {
         local.usable = false;
     }
     assert!(desk.enable_local(&later, SAM3_URL).is_err());

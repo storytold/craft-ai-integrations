@@ -55,10 +55,7 @@ impl World {
 #[test]
 fn the_catalogue_lists_candle_then_burn_for_select_subject() {
     let f = feature();
-    let providers: Vec<&str> = f
-        .local
-        .as_ref()
-        .unwrap()
+    let providers: Vec<&str> = f.locals[0]
         .native
         .iter()
         .map(|n| n.provider.as_str())

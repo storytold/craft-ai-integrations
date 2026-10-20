@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Route {
     /// Download model files for this feature and run them through ComfyUI on this computer.
-    Local { feature: String },
+    /// `recipe` is the workflow id of the model to set up, such as `sam3-segment`.
+    Local { feature: String, recipe: String },
     /// Connect a hosted service. `preset` is a key of `craft_ai_core::PRESETS`.
     Service { preset: String },
 }
@@ -21,7 +22,7 @@ pub enum Route {
 /// One thing to set up.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupOption {
-    /// Stable: `local:<feature>` or `service:<preset>`.
+    /// Stable: `local:<feature>:<recipe>` or `service:<preset>`.
     pub id: String,
     pub title: String,
     /// One line about it. Empty for a local model, whose wording depends on the computer.
@@ -38,18 +39,20 @@ pub struct SetupOption {
     pub size_bytes: Option<u64>,
 }
 
-/// Every local model first, then hosted services in the order the features first name them.
+/// Every local model first, one per recipe in catalogue order, then hosted services in the order
+/// the features first name them.
 pub fn setup_options(features: &[Feature]) -> Vec<SetupOption> {
     let mut locals = Vec::new();
     let mut services: Vec<SetupOption> = Vec::new();
     for feature in features {
-        if let Some(recipe) = &feature.local {
+        for recipe in &feature.locals {
             locals.push(SetupOption {
-                id: format!("local:{}", feature.id),
+                id: format!("local:{}:{}", feature.id, recipe.workflow),
                 title: recipe.label.clone(),
                 note: String::new(),
                 route: Route::Local {
                     feature: feature.id.clone(),
+                    recipe: recipe.workflow.clone(),
                 },
                 unlocks: vec![feature.id.clone()],
                 usable: recipe.usable,

@@ -12,7 +12,7 @@ impl AiClient {
     /// `craft_ai_comfy_env::system::detect`). An engine this app has no adapter for is listed but
     /// never suggested. A tool with no usable local recipe has none.
     pub fn engine_advice(&self, feature: &Feature, profile: &SystemProfile) -> Vec<EngineAdvice> {
-        let Some(recipe) = feature.local.as_ref().filter(|r| r.usable) else {
+        let Some(recipe) = feature.locals.first().filter(|r| r.usable) else {
             return Vec::new();
         };
         let mut providers: Vec<&str> = recipe.native.iter().map(|n| n.provider.as_str()).collect();

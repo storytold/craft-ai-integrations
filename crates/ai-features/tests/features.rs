@@ -56,8 +56,7 @@ fn the_catalogue_is_complete_and_consistent() {
 #[test]
 fn recipes_carry_checkable_files() {
     for f in builtin() {
-        let Some(local) = f.local else { continue };
-        for m in local.models {
+        for m in f.locals.into_iter().flat_map(|local| local.models) {
             assert_eq!(m.sha256.len(), 64, "{}", m.filename);
             assert!(
                 m.sha256
@@ -74,7 +73,7 @@ fn recipes_carry_checkable_files() {
 #[test]
 fn the_sam3_recipe_matches_the_real_file() {
     // Size and checksum of the file the Hugging Face copy serves and of the copy checked on the maintainer's machine.
-    let m = &feature("select-subject").local.unwrap().models[0];
+    let m = &feature("select-subject").locals[0].models[0];
     assert_eq!(m.size_bytes, 3_449_860_632);
     assert_eq!(
         m.sha256,
@@ -149,7 +148,7 @@ fn only_the_pack_missing_still_needs_install_but_downloads_nothing() {
 #[test]
 fn a_licence_shared_by_two_files_is_asked_once() {
     let mut f = feature("select-subject");
-    let local = f.local.as_mut().unwrap();
+    let local = &mut f.locals[0];
     let mut second = local.models[0].clone();
     second.filename = "other.safetensors".into();
     local.models.push(second);
@@ -161,7 +160,7 @@ fn a_licence_shared_by_two_files_is_asked_once() {
 #[test]
 fn not_enough_graphics_memory_or_disk_blocks() {
     let mut f = feature("select-subject");
-    f.local.as_mut().unwrap().min_vram_mb = Some(12_000);
+    f.locals[0].min_vram_mb = Some(12_000);
     let mut inv = have_sam3();
     inv.files.clear();
     inv.vram_mb = Some(8_000);
@@ -181,7 +180,7 @@ fn not_enough_graphics_memory_or_disk_blocks() {
 #[test]
 fn unknown_hardware_does_not_block() {
     let mut f = feature("select-subject");
-    f.local.as_mut().unwrap().min_vram_mb = Some(12_000);
+    f.locals[0].min_vram_mb = Some(12_000);
     let mut inv = bare();
     inv.vram_mb = None;
     inv.free_disk_bytes = None;
@@ -258,6 +257,6 @@ fn each_photocraft_tool_has_one_shared_tool_with_the_right_job_and_inputs() {
 fn a_tool_without_a_checked_route_offers_none() {
     // Remove background has no verified local recipe and no hosted adapter that matts an image.
     let f = feature("remove-background");
-    assert!(f.local.is_none());
+    assert!(f.locals.is_empty());
     assert!(f.cloud.is_empty());
 }

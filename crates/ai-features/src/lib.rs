@@ -27,7 +27,7 @@ pub use engine::{
 };
 pub use feature::{AppStatus, AppUse, Feature};
 pub use options::{Route, SetupOption, setup_options};
-pub use plan::{Blocker, InstalledFile, Inventory, Plan, State, plan};
+pub use plan::{Blocker, InstalledFile, Inventory, Plan, State, plan, plans};
 pub use recipe::{CloudOption, Licence, LocalRecipe, ModelFile, NativeRoute, NodePack, Source};
 pub use sample::{sample_is_costly, sample_request};
 pub use setup::{

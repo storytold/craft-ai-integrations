@@ -85,7 +85,7 @@ fn a_tool_with_no_local_recipe_has_no_engine_advice() {
     let w = World::new();
     let generative = craft_ai_features::builtin()
         .into_iter()
-        .find(|f| f.local.is_none())
+        .find(|f| f.locals.is_empty())
         .unwrap();
     assert!(
         w.client()
@@ -93,7 +93,7 @@ fn a_tool_with_no_local_recipe_has_no_engine_advice() {
             .is_empty()
     );
     let mut f = select_subject();
-    f.local.as_mut().unwrap().usable = false;
+    f.locals[0].usable = false;
     assert!(w.client().engine_advice(&f, &windows_nvidia()).is_empty());
 }
 

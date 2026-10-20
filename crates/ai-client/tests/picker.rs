@@ -298,7 +298,7 @@ fn the_local_model_is_greyed_until_a_local_connection_offers_one_for_the_tool() 
     assert_eq!(
         view.groups[0].setup,
         Some(SetupLink::New {
-            option: "local:select-subject".into()
+            option: "local:select-subject:sam3-segment".into()
         })
     );
 
@@ -319,10 +319,13 @@ fn the_local_model_is_greyed_until_a_local_connection_offers_one_for_the_tool() 
 fn setup_options_for_other_tools_or_that_cannot_run_yet_are_not_offered() {
     let w = World::new(vec![], vec![]);
     let option = |id: &str, unlocks: &str, usable: bool| SetupOption {
-        id: format!("local:{id}"),
+        id: format!("local:{id}:{id}-segment"),
         title: format!("Model {id}"),
         note: String::new(),
-        route: Route::Local { feature: id.into() },
+        route: Route::Local {
+            feature: id.into(),
+            recipe: format!("{id}-segment"),
+        },
         unlocks: vec![unlocks.into()],
         usable,
         size_bytes: None,

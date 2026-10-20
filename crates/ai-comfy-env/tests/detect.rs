@@ -184,7 +184,7 @@ fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    let model = select.local.as_ref().unwrap().models[0].clone();
+    let model = select.locals[0].models[0].clone();
     fs::create_dir_all(base.join("models")).unwrap();
     fs::create_dir_all(base.join("custom_nodes/comfyui-sam3")).unwrap();
     let install = ComfyInstall::at(&base).unwrap();

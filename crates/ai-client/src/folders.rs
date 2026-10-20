@@ -180,7 +180,7 @@ impl FolderDesk {
 fn scan(path: &Path) -> Result<FolderScan, AiError> {
     let owned: Vec<(String, String, u64)> = craft_ai_features::builtin()
         .into_iter()
-        .filter_map(|f| f.local)
+        .flat_map(|f| f.locals)
         .flat_map(|recipe| recipe.models)
         .map(|m| (m.folder, m.filename, m.size_bytes))
         .collect();
