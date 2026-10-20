@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use craft_ai_client::{AiClient, ToolDesk};
 use craft_ai_core::{AppId, StoreFile};
-use craft_ai_features::Feature;
+use craft_ai_features::{Feature, Gpu, GpuVendor, Os, SystemProfile};
 use craft_ai_native::secrets::MemoryStore;
 use craft_ai_native::shared::SharedStore;
 
@@ -45,6 +45,12 @@ impl World {
         ToolDesk::new(client, self.shared.clone(), None)
     }
 
+    fn weights(&self) -> std::path::PathBuf {
+        let p = self._dir.path().join("weights.safetensors");
+        std::fs::write(&p, b"not really weights").unwrap();
+        p
+    }
+
     fn nothing_written(&self) -> bool {
         let store = self.shared.load().unwrap();
         store.connections.is_empty() && store.defaults.is_empty()
@@ -60,7 +66,7 @@ fn a_named_second_model_becomes_its_own_connection_and_the_tool_uses_it() {
         .unwrap();
     assert_eq!(
         done.connection.as_str(),
-        "local-select-subject-other-segment"
+        "local-select-subject-recipe-other-segment"
     );
     assert_eq!(done.model.as_str(), "other-segment");
     assert!(done.bound);
@@ -128,6 +134,78 @@ fn enabling_without_a_name_takes_the_first_model_that_can_run() {
     assert_eq!(done.model.as_str(), "other-segment");
     assert_eq!(
         done.connection.as_str(),
-        "local-select-subject-other-segment"
+        "local-select-subject-recipe-other-segment"
     );
+}
+
+/// The first recipe can't run yet; the second can, and lists only the `burn` runtime, so a
+/// runtime taken from the wrong recipe shows.
+fn only_the_second_runs() -> Feature {
+    let mut f = two_models();
+    f.locals[0].usable = false;
+    f.locals[1].native.retain(|n| n.provider == "burn");
+    f
+}
+
+#[test]
+fn a_recipe_named_like_a_built_in_runtime_never_takes_its_connection() {
+    let w = World::new();
+    let desk = w.desk();
+    let mut f = two_models();
+    f.locals[1].workflow = "candle".into();
+    let native = desk.enable_native_with(&f, "candle", &w.weights()).unwrap();
+    let recipe = desk.enable_local_recipe(&f, "candle", URL).unwrap();
+    assert_ne!(native.connection, recipe.connection);
+    let store = w.shared.load().unwrap();
+    assert_eq!(store.connections.len(), 2, "neither replaced the other");
+    let bound = &store.defaults[0];
+    assert_eq!(bound.connection, native.connection);
+    let kept = store
+        .connections
+        .iter()
+        .find(|c| c.id == bound.connection)
+        .unwrap();
+    assert_eq!(
+        kept.provider, "candle",
+        "the binding still points at the runtime it chose"
+    );
+}
+
+#[test]
+fn engine_advice_follows_the_first_recipe_that_can_run() {
+    let w = World::new();
+    let client = AiClient::new(
+        AppId::new("launcher").unwrap(),
+        w.shared.clone(),
+        Arc::new(MemoryStore::new()),
+    );
+    let profile = SystemProfile {
+        os: Os::Windows,
+        gpus: vec![Gpu {
+            vendor: GpuVendor::Nvidia,
+            name: "RTX 3090 Ti".to_owned(),
+            vram_mb: Some(24_576),
+        }],
+        comfyui_found: true,
+    };
+    assert!(
+        !client
+            .engine_advice(&only_the_second_runs(), &profile)
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_built_in_runtime_comes_from_the_first_recipe_that_can_run() {
+    let w = World::new();
+    let f = only_the_second_runs();
+    let first = w.desk().enable_native(&f, &w.weights()).unwrap();
+    assert_eq!(first.connection.as_str(), "local-select-subject-burn");
+    // Only the runnable recipe's runtimes count: the first recipe's `candle` is not offered.
+    assert!(
+        w.desk()
+            .enable_native_with(&f, "candle", &w.weights())
+            .is_err()
+    );
+    assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
