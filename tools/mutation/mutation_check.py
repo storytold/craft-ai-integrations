@@ -72,7 +72,7 @@ U1 = [
     ('form-header-dropped', DRAFT, 'enabled: self.enabled,\n            key_header,\n        };', 'enabled: self.enabled,\n            key_header: None,\n        };', M, 'custom_connection', 'named_header_is_kept'),
     ('edit-loses-header', DRAFT, 'key_header: c.key_header.clone().unwrap_or_default(),', 'key_header: String::new(),', M, 'custom_connection', 'named_header_is_kept'),
     ('custom-test-wrong-provider', CUSTOM, 'self.provider.trim() == "openai-compatible"', 'self.provider.trim() == "openai"', M, 'custom_connection', 'starts_from_the_other'),
-    ('custom-billing-assumed-free', DRAFT, 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
+    ('custom-billing-assumed-free', C + 'ai-core/src/draft/presets.rs', 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
     ('named-key-sent-as-bearer', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(_) => ("Authorization".to_owned(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('named-key-value-prefixed', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(name) => (name.clone(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('redirects-followed', HTTP, '.max_redirects(0)', '.max_redirects(5)', O, 'custom', 'redirect_never_carries'),
@@ -378,8 +378,8 @@ SD = [
     ('volcengine-address-accepted', SD_LIB, 'base != "' + BYTEPLUS + '"', 'base != "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
     ('query-string-allowed', SD_LIB, "base.contains(['?', '#'])", 'false', SDC, 'provider', ''),
     ('old-model-served', SD_LIB, 'const MODEL: &str = "dreamina-seedance-2-0-260128";', 'const MODEL: &str = "doubao-seedance-2-0-260128";', SDC, 'provider', ''),
-    ('preset-points-at-volcengine', DRAFT_RS, 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
-    ('preset-named-volcengine', DRAFT_RS, 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
+    ('preset-points-at-volcengine', C + 'ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
+    ('preset-named-volcengine', C + 'ai-core/src/draft/presets.rs', 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
 ]
 
 VTX_LIB = C + 'ai-vertex/src/lib.rs'
