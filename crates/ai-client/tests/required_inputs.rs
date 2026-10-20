@@ -16,16 +16,20 @@ use craft_ai_native::shared::SharedStore;
 struct UntouchedSecrets(AtomicUsize);
 
 impl SecretStore for UntouchedSecrets {
+    /// The store name shown in diagnostics.
     fn name(&self) -> &'static str {
         "untouched"
     }
+    /// Counts the read and finds no key.
     fn get(&self, _: &SecretRef) -> Result<Option<SecretString>, AiError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     }
+    /// A write means a refused model reached the key store, which must never happen.
     fn set(&self, _: &SecretRef, _: &SecretString) -> Result<(), AiError> {
         panic!("an incompatible model must never write a key")
     }
+    /// A delete means a refused model reached the key store, which must never happen.
     fn delete(&self, _: &SecretRef) -> Result<(), AiError> {
         panic!("an incompatible model must never delete a key")
     }
@@ -40,6 +44,7 @@ struct World {
 }
 
 impl World {
+    /// Builds a store, a source-only role and a binding to test against.
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let capability = CapabilityId::parse("image.inpaint").unwrap();
@@ -88,6 +93,7 @@ impl World {
         }
     }
 
+    /// A client for the test app on this world's store.
     fn client(&self) -> AiClient {
         AiClient::new(
             AppId::new("test-app").unwrap(),
@@ -98,6 +104,7 @@ impl World {
 }
 
 #[test]
+/// Picker omits the model and binding refuses it without writing.
 fn picker_omits_the_model_and_binding_refuses_it_without_writing() {
     let world = World::new();
     let client = world.client();
@@ -113,6 +120,7 @@ fn picker_omits_the_model_and_binding_refuses_it_without_writing() {
 }
 
 #[test]
+/// Status and plan refuse before any key is read or consent is requested.
 fn status_and_plan_refuse_before_any_key_is_read_or_consent_is_requested() {
     let world = World::new();
     let client = world.client();

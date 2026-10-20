@@ -5,6 +5,7 @@ use craft_ai_core::{
     ModelInfo, Role, RoleId,
 };
 
+/// A source-only role, a connection and a binding to test against.
 fn setup() -> (Role, Connection, Binding) {
     let capability = CapabilityId::parse("image.inpaint").unwrap();
     let role = Role {
@@ -36,6 +37,7 @@ fn setup() -> (Role, Connection, Binding) {
 }
 
 #[test]
+/// Picker does not offer a model needing an input the tool cannot supply.
 fn picker_does_not_offer_a_model_needing_an_input_the_tool_cannot_supply() {
     let (role, connection, _) = setup();
     assert!(fits(&role, &connection.models[0]).is_none());
@@ -43,6 +45,7 @@ fn picker_does_not_offer_a_model_needing_an_input_the_tool_cannot_supply() {
 }
 
 #[test]
+/// Binding refuses a model requiring an input the tool cannot supply.
 fn binding_refuses_a_model_requiring_an_input_the_tool_cannot_supply() {
     let (role, connection, binding) = setup();
     let error = craft_ai_core::role::resolve(&role, &[&[binding]], &[connection]).unwrap_err();
@@ -53,6 +56,7 @@ fn binding_refuses_a_model_requiring_an_input_the_tool_cannot_supply() {
 }
 
 #[test]
+/// Supplied requirements and optional inputs remain compatible.
 fn supplied_requirements_and_optional_inputs_remain_compatible() {
     let (mut role, mut connection, binding) = setup();
     role.inputs.push(InputRole::Mask);

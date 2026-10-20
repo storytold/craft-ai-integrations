@@ -1,6 +1,7 @@
 //! Connection-test results belong only to the address they were requested from.
 use craft_ai_core::*;
 
+/// A draft pointing at `endpoint` that uses no key.
 fn draft(endpoint: &str) -> ConnectionDraft {
     let mut draft = ConnectionDraft::default();
     draft.label = "Test".into();
@@ -9,11 +10,13 @@ fn draft(endpoint: &str) -> ConnectionDraft {
     draft
 }
 
+/// A one-model list used to tell test results apart.
 fn models(id: &str) -> Vec<ModelInfo> {
     vec![ModelInfo::new(ModelId::new(id).unwrap(), id)]
 }
 
 #[test]
+/// New draft discards models when address changes after probe.
 fn new_draft_discards_models_when_address_changes_after_probe() {
     let mut draft = draft("https://a.example/v1");
     assert!(draft.set_models("https://a.example/v1", models("a-only")));
@@ -22,6 +25,7 @@ fn new_draft_discards_models_when_address_changes_after_probe() {
 }
 
 #[test]
+/// Returning to original address does not keep another addresses models.
 fn returning_to_original_address_does_not_keep_another_addresses_models() {
     let saved = draft("https://a.example/v1")
         .prepare(&[])
@@ -42,6 +46,7 @@ fn returning_to_original_address_does_not_keep_another_addresses_models() {
 }
 
 #[test]
+/// Changing model contents does not establish address provenance.
 fn changing_model_contents_does_not_establish_address_provenance() {
     let saved = draft("https://a.example/v1")
         .prepare(&[])
@@ -61,6 +66,7 @@ fn changing_model_contents_does_not_establish_address_provenance() {
 }
 
 #[test]
+/// Preset models belong to the preset address.
 fn preset_models_belong_to_the_preset_address() {
     let preset = PRESETS
         .iter()
@@ -74,6 +80,7 @@ fn preset_models_belong_to_the_preset_address() {
 }
 
 #[test]
+/// A fresh test at each address keeps its models.
 fn a_fresh_test_at_each_address_keeps_its_models() {
     let saved = draft("https://a.example/v1")
         .prepare(&[])
@@ -99,6 +106,7 @@ fn a_fresh_test_at_each_address_keeps_its_models() {
 }
 
 #[test]
+/// Editing and returning without a probe preserves original models.
 fn editing_and_returning_without_a_probe_preserves_original_models() {
     let mut saved = draft("https://a.example/v1")
         .prepare(&[])
@@ -127,6 +135,7 @@ fn editing_and_returning_without_a_probe_preserves_original_models() {
 }
 
 #[test]
+/// Custom manual models still work for a new connection and unchanged address.
 fn custom_manual_models_still_work_for_a_new_connection_and_unchanged_address() {
     let mut draft = ConnectionDraft::custom();
     draft.endpoint = "https://custom.example/v1".into();
@@ -143,6 +152,7 @@ fn custom_manual_models_still_work_for_a_new_connection_and_unchanged_address() 
 }
 
 #[test]
+/// A test that answers after the address moved on is dropped.
 fn a_test_that_answers_after_the_address_moved_on_is_dropped() {
     let mut draft = draft("https://a.example/v1");
     // The test is started against a.example; the address is edited while it runs.
@@ -159,6 +169,7 @@ fn a_test_that_answers_after_the_address_moved_on_is_dropped() {
 }
 
 #[test]
+/// A test that answers while its address still stands is taken.
 fn a_test_that_answers_while_its_address_still_stands_is_taken() {
     let mut draft = draft("https://a.example/v1");
     assert!(
@@ -172,6 +183,7 @@ fn a_test_that_answers_while_its_address_still_stands_is_taken() {
 }
 
 #[test]
+/// A late answer does not overwrite the newer address own models.
 fn a_late_answer_does_not_overwrite_the_newer_address_own_models() {
     let mut draft = draft("https://a.example/v1");
     draft.endpoint = "https://b.example/v1".into();
@@ -186,6 +198,7 @@ fn a_late_answer_does_not_overwrite_the_newer_address_own_models() {
 }
 
 #[test]
+/// An answer is judged by its address not by how long it waited.
 fn an_answer_is_judged_by_its_address_not_by_how_long_it_waited() {
     // Identity here is the address, not the test. After a.example → b.example → a.example, an
     // answer from the first test at a.example is still taken: the field holds a.example and those
@@ -210,6 +223,7 @@ fn an_answer_is_judged_by_its_address_not_by_how_long_it_waited() {
 }
 
 #[test]
+/// A refused answer leaves models already on the form untouched.
 fn a_refused_answer_leaves_models_already_on_the_form_untouched() {
     let mut draft = draft("https://a.example/v1");
     assert!(draft.set_models("https://a.example/v1", models("a-only")));
@@ -223,6 +237,7 @@ fn a_refused_answer_leaves_models_already_on_the_form_untouched() {
 }
 
 #[test]
+/// An address differing only in case or a trailing slash is a different address.
 fn an_address_differing_only_in_case_or_a_trailing_slash_is_a_different_address() {
     // The comparison is on the field's text, not a parsed URL: Endpoint drops the path, so
     // /v1 and /v2 would look equal through it. Differing the other way is safe, the answer is
@@ -242,6 +257,7 @@ fn an_address_differing_only_in_case_or_a_trailing_slash_is_a_different_address(
 }
 
 #[test]
+/// Whitespace in a saved address does not drop its models.
 fn whitespace_in_a_saved_address_does_not_drop_its_models() {
     let mut saved = draft("https://a.example/v1")
         .prepare(&[])

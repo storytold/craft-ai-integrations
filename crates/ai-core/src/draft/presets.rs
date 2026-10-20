@@ -109,6 +109,7 @@ pub const PRESETS: &[Preset] = &[
     },
 ];
 
+/// The fixed model list a built-in preset offers before its connection is tested.
 pub(super) fn preset_models(preset: &Preset) -> Vec<ModelInfo> {
     if preset.key == "artcraft-omni" {
         return [
