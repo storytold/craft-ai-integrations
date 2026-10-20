@@ -16,6 +16,10 @@ const MODEL_EXTENSIONS: &[&str] = &[
     "onnx",
     "bin",
 ];
+/// Small text files a bundled model needs beside its weights (config, tokenizer, loader code).
+/// Only seen up to [`SMALL_FILE_LIMIT`] bytes, so a folder of notes or datasets is not listed.
+const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];
+const SMALL_FILE_LIMIT: u64 = 2 * 1024 * 1024;
 const MAX_DEPTH: usize = 5;
 const MAX_FILES: usize = 20_000;
 
@@ -66,9 +70,11 @@ fn walk(root: &Path, dir: &Path, depth: usize, folder: &str, out: &mut Vec<Insta
             walk(root, &path, depth + 1, folder, out);
         } else if kind.is_file()
             && let Some(ext) = path.extension().and_then(|e| e.to_str())
-            && MODEL_EXTENSIONS.iter().any(|m| m.eq_ignore_ascii_case(ext))
-            && let Ok(relative) = path.strip_prefix(root)
             && let Ok(meta) = entry.metadata()
+            && (MODEL_EXTENSIONS.iter().any(|m| m.eq_ignore_ascii_case(ext))
+                || (meta.len() <= SMALL_FILE_LIMIT
+                    && SMALL_EXTENSIONS.iter().any(|m| m.eq_ignore_ascii_case(ext))))
+            && let Ok(relative) = path.strip_prefix(root)
         {
             out.push(InstalledFile {
                 folder: folder.to_owned(),

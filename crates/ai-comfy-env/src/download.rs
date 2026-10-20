@@ -150,21 +150,23 @@ impl Downloader {
         progress: &mut dyn FnMut(Progress),
         check: Check,
     ) -> Result<(PathBuf, String), AiError> {
-        if file.filename.is_empty()
-            || file.filename.contains(['/', '\\', ':'])
-            || file.filename.starts_with('.')
-        {
+        let Some(relative) = safe_relative(&file.filename) else {
             return Err(AiError::invalid("the model file name is not a plain name"));
-        }
-        std::fs::create_dir_all(dest_dir)
+        };
+        let target = dest_dir.join(&relative);
+        let parent = target.parent().unwrap_or(dest_dir);
+        std::fs::create_dir_all(parent)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not create the model folder"))?;
-        let target = dest_dir.join(&file.filename);
         if check == Check::Expect
             && std::fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() == file.size_bytes)
         {
             return Ok((target, file.sha256.to_ascii_lowercase()));
         }
-        let part = dest_dir.join(format!("{}.part", file.filename));
+        let leaf = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&file.filename);
+        let part = parent.join(format!("{leaf}.part"));
         let mut resumes = 0u8;
         loop {
             match self.attempt(file, &part, token, cancel, progress)? {
@@ -369,4 +371,26 @@ impl Downloader {
             Attempt::Interrupted { moved }
         })
     }
+}
+
+/// A model file name as a relative path: one to three plain names joined by `/`, so a bundle can
+/// keep its files together in one folder (`Florence-2-large/model.safetensors`). A name that is
+/// empty, starts with a dot, or holds a backslash, colon or control character is refused, which
+/// rules out `..`, absolute paths and drive letters.
+pub fn safe_relative(name: &str) -> Option<PathBuf> {
+    let parts: Vec<&str> = name.split('/').collect();
+    if parts.len() > 3 {
+        return None;
+    }
+    let plain = |part: &&str| {
+        !part.is_empty()
+            && !part.starts_with('.')
+            && !part.ends_with(['.', ' '])
+            && !part.contains(['\\', ':'])
+            && !part.chars().any(char::is_control)
+    };
+    parts
+        .iter()
+        .all(plain)
+        .then(|| parts.iter().collect::<PathBuf>())
 }

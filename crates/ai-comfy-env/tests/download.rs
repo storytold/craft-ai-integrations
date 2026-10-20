@@ -404,8 +404,14 @@ fn file_names_that_could_escape_the_folder_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     for name in [
         "../evil.safetensors",
-        "a/b.safetensors",
         "a\\b.safetensors",
+        "a/../b.safetensors",
+        "a//b.safetensors",
+        "/abs.safetensors",
+        "a/b/c/d.safetensors",
+        "a/.hidden",
+        "a/b.",
+        "a/b:c",
         ".hidden",
         "",
         "C:x",
@@ -424,6 +430,28 @@ fn file_names_that_could_escape_the_folder_are_refused() {
         assert_eq!(err.kind, ErrorKind::InvalidRequest, "{name}");
     }
     assert!(names(dir.path()).is_empty());
+}
+
+#[test]
+fn a_bundle_file_lands_in_its_own_sub_folder_with_no_stray_part_file() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let mut file = model(&data, &format!("{}/m", origin(&server)));
+    file.filename = "Bundle/m.safetensors".into();
+    let path = run(
+        &downloader(),
+        &file,
+        dir.path(),
+        None,
+        &AtomicBool::new(false),
+    )
+    .0
+    .unwrap();
+    assert_eq!(path, dir.path().join("Bundle").join("m.safetensors"));
+    assert_eq!(std::fs::read(&path).unwrap(), data);
+    assert_eq!(names(dir.path()), ["Bundle"]);
+    assert_eq!(names(&dir.path().join("Bundle")), ["m.safetensors"]);
 }
 
 #[test]

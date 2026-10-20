@@ -45,6 +45,7 @@ HOSTS = C + 'ai-comfy-env/src/source/hosts.rs'
 FORMAT = C + 'ai-comfy-env/src/source/format.rs'
 SPEC = C + 'ai-comfy-env/src/source/spec.rs'
 DOWNLOAD = C + 'ai-comfy-env/src/download.rs'
+SCAN = C + 'ai-comfy-env/src/scan.rs'
 TRANSPORT = C + 'ai-comfy-env/src/download/transport.rs'
 HF = C + 'ai-comfy-env/src/source/resolve/hf.rs'
 GH = C + 'ai-comfy-env/src/source/resolve/github.rs'
@@ -183,6 +184,11 @@ U3 = [
     ('folder-unchecked', INSTALL, 'let target_dir = self.comfy.models_dir_for(folder).ok_or(Refusal::Folder)?;', 'let target_dir = self.comfy.base.join("models").join(folder);', E, 'source_install', 'cannot_leave_the_models'),
     ('settings-hosts-not-passed-on', C + 'ai-comfy-env/src/source/settings.rs', 'allowed_hosts: Some(self.download_hosts(kind)),', 'allowed_hosts: None,', E, 'source_install', 'reach_the_downloader'),
     ('registry-overwrites-damage', REGISTRY, 'serde_json::from_str(&text).map_err(|_| unreadable())', 'Ok(serde_json::from_str(&text).unwrap_or_default())', E, 'source_install', 'read_with_care'),
+    ('bundle-path-allows-dot-names', DOWNLOAD, "&& !part.starts_with('.')", '&& true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-depth-unbounded', DOWNLOAD, 'if parts.len() > 3 {', 'if parts.len() > 3000 {', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-allows-empty-parts', DOWNLOAD, '!part.is_empty()', 'true', E, 'download', 'file_names_that_could_escape'),
+    ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
+    ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {
