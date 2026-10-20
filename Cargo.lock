@@ -769,6 +769,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "craft-ai-core",
+ "craft-ai-features",
  "craft-ai-http",
  "craft-ai-media",
  "craft-ai-native",

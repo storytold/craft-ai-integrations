@@ -27,6 +27,8 @@ fn bare() -> Inventory {
     }
 }
 
+/// The catalogue has eight features with unique ids, each with a title, summary and app uses,
+/// every hosted option names a real preset and no feature claims an app ships it yet.
 #[test]
 fn the_catalogue_is_complete_and_consistent() {
     let all = builtin();
@@ -53,6 +55,8 @@ fn the_catalogue_is_complete_and_consistent() {
     }
 }
 
+/// Every model file in every local recipe has a lowercase hex SHA-256, a non-zero size, an
+/// https source and a path that stays inside one sub-folder under its destination folder.
 #[test]
 fn recipes_carry_checkable_files() {
     for f in builtin() {
@@ -65,7 +69,13 @@ fn recipes_carry_checkable_files() {
             );
             assert!(m.size_bytes > 0);
             assert!(m.source.url().starts_with("https://"));
-            assert!(!m.filename.contains(['/', '\\']) && !m.folder.contains(['/', '\\', '.']));
+            // A bundle keeps its files in one sub-folder: at most three plain names, none starting
+            // with a dot and none holding a backslash or a colon.
+            assert!(m.filename.split('/').count() <= 3, "{}", m.filename);
+            assert!(m.filename.split('/').all(|part| !part.is_empty()
+                && !part.starts_with('.')
+                && !part.contains(['\\', ':'])));
+            assert!(!m.folder.contains(['/', '\\', '.']));
         }
     }
 }

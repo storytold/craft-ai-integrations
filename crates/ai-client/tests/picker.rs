@@ -260,6 +260,8 @@ fn a_provider_with_no_key_or_switched_off_is_greyed_and_can_be_fixed_not_hidden(
     );
 }
 
+/// A hosted provider with no connection shows as one not-set-up group with a set-up link; once a
+/// connection exists it becomes that connection's ready group instead of a second greyed one.
 #[test]
 fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
     let fill = builtin_role("generative-fill");
@@ -289,17 +291,36 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
     assert_eq!(titles(&view), [("Label oa".to_owned(), GroupState::Ready)]);
 }
 
+/// With no connection, every local recipe of Select subject shows as its own not-set-up group
+/// in catalogue order, each linking to the setup option for that recipe.
 #[test]
 fn the_local_model_is_greyed_until_a_local_connection_offers_one_for_the_tool() {
     let w = World::new(vec![], vec![]);
     let view = w.picker(&select_subject());
-    assert_eq!(titles(&view), [("SAM 3".to_owned(), GroupState::NotSetUp)]);
-    assert_eq!(view.groups[0].locality, Some(Locality::Local));
+    // Each local model is its own thing to set up, in catalogue order.
     assert_eq!(
-        view.groups[0].setup,
-        Some(SetupLink::New {
-            option: "local:select-subject:sam3-segment".into()
-        })
+        titles(&view),
+        [
+            ("SAM 3".to_owned(), GroupState::NotSetUp),
+            ("SAM 2.1".to_owned(), GroupState::NotSetUp)
+        ]
+    );
+    assert!(
+        view.groups
+            .iter()
+            .all(|g| g.locality == Some(Locality::Local))
+    );
+    let links: Vec<_> = view.groups.iter().map(|g| g.setup.clone()).collect();
+    assert_eq!(
+        links,
+        [
+            Some(SetupLink::New {
+                option: "local:select-subject:sam3-segment".into()
+            }),
+            Some(SetupLink::New {
+                option: "local:select-subject:sam21-segment".into()
+            })
+        ]
     );
 
     let w = World::new(

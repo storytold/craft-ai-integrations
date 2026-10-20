@@ -8,9 +8,13 @@
 use crate::feature::{AppStatus, AppUse, Feature};
 use crate::recipe::CloudOption;
 
+mod florence2;
+mod sam21;
 mod sam3;
 use craft_ai_core::{CapabilityId, InputRole};
+pub use florence2::FLORENCE2_LARGE_DIR;
 use sam3::sam3;
+use sam21::sam21;
 
 fn uses(list: &[(&str, &str)]) -> Vec<AppUse> {
     list.iter()
@@ -22,6 +26,7 @@ fn uses(list: &[(&str, &str)]) -> Vec<AppUse> {
         .collect()
 }
 
+/// A hosted option for a feature: the preset key, the label shown and a short note.
 fn cloud(preset: &str, label: &str, note: &str) -> CloudOption {
     CloudOption {
         preset: preset.to_owned(),
@@ -30,6 +35,8 @@ fn cloud(preset: &str, label: &str, note: &str) -> CloudOption {
     }
 }
 
+/// Builds a feature with no inputs, uses, local recipes or hosted options; the caller fills in
+/// what the feature offers. Returns `None` when `capability` is not a valid capability id.
 fn feature(id: &str, title: &str, summary: &str, capability: &str) -> Option<Feature> {
     Some(Feature {
         id: id.to_owned(),
@@ -49,6 +56,8 @@ pub fn builtin() -> Vec<Feature> {
     try_builtin().unwrap_or_default()
 }
 
+/// Builds the whole catalogue, or `None` if any capability id fails to parse. `builtin` turns
+/// `None` into an empty list and a test pins the count, so a bad id cannot ship.
 fn try_builtin() -> Option<Vec<Feature>> {
     let mut select = feature(
         "select-subject",
@@ -62,7 +71,7 @@ fn try_builtin() -> Option<Vec<Feature>> {
         ("EffectCraft", "Roto and matte"),
     ]);
     select.inputs = vec![InputRole::Source, InputRole::Prompt];
-    select.locals = vec![sam3()];
+    select.locals = vec![sam3(), sam21()];
 
     let mut background = feature(
         "remove-background",

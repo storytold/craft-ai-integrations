@@ -50,6 +50,23 @@ pub struct Licence {
     pub note: Option<String>,
 }
 
+/// A part of the workflow that the person should know about, with the terms its publisher states.
+///
+/// This is disclosure only. The text repeats what the publisher says on its own page; nobody here
+/// has checked it, it is not legal advice, and it carries no warranty or indemnity. Whether a part
+/// suits the person's use is their decision, so a component never blocks a download or a run. A
+/// part that does need agreement before its download is a [`ModelFile`] with
+/// [`Licence::accept_required`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Component {
+    /// What it is called, for people: "Florence-2 detector".
+    pub label: String,
+    /// What it does in the workflow, in a few words.
+    pub role: String,
+    /// The terms the publisher declares, with a link to where it says so.
+    pub licence: Licence,
+}
+
 /// One model file a recipe needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelFile {
@@ -105,6 +122,10 @@ pub struct LocalRecipe {
     /// one [`ToolDesk::enable_native`] registers; none means the tool has no built-in runtime.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub native: Vec<NativeRoute>,
+    /// Everything else the workflow runs, with the terms each publisher declares, shown before
+    /// the person chooses to use the model. Empty when nobody has reviewed the parts yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Component>,
 }
 
 fn yes() -> bool {

@@ -49,5 +49,6 @@ pub(super) fn sam3() -> LocalRecipe {
                 label: "SAM 3, built in (any graphics card)".to_owned(),
             },
         ],
+        components: Vec::new(),
     }
 }

@@ -28,6 +28,7 @@ url = "2"
 craft-ai-native = { path = "../ai-native", package = "craft-ai-native" }
 
 [dev-dependencies]
+craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 tempfile = "3"
 png = "0.17"
 base64 = "0.22"

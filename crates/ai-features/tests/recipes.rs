@@ -12,6 +12,8 @@ fn two_models() -> Feature {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
+    // Start from SAM 3 alone, whatever else the catalogue lists.
+    f.locals.truncate(1);
     let mut other: LocalRecipe = f.locals[0].clone();
     other.label = "Other".into();
     other.workflow = "other-segment".into();

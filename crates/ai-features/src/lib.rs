@@ -21,14 +21,16 @@ mod recipe;
 mod sample;
 mod setup;
 
-pub use catalogue::builtin;
+pub use catalogue::{FLORENCE2_LARGE_DIR, builtin};
 pub use engine::{
     EngineAdvice, EngineOffer, Gpu, GpuVendor, Os, Pace, SystemProfile, advise, gpu_route,
 };
 pub use feature::{AppStatus, AppUse, Feature};
 pub use options::{Route, SetupOption, setup_options};
 pub use plan::{Blocker, InstalledFile, Inventory, Plan, State, plan, plans};
-pub use recipe::{CloudOption, Licence, LocalRecipe, ModelFile, NativeRoute, NodePack, Source};
+pub use recipe::{
+    CloudOption, Component, Licence, LocalRecipe, ModelFile, NativeRoute, NodePack, Source,
+};
 pub use sample::{sample_is_costly, sample_request};
 pub use setup::{
     Agreement, COMFYUI_TAG, PortableBuild, SetupOffer, SetupRoute, SetupStep, StepKind, agreement,

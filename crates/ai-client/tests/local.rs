@@ -143,6 +143,8 @@ fn a_choice_a_person_already_made_is_left_alone() {
     );
 }
 
+/// Enabling the same local tool twice leaves one connection and one default; enabling it at a
+/// new address moves the app's endpoint to that address.
 #[test]
 fn enabling_twice_changes_nothing_and_a_moved_address_is_updated() {
     let w = World::new();
@@ -167,6 +169,8 @@ fn enabling_twice_changes_nothing_and_a_moved_address_is_updated() {
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
+/// `enable_local` refuses a non-local address, a tool with no local recipe and a tool whose
+/// recipes cannot run yet, and a refusal writes nothing to the shared store.
 #[test]
 fn only_a_local_address_and_only_a_runnable_local_recipe_are_accepted() {
     let w = World::new();
@@ -188,9 +192,9 @@ fn only_a_local_address_and_only_a_runnable_local_recipe_are_accepted() {
         desk.enable_local(&feature("generative-fill"), SAM3_URL)
             .is_err()
     );
-    // A recipe that cannot run yet is not offered as ready.
+    // A tool none of whose recipes can run yet is not offered as ready.
     let mut later = feature("select-subject");
-    if let Some(local) = later.locals.first_mut() {
+    for local in &mut later.locals {
         local.usable = false;
     }
     assert!(desk.enable_local(&later, SAM3_URL).is_err());
