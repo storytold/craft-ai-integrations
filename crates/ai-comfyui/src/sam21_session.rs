@@ -21,6 +21,22 @@ struct Prepared {
     filename: String,
     width: u32,
     height: u32,
+    device: &'static str,
+    precision: &'static str,
+}
+
+/// The device ComfyUI reports, and the precision that is safe on it. Half precision is only used
+/// on CUDA; CPU and Apple graphics get full precision because half is not supported on CPU and is
+/// untested on MPS. Anything else is refused before an image is uploaded.
+fn device_for(stats: &Value) -> Result<(&'static str, &'static str), AiError> {
+    match stats.pointer("/devices/0/type").and_then(Value::as_str) {
+        Some("cuda") => Ok(("cuda", "fp16")),
+        Some("mps") => Ok(("mps", "fp32")),
+        Some("cpu") => Ok(("cpu", "fp32")),
+        _ => Err(AiError::unsupported(
+            "SAM 2.1 needs ComfyUI to report a CUDA, Apple (MPS) or CPU device",
+        )),
+    }
 }
 
 /// Cancels only the in-flight prompt owned by this SAM 2.1 session.
@@ -105,6 +121,7 @@ impl Sam21Session {
                 "SAM 2.1 source image dimensions are invalid",
             ));
         }
+        let (device, precision) = device_for(&self.http.get_json("/system_stats")?)?;
         let nodes = self.http.get_object_info()?;
         for class in REQUIRED {
             if nodes.get(*class).is_none() {
@@ -119,6 +136,8 @@ impl Sam21Session {
             filename,
             width,
             height,
+            device,
+            precision,
         });
         Ok(())
     }
@@ -133,10 +152,10 @@ impl Sam21Session {
         }
         let graph = json!({
             "1":{"class_type":"LoadImage","inputs":{"image":p.filename}},
-            "2":{"class_type":"Florence2ModelLoader","inputs":{"model":crate::detector::FLORENCE2_DETECTOR,"precision":"fp16","convert_to_safetensors":false}},
+            "2":{"class_type":"Florence2ModelLoader","inputs":{"model":crate::detector::FLORENCE2_DETECTOR,"precision":p.precision,"convert_to_safetensors":false}},
             "3":{"class_type":"Florence2Run","inputs":{"image":["1",0],"florence2_model":["2",0],"text_input":text,"task":"caption_to_phrase_grounding","fill_mask":true,"keep_model_loaded":true}},
             "4":{"class_type":"Florence2toCoordinates","inputs":{"data":["3",3],"index":"","batch":false}},
-            "5":{"class_type":"DownloadAndLoadSAM2Model","inputs":{"model":"sam2.1_hiera_large.safetensors","segmentor":"single_image","device":"cuda","precision":"fp16"}},
+            "5":{"class_type":"DownloadAndLoadSAM2Model","inputs":{"model":"sam2.1_hiera_large.safetensors","segmentor":"single_image","device":p.device,"precision":p.precision}},
             "6":{"class_type":"Sam2Segmentation","inputs":{"sam2_model":["5",0],"image":["1",0],"keep_model_loaded":true,"bboxes":["4",1],"individual_objects":false}},
             "7":{"class_type":"MaskToImage","inputs":{"mask":["6",0]}},
             "8":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":format!("craft-sam21-{}",std::process::id())}}
@@ -184,7 +203,8 @@ impl Sam21Session {
                     let output = record.pointer("/outputs/8").ok_or_else(|| {
                         AiError::new(ErrorKind::Provider, "SAM 2.1 returned no selection mask")
                     })?;
-                    let masks = crate::sam3_masks::fetch(&self.http, output, p.width, p.height)?;
+                    let masks = crate::sam3_masks::fetch(&self.http, output, p.width, p.height)
+                        .map_err(|e| AiError::new(e.kind, e.message.replace("SAM 3", "SAM 2.1")))?;
                     if self.cancelled(id, started) {
                         return Err(AiError::new(
                             ErrorKind::Cancelled,

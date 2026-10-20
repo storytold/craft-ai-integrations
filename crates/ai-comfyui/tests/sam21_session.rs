@@ -45,7 +45,7 @@ fn selected_sam21_segments_the_image_with_florence_and_returns_an_exact_mask() {
     let server_mask = mask.clone();
     let server = Server::start(move |r| {
         match r.path.as_str() {
-        "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
+        "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"},"devices":[{"type":"cuda"}]}).to_string()),
         "/object_info" => Reply::Json(200, json!({"LoadImage":{},"Florence2ModelLoader":{"input":{"required":{"model":[["Florence-2-large"],{}]}}},"Florence2Run":{},"Florence2toCoordinates":{},"DownloadAndLoadSAM2Model":{},"Sam2Segmentation":{},"MaskToImage":{},"SaveImage":{}}).to_string()),
         "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
         "/prompt" => Reply::Json(200,json!({"prompt_id":"sam21-job"}).to_string()),
@@ -95,7 +95,7 @@ fn cancelling_sam21_removes_only_its_queued_prompt() {
     let server_mask = mask.clone();
     let server = Server::start(move |r| {
         match r.path.as_str() {
-        "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
+        "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"},"devices":[{"type":"cuda"}]}).to_string()),
         "/object_info" => Reply::Json(200, json!({"LoadImage":{},"Florence2ModelLoader":{"input":{"required":{"model":[["Florence-2-large"],{}]}}},"Florence2Run":{},"Florence2toCoordinates":{},"DownloadAndLoadSAM2Model":{},"Sam2Segmentation":{},"MaskToImage":{},"SaveImage":{}}).to_string()),
         "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
         "/prompt" => Reply::Json(200,json!({"prompt_id":"sam21-job"}).to_string()),
@@ -138,7 +138,7 @@ fn sam21_refuses_before_uploading_when_the_detector_is_not_in_comfyui() {
     // Another Florence-2 variant is installed, but not the one the graph asks for.
     let server = Server::start(|r| {
         match r.path.as_str() {
-        "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
+        "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"},"devices":[{"type":"cuda"}]}).to_string()),
         "/object_info" => Reply::Json(200, json!({"LoadImage":{},"Florence2ModelLoader":{"input":{"required":{"model":[["Florence-2-base"],{}]}}},"Florence2Run":{},"Florence2toCoordinates":{},"DownloadAndLoadSAM2Model":{},"Sam2Segmentation":{},"MaskToImage":{},"SaveImage":{}}).to_string()),
         _ => Reply::Json(404, "{}".into()),
     }
@@ -157,4 +157,70 @@ fn sam21_refuses_before_uploading_when_the_detector_is_not_in_comfyui() {
             .iter()
             .any(|r| r.path.starts_with("/upload") || r.path == "/prompt")
     );
+}
+
+fn device_server(device: Option<&'static str>, view_type: &'static str) -> Server {
+    let mask = png();
+    Server::start(move |r| {
+        match r.path.as_str() {
+        "/system_stats" => {
+            let mut stats = json!({"system":{"comfyui_version":"0.22.3"}});
+            if let Some(device) = device {
+                stats["devices"] = json!([{"type": device}]);
+            }
+            Reply::Json(200, stats.to_string())
+        }
+        "/object_info" => Reply::Json(200, json!({"LoadImage":{},"Florence2ModelLoader":{"input":{"required":{"model":[["Florence-2-large"],{}]}}},"Florence2Run":{},"Florence2toCoordinates":{},"DownloadAndLoadSAM2Model":{},"Sam2Segmentation":{},"MaskToImage":{},"SaveImage":{}}).to_string()),
+        "/upload/image" => Reply::Json(200, json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
+        "/prompt" => Reply::Json(200, json!({"prompt_id":"job"}).to_string()),
+        "/history/job" => Reply::Json(200, json!({"job":{"status":{"completed":true},"outputs":{"8":{"images":[{"filename":"mask.png","type":view_type,"subfolder":""}]}}}}).to_string()),
+        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", mask.len()).into_bytes(), mask.clone()].concat()),
+        _ => Reply::Json(404, "{}".into()),
+    }
+    })
+}
+
+fn prepared(server: &Server) -> Result<Sam21Session, craft_ai_core::AiError> {
+    let mut session = Sam21Session::new(server.url.trim_end_matches("/v1")).unwrap();
+    session.verify_server().unwrap();
+    session.prepare(&png())?;
+    Ok(session)
+}
+
+#[test]
+fn the_graph_uses_the_device_comfyui_reports_and_full_precision_off_cuda() {
+    for (device, precision) in [("cuda", "fp16"), ("cpu", "fp32"), ("mps", "fp32")] {
+        let server = device_server(Some(device), "output");
+        prepared(&server).unwrap().ground("person").unwrap();
+        let graph = server
+            .recorded()
+            .into_iter()
+            .find(|r| r.path == "/prompt")
+            .unwrap()
+            .body_json()["prompt"]
+            .clone();
+        assert_eq!(graph["5"]["inputs"]["device"], device);
+        assert_eq!(graph["5"]["inputs"]["precision"], precision, "{device}");
+        assert_eq!(graph["2"]["inputs"]["precision"], precision, "{device}");
+    }
+}
+
+#[test]
+fn an_unreported_or_unsupported_device_is_refused_before_the_image_is_uploaded() {
+    for device in [None, Some("xpu"), Some("")] {
+        let server = device_server(device, "output");
+        let error = prepared(&server).err().expect("must be refused");
+        assert_eq!(error.kind, craft_ai_core::ErrorKind::Unsupported);
+        assert!(error.message.contains("CUDA, Apple (MPS) or CPU"));
+        assert!(!server.recorded().iter().any(|r| r.path == "/upload/image"));
+        assert!(!server.recorded().iter().any(|r| r.path == "/prompt"));
+    }
+}
+
+#[test]
+fn a_bad_result_is_reported_as_sam_2_1_not_sam_3() {
+    let server = device_server(Some("cuda"), "user");
+    let error = prepared(&server).unwrap().ground("person").unwrap_err();
+    assert!(error.message.contains("SAM 2.1"), "{}", error.message);
+    assert!(!error.message.contains("SAM 3"), "{}", error.message);
 }

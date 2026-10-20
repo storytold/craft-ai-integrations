@@ -506,6 +506,11 @@ S21 = [
     ('detector-check-skipped', SAM21, 'crate::detector::require_detector(&nodes)?;', '', CU, 'sam21_session', ''),
     ('wrong-detector-asked-for', DETECTOR, 'pub const FLORENCE2_DETECTOR: &str = "Florence-2-large";', 'pub const FLORENCE2_DETECTOR: &str = "Florence-2-base";', CU, 'sam21_session', ''),
     ('any-listed-detector-accepted', DETECTOR, 'c.as_str() == Some(FLORENCE2_DETECTOR)', 'c.as_str().is_some()', CU, 'sam21_session', ''),
+    ('cpu-run-on-cuda', SAM21, 'Some("cpu") => Ok(("cpu", "fp32")),', 'Some("cpu") => Ok(("cuda", "fp16")),', CU, 'sam21_session', 'uses_the_device'),
+    ('half-precision-off-cuda', SAM21, 'Some("mps") => Ok(("mps", "fp32")),', 'Some("mps") => Ok(("mps", "fp16")),', CU, 'sam21_session', 'uses_the_device'),
+    ('missing-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).or(Some("cuda")) {', CU, 'sam21_session', 'unsupported_device'),
+    ('unknown-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).map(|d| if d == "xpu" { "cuda" } else { d }) {', CU, 'sam21_session', 'unsupported_device'),
+    ('result-errors-name-sam3', SAM21, 'e.message.replace("SAM 3", "SAM 2.1")', 'e.message', CU, 'sam21_session', 'not_sam_3'),
 ]
 
 GROUPS = {'s21': S21, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
