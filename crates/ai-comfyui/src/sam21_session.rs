@@ -157,15 +157,23 @@ impl Sam21Session {
         if text.is_empty() || text.len() > 256 || text.chars().any(char::is_control) {
             return Err(AiError::invalid("SAM 2.1 needs a short subject name"));
         }
+        static NEXT_SELECTION: AtomicU64 = AtomicU64::new(0);
+        // A new sink name for every selection: an identical graph without a client id is served from
+        // the server's cache with no outputs in its history (ComfyUI 0.22.3), and the selection would fail.
+        let sink = format!(
+            "craft-sam21-{}-{}",
+            std::process::id(),
+            NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)
+        );
         let graph = json!({
             "1":{"class_type":"LoadImage","inputs":{"image":p.filename}},
             "2":{"class_type":"Florence2ModelLoader","inputs":{"model":crate::detector::FLORENCE2_DETECTOR,"precision":p.precision,"convert_to_safetensors":false}},
             "3":{"class_type":"Florence2Run","inputs":{"image":["1",0],"florence2_model":["2",0],"text_input":text,"task":"caption_to_phrase_grounding","fill_mask":true,"keep_model_loaded":true}},
             "4":{"class_type":"Florence2toCoordinates","inputs":{"data":["3",3],"index":"","batch":false}},
             "5":{"class_type":"DownloadAndLoadSAM2Model","inputs":{"model":"sam2.1_hiera_large.safetensors","segmentor":"single_image","device":p.device,"precision":p.precision}},
-            "6":{"class_type":"Sam2Segmentation","inputs":{"sam2_model":["5",0],"image":["1",0],"keep_model_loaded":true,"bboxes":["4",1],"individual_objects":false}},
+            "6":{"class_type":"Sam2Segmentation","inputs":{"sam2_model":["5",0],"image":["1",0],"keep_model_loaded":true,"bboxes":["4",1],"individual_objects":true}},
             "7":{"class_type":"MaskToImage","inputs":{"mask":["6",0]}},
-            "8":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":format!("craft-sam21-{}",std::process::id())}}
+            "8":{"class_type":"SaveImage","inputs":{"images":["7",0],"filename_prefix":sink}}
         });
         let started = self.canceller.mark();
         let response = self.http.post("/prompt", &json!({"prompt":graph}))?;

@@ -511,6 +511,8 @@ S21 = [
     ('missing-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).or(Some("cuda")) {', CU, 'sam21_session', 'unsupported_device'),
     ('unknown-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).map(|d| if d == "xpu" { "cuda" } else { d }) {', CU, 'sam21_session', 'unsupported_device'),
     ('result-errors-name-sam3', SAM21, 'e.message.replace("SAM 3", "SAM 2.1")', 'e.message', CU, 'sam21_session', 'not_sam_3'),
+    ('only-the-last-box-kept', SAM21, '"individual_objects":true', '"individual_objects":false', CU, 'sam21_session', 'every_detected_box'),
+    ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
 GROUPS = {'s21': S21, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}

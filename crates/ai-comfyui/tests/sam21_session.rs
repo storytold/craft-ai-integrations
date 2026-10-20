@@ -234,3 +234,87 @@ fn a_bad_result_is_reported_as_sam_2_1_not_sam_3() {
     assert!(error.message.contains("SAM 2.1"), "{}", error.message);
     assert!(!error.message.contains("SAM 3"), "{}", error.message);
 }
+
+/// Every matching subject is sent to the segmenter. With `individual_objects` false the node keeps only
+/// the last box, so a second match is silently dropped. A scripted server cannot see that, so this pins
+/// the graph and the ignored live test below proves the result.
+#[test]
+fn every_detected_box_is_sent_to_the_segmenter() {
+    let server = device_server(Some("cuda"), "output");
+    prepared(&server).unwrap().ground("person").unwrap();
+    let graph = server
+        .recorded()
+        .into_iter()
+        .find(|r| r.path == "/prompt")
+        .unwrap()
+        .body_json()["prompt"]
+        .clone();
+    assert_eq!(graph["6"]["inputs"]["individual_objects"], true);
+    assert_eq!(graph["4"]["inputs"]["index"], "", "all boxes, not one");
+}
+
+/// Two identical selections must not share a sink name, or ComfyUI serves the second from its cache
+/// with no outputs and the selection fails.
+#[test]
+fn asking_twice_gives_each_selection_its_own_sink_name() {
+    let server = device_server(Some("cuda"), "output");
+    let session = prepared(&server).unwrap();
+    session.ground("person").unwrap();
+    session.ground("person").unwrap();
+    let prefixes: Vec<Value> = server
+        .recorded()
+        .into_iter()
+        .filter(|r| r.path == "/prompt")
+        .map(|r| r.body_json()["prompt"]["8"]["inputs"]["filename_prefix"].clone())
+        .collect();
+    assert_eq!(prefixes.len(), 2);
+    assert_ne!(prefixes[0], prefixes[1]);
+}
+
+/// Two copies of the sample photo side by side: a selection of "person" must light up both halves.
+/// This needs a real ComfyUI, because only the real segmenter drops all but one box.
+#[test]
+#[ignore = "requires a separate running local ComfyUI with SAM 2.1 and Florence-2"]
+fn installed_sam21_selects_every_matching_subject() {
+    let url = std::env::var("CRAFT_TEST_COMFYUI_URL").expect("local server address");
+    let image =
+        std::fs::read(std::env::var("CRAFT_TEST_SAM21_IMAGE").expect("test photo path")).unwrap();
+    let mut decoder = png::Decoder::new(image.as_slice());
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().unwrap();
+    let (w, h) = (reader.info().width as usize, reader.info().height as usize);
+    let (color, _) = reader.output_color_type();
+    let channels = color.samples();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    reader.next_frame(&mut pixels).unwrap();
+    let mut two = Vec::new();
+    for row in pixels.chunks(w * channels).take(h) {
+        two.extend_from_slice(row);
+        two.extend_from_slice(row);
+    }
+    let mut doubled = Vec::new();
+    let mut encoder = png::Encoder::new(&mut doubled, (w * 2) as u32, h as u32);
+    encoder.set_color(color);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&two)
+        .unwrap();
+    let mut session = Sam21Session::new(&url).unwrap();
+    session.verify_server().unwrap();
+    session.prepare(&doubled).unwrap();
+    let mask = session.ground("person").unwrap();
+    let mut decoder = png::Decoder::new(mask.as_slice()).read_info().unwrap();
+    let mut out = vec![0; decoder.output_buffer_size()];
+    let frame = decoder.next_frame(&mut out).unwrap();
+    let samples = frame.color_type.samples();
+    let lit = |from: usize, to: usize| {
+        out.chunks(frame.line_size)
+            .flat_map(|row| row[from * samples..to * samples].iter())
+            .filter(|p| **p > 0)
+            .count()
+    };
+    assert!(lit(0, w) > 0, "the left subject was dropped");
+    assert!(lit(w, w * 2) > 0, "the right subject was dropped");
+}
