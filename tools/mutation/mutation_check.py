@@ -48,6 +48,7 @@ DOWNLOAD = C + 'ai-comfy-env/src/download.rs'
 SAM21 = C + 'ai-comfyui/src/sam21_session.rs'
 DETECTOR = C + 'ai-comfyui/src/detector.rs'
 CU = 'craft-ai-comfyui'
+SCAN = C + 'ai-comfy-env/src/scan.rs'
 TRANSPORT = C + 'ai-comfy-env/src/download/transport.rs'
 HF = C + 'ai-comfy-env/src/source/resolve/hf.rs'
 GH = C + 'ai-comfy-env/src/source/resolve/github.rs'
@@ -186,6 +187,12 @@ U3 = [
     ('folder-unchecked', INSTALL, 'let target_dir = self.comfy.models_dir_for(folder).ok_or(Refusal::Folder)?;', 'let target_dir = self.comfy.base.join("models").join(folder);', E, 'source_install', 'cannot_leave_the_models'),
     ('settings-hosts-not-passed-on', C + 'ai-comfy-env/src/source/settings.rs', 'allowed_hosts: Some(self.download_hosts(kind)),', 'allowed_hosts: None,', E, 'source_install', 'reach_the_downloader'),
     ('registry-overwrites-damage', REGISTRY, 'serde_json::from_str(&text).map_err(|_| unreadable())', 'Ok(serde_json::from_str(&text).unwrap_or_default())', E, 'source_install', 'read_with_care'),
+    ('bundle-path-allows-dot-names', DOWNLOAD, "&& !part.starts_with('.')", '&& true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-depth-unbounded', DOWNLOAD, 'if parts.len() > 3 {', 'if parts.len() > 3000 {', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-allows-empty-parts', DOWNLOAD, '!part.is_empty()', 'true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-parent-link-followed', DOWNLOAD, 'if !actual.starts_with(&root) {', 'if false {', E, 'download', 'links_outside_the_destination'),
+    ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
+    ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {
@@ -528,6 +535,8 @@ EQUIVALENT.update(U2_EQUIVALENT)
 # Both reasons above are about Windows; on Linux and macOS they are observed, not assumed.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
 TIMEOUTS = {}
+# Printed by a test that skips itself because the machine cannot do what it needs.
+SKIP_MARK = 'skipped: this machine does not allow directory links'
 
 
 def main():
@@ -557,7 +566,7 @@ def main():
             path.write_bytes(text.replace(old, new).replace('\n', newline).encode('utf-8'))
             # target 'lib' runs the crate's own unit tests instead of an integration test file.
             where = ['--lib'] if target == 'lib' else ['--test', target]
-            command = ['cargo', 'test', '-p', package, *where, test, '-j', '8']
+            command = ['cargo', 'test', '-p', package, *where, test, '-j', '8', '--', '--nocapture']
             proc = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             timed_out = False
             try:
@@ -572,10 +581,13 @@ def main():
                 log += '\nTIMED OUT: the mutated code made the test hang'
             (OUT / ('mutation-' + name + '.txt')).write_text(scrub(log), encoding='utf-8')
             caught = timed_out or (proc.returncode != 0 and 'test result: FAILED' in log)
+            # A test that skips itself (for example, no directory links here) passes whatever the code does,
+            # so a pass that printed the skip proves nothing and is neither caught nor a survivor.
+            skipped = (not caught) and SKIP_MARK in log
             # Equivalent on Windows only: elsewhere the case is expected to be caught, and a miss there is a finding.
-            equivalent = (not caught) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
-            results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'equivalent': EQUIVALENT[name] if equivalent else None})
-            print(name, 'CAUGHT' if caught else ('EQUIVALENT' if equivalent else 'NOT CAUGHT'), flush=True)
+            equivalent = (not caught) and (not skipped) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
+            results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'skipped': skipped, 'equivalent': EQUIVALENT[name] if equivalent else None})
+            print(name, 'CAUGHT' if caught else ('SKIPPED' if skipped else ('EQUIVALENT' if equivalent else 'NOT CAUGHT')), flush=True)
         finally:
             path.write_bytes(original)
             os.utime(path, None)
@@ -589,9 +601,10 @@ def main():
         merged.update({r['mutation']: r for r in results})
         results = list(merged.values())
     saved.write_text(json.dumps(results, indent=2), encoding='utf-8')
-    survivors = [r['mutation'] for r in results if not r['caught_by_runtime_test'] and not r.get('equivalent')]
+    survivors = [r['mutation'] for r in results if not r['caught_by_runtime_test'] and not r.get('equivalent') and not r.get('skipped')]
+    skipped = [r['mutation'] for r in results if r.get('skipped')]
     equivalent = [r['mutation'] for r in results if r.get('equivalent')]
-    print(json.dumps({'mutations': len(results), 'caught': sum(r['caught_by_runtime_test'] for r in results), 'equivalent': equivalent, 'survivors': survivors}))
+    print(json.dumps({'mutations': len(results), 'caught': sum(r['caught_by_runtime_test'] for r in results), 'equivalent': equivalent, 'skipped': skipped, 'survivors': survivors}))
     if survivors:
         raise SystemExit(1)
 

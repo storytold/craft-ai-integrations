@@ -8,6 +8,7 @@ fn touch(path: &Path, bytes: usize) {
     fs::write(path, vec![7u8; bytes]).unwrap();
 }
 
+/// Builds a throwaway ComfyUI folder for the scan tests.
 fn tree() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("Comfy");
@@ -18,6 +19,14 @@ fn tree() -> tempfile::TempDir {
         6,
     );
     touch(&base.join("models/checkpoints/notes.txt"), 99);
+    // A bundle's small config files count; a large dataset file, an unlisted type and a part file do not.
+    touch(&base.join("models/LLM/Bundle/config.json"), 12);
+    touch(&base.join("models/LLM/Bundle/modeling.py"), 20);
+    touch(
+        &base.join("models/LLM/Bundle/huge.json"),
+        2 * 1024 * 1024 + 1,
+    );
+    touch(&base.join("models/LLM/Bundle/readme.md"), 30);
     touch(&base.join("models/checkpoints/big.safetensors.part"), 99);
     fs::create_dir_all(base.join("custom_nodes/ComfyUI-SAM3")).unwrap();
     fs::create_dir_all(base.join("custom_nodes/__pycache__")).unwrap();
@@ -26,6 +35,7 @@ fn tree() -> tempfile::TempDir {
     dir
 }
 
+/// A folder with model files is an install; other folders are not.
 #[test]
 fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
     let dir = tree();
@@ -33,7 +43,7 @@ fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
     let install = ComfyInstall::at(&base).unwrap();
     let mut folders: Vec<_> = install.model_dirs.iter().map(|(n, _)| n.as_str()).collect();
     folders.sort();
-    assert_eq!(folders, ["checkpoints", "diffusion_models", "sam3"]);
+    assert_eq!(folders, ["LLM", "checkpoints", "diffusion_models", "sam3"]);
     assert!(ComfyInstall::at(dir.path().join("nope").as_path()).is_none());
     assert!(ComfyInstall::at(Path::new("relative")).is_none());
     let empty = tempfile::tempdir().unwrap();
@@ -41,7 +51,8 @@ fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
 }
 
 #[test]
-fn the_scan_lists_model_files_and_node_packs_only() {
+/// The scan lists model files small bundle files and node packs.
+fn the_scan_lists_model_files_small_bundle_files_and_node_packs() {
     let dir = tree();
     let inv = scan(&ComfyInstall::at(&dir.path().join("Comfy")).unwrap());
     assert!(inv.comfyui_found);
@@ -54,7 +65,10 @@ fn the_scan_lists_model_files_and_node_packs_only() {
     assert_eq!(
         files,
         [
+            ("LLM", "Bundle/config.json", 12),
+            ("LLM", "Bundle/modeling.py", 20),
             ("checkpoints", "a.ckpt", 5),
+            ("checkpoints", "notes.txt", 99),
             ("diffusion_models", "FLUX/fill.safetensors", 6),
             ("sam3", "sam3.safetensors", 10),
         ]

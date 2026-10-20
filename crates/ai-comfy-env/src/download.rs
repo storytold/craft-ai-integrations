@@ -141,6 +141,7 @@ impl Downloader {
         self.fetch_checked(file, dest_dir, token, cancel, progress, Check::Observe)
     }
 
+    /// Downloads one file into `dest_dir`, resuming a part file, and checks it according to `check`.
     fn fetch_checked(
         &self,
         file: &ModelFile,
@@ -150,21 +151,22 @@ impl Downloader {
         progress: &mut dyn FnMut(Progress),
         check: Check,
     ) -> Result<(PathBuf, String), AiError> {
-        if file.filename.is_empty()
-            || file.filename.contains(['/', '\\', ':'])
-            || file.filename.starts_with('.')
-        {
+        let Some(relative) = safe_relative(&file.filename) else {
             return Err(AiError::invalid("the model file name is not a plain name"));
-        }
-        std::fs::create_dir_all(dest_dir)
-            .map_err(|_| AiError::new(ErrorKind::Internal, "could not create the model folder"))?;
-        let target = dest_dir.join(&file.filename);
+        };
+        let target = dest_dir.join(&relative);
+        let parent = target.parent().unwrap_or(dest_dir);
+        make_parent_inside(dest_dir, parent)?;
         if check == Check::Expect
             && std::fs::metadata(&target).is_ok_and(|m| m.is_file() && m.len() == file.size_bytes)
         {
             return Ok((target, file.sha256.to_ascii_lowercase()));
         }
-        let part = dest_dir.join(format!("{}.part", file.filename));
+        let leaf = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&file.filename);
+        let part = parent.join(format!("{leaf}.part"));
         let mut resumes = 0u8;
         loop {
             match self.attempt(file, &part, token, cancel, progress)? {
@@ -311,6 +313,7 @@ impl Downloader {
         self.copy(response, &mut out, start, file.size_bytes, cancel, progress)
     }
 
+    /// Streams the response body into the part file, reporting progress and honouring cancel.
     fn copy(
         &self,
         response: ureq::http::Response<ureq::Body>,
@@ -369,4 +372,56 @@ impl Downloader {
             Attempt::Interrupted { moved }
         })
     }
+}
+
+/// Creates `parent` one folder at a time under `dest_dir`, and refuses as soon as a folder, with its
+/// links resolved, is outside `dest_dir`. Checking before the next folder is made means a bundle
+/// sub-folder that links elsewhere takes no new folder, no part file and no rename.
+///
+/// This is a check, not a lock: someone who can write to `dest_dir` while a download runs could swap a
+/// folder for a link afterwards. They could equally replace the model file itself, so it adds no reach.
+fn make_parent_inside(dest_dir: &Path, parent: &Path) -> Result<(), AiError> {
+    let inside = |_| AiError::new(ErrorKind::Internal, "could not create the model folder");
+    std::fs::create_dir_all(dest_dir).map_err(inside)?;
+    let root = std::fs::canonicalize(dest_dir).map_err(inside)?;
+    let mut current = dest_dir.to_path_buf();
+    for part in parent
+        .strip_prefix(dest_dir)
+        .unwrap_or(Path::new(""))
+        .components()
+    {
+        current.push(part);
+        if !current.exists() {
+            std::fs::create_dir(&current).map_err(inside)?;
+        }
+        let actual = std::fs::canonicalize(&current).map_err(inside)?;
+        if !actual.starts_with(&root) {
+            return Err(AiError::invalid(
+                "the model folder is outside the destination",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A model file name as a relative path: one to three plain names joined by `/`, so a bundle can
+/// keep its files together in one folder (`Florence-2-large/model.safetensors`). A name that is
+/// empty, starts with a dot, or holds a backslash, colon or control character is refused, which
+/// rules out `..`, absolute paths and drive letters.
+pub fn safe_relative(name: &str) -> Option<PathBuf> {
+    let parts: Vec<&str> = name.split('/').collect();
+    if parts.len() > 3 {
+        return None;
+    }
+    let plain = |part: &&str| {
+        !part.is_empty()
+            && !part.starts_with('.')
+            && !part.ends_with(['.', ' '])
+            && !part.contains(['\\', ':'])
+            && !part.chars().any(char::is_control)
+    };
+    parts
+        .iter()
+        .all(plain)
+        .then(|| parts.iter().collect::<PathBuf>())
 }
