@@ -1,6 +1,6 @@
 # Add a model to a built-in engine
 
-A built-in engine (Candle, Burn) runs a model from a weights file on this computer. You write the
+A built-in engine (rten and Candle exist; Burn is a registered slot only) runs a model from a weights file on this computer. You write the
 model. Job numbers, threads, polling, Cancel, progress, validation, loading the weights once,
 and turning a crash into a failed job are already done in `EngineProvider`. No app changes when
 you add a model, and no app changes when you add an engine.

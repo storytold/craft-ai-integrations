@@ -30,8 +30,8 @@ Layout and rules mirror craft-libs: edition 2024, `MIT OR Apache-2.0`, no `unsaf
 | `craft-ai-openai` | OpenAI-compatible text (streaming, tools, structured output) and images (generate, edit, inpaint). |
 | `craft-ai-bfl`, `craft-ai-vertex`, `craft-ai-seedance`, `craft-ai-artcraft` | Black Forest Labs FLUX, Vertex express-mode Gemini images, BytePlus ModelArk Seedance video, and the ArtCraft Omni API-key route. |
 | `craft-ai-declarative` | A provider described by a small data file instead of Rust. Design: `docs/design/declarative-adapter.md`. |
-| `craft-ai-comfyui`, `craft-ai-sam3` | Local ComfyUI workflows with the SAM 3 point and session clients; the older direct SAM 3 detector bridge. |
-| `craft-ai-engine`, `craft-ai-engine-candle` | Built-in model engines: the runner contract and the one provider that runs any registered model on this computer, and SAM 3 on Candle (Apache-2.0 only; see its NOTICE). Guide: `docs/ADD-AN-ENGINE.md`. |
+| `craft-ai-comfyui`, `craft-ai-sam3` | Local ComfyUI workflows, including imported subject-selection graphs (`image.segment`) whose masks are checked before an app sees them; the SAM 3 point and session clients; the older direct SAM 3 detector bridge. |
+| `craft-ai-engine`, `craft-ai-engine-candle`, `craft-ai-engine-rten` | Built-in model engines: the runner contract and the one provider that runs any registered model on this computer; SAM 3 on Candle (Apache-2.0 only; see its NOTICE); and SAM 2.1 on rten, a pure Rust engine that reads the publisher's `.onnx` files as they are, on the processor. Guide: `docs/ADD-AN-ENGINE.md`. |
 | `craft-ai-comfy-env` | Finds an existing ComfyUI Desktop install, inventories its model files and node packs, downloads missing model files into it. |
 | `craft-ai-egui` | Theme-neutral egui widgets: status, model picker, consent prompt, job progress, connection panel, history. Needs Rust 1.95. |
 
@@ -66,7 +66,7 @@ Read [docs/STATUS.md](docs/STATUS.md) before relying on a provider or tool. In s
 
 - **Tested against scripted servers on localhost:** every hosted adapter, the media copier, the generic
   ComfyUI adapter, the declarative adapter and the client flow.
-- **Run for real on one machine:** the SAM 3 point and session clients through a headless ComfyUI.
+- **Run for real on one machine:** the SAM 3 point and session clients through a headless ComfyUI; SAM 2.1 on rten with the published ONNX files; and an imported selection graph on ComfyUI 0.22.3. All on Windows, with one sample picture.
 - **Not verified:** any real hosted service, TLS behind an intercepting proxy, macOS and Linux
   keychains, macOS builds of the test suite, and any app running a tool through the shared binding.
 
