@@ -141,7 +141,8 @@ pub(crate) fn answer(event: Event, size: &Size) -> Result<Vec<Event>, AiError> {
 }
 
 /// Reads `png`, checks its size against `size`, reduces it to one channel and says whether any
-/// pixel is selected (above half). A mask with nothing selected comes back all black.
+/// pixel is selected (above half). Every pixel comes back white or black, so a mask with nothing
+/// selected is all black.
 fn finish(png: &[u8], size: &Size) -> Result<(Vec<u8>, bool), AiError> {
     let mut decoder =
         png::Decoder::new_with_limits(Cursor::new(png), png::Limits { bytes: MAX_ALLOC });
@@ -178,9 +179,9 @@ fn finish(png: &[u8], size: &Size) -> Result<(Vec<u8>, bool), AiError> {
         .map(|p| p.first().copied().unwrap_or(0))
         .collect();
     let matched = gray.iter().any(|v| *v > 127);
-    if !matched {
-        gray.iter_mut().for_each(|v| *v = 0);
-    }
+    // Binary: above half is selected (white), the rest is not (black). An empty mask is all black.
+    gray.iter_mut()
+        .for_each(|v| *v = if *v > 127 { 255 } else { 0 });
     Ok((encode_gray(&gray, width, height)?, matched))
 }
 

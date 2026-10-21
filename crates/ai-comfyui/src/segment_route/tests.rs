@@ -176,6 +176,24 @@ fn half_is_the_line_between_selected_and_not() {
     );
 }
 
+/// Every pixel of the answer is white or black: a grey the graph saved is not handed on as a
+/// partly selected pixel.
+#[test]
+fn the_answer_is_binary_white_or_black() {
+    let events = answer(
+        event_of(gray_png(5, &[0, 100, 128, 200, 255])),
+        &size(5, 1, false),
+    )
+    .unwrap();
+    assert!(found_of(&events).matched);
+    let mut reader = png::Decoder::new(Cursor::new(mask_of(&events)))
+        .read_info()
+        .unwrap();
+    let mut buffer = vec![0; reader.output_buffer_size().unwrap()];
+    reader.next_frame(&mut buffer).unwrap();
+    assert_eq!(buffer, [0, 0, 255, 255, 255]);
+}
+
 /// A mask of another size is refused; a turned one is accepted only for a JPEG.
 #[test]
 fn a_mask_of_the_wrong_size_is_refused_and_a_turn_is_allowed_only_for_a_jpeg() {
