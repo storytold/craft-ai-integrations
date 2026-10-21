@@ -94,11 +94,9 @@ fn start(script: Arc<Script>) -> Server {
         }
         "/prompt" => {
             script.prompts.fetch_add(1, Ordering::SeqCst);
-            if script
-                .refuse_prompts
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                .is_ok()
-            {
+            // The test submits one job at a time, so a plain check and decrement is enough.
+            if script.refuse_prompts.load(Ordering::SeqCst) > 0 {
+                script.refuse_prompts.fetch_sub(1, Ordering::SeqCst);
                 return Reply::Json(400, "{}".into());
             }
             Reply::Json(200, r#"{"prompt_id":"seg-job"}"#.into())
