@@ -8,10 +8,13 @@
 //!   which ComfyUI's image loader applies), or the answer is refused;
 //! - it is reduced to one 8-bit channel, white where selected, whatever colour type the graph
 //!   saved;
-//! - a mask with no pixel above half is an empty mask and `matched: false`, never a failed job;
+//! - a mask with no pixel above half is an empty mask and `matched: false`, never a failed job.
 //!
 //! The graph's output is read inline and bounded, so a hostile or broken graph cannot ask for more
-//! memory than a 100 megapixel mask needs.
+//! memory than a 100 megapixel mask needs. The byte limit is the provider's output limit (never
+//! more than the 32 MiB inline cap), the same as for any inline answer; a selection mask is never
+//! written to the app's output folder, because `answer` needs the PNG bytes in hand. A mask PNG
+//! over that limit fails the job.
 
 use std::io::Cursor;
 

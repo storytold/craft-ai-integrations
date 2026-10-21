@@ -20,9 +20,10 @@ GM_CASES = [
     ('grey-kept-as-selected', SR, '*v = if *v > 127 { 255 } else { 0 }', '*v = if *v > 127 { *v } else { 0 }', CC, 'lib', 'the_answer_is_binary'),
     ('low-grey-kept-as-not-selected', SR, '*v = if *v > 127 { 255 } else { 0 }', '*v = if *v > 127 { 255 } else { *v }', CC, 'lib', 'a_mask_with_nothing_selected'),
     ('alpha-is-the-mask', SR, '.map(|p| p.first().copied().unwrap_or(0))', '.map(|p| p.last().copied().unwrap_or(0))', CC, 'lib', 'the_first_channel'),
-    ('jpeg-answer-accepted', SR, 'if media_type.as_str() != "image/png" {', 'if false {', CC, 'lib', 'something_that_is_not_a_png'),
+    ('media-type-guard-removed', SR, 'if media_type.as_str() != "image/png" {', 'if false {', CC, 'lib', 'something_that_is_not_a_png'),
     ('table-marker-taken-for-frame', SR, '0xC0..=0xCF if !matches!(*marker, 0xC4 | 0xC8 | 0xCC) => {', '0xC0..=0xCF => {', CC, 'lib', 'jpeg_segments_before'),
     ('huge-picture-accepted', SR, SIZE, 'if width == 0 || height == 0 {', CC, 'lib', 'no_readable_or_a_huge'),
     ('empty-picture-accepted', SR, SIZE, 'if u64::from(width) * u64::from(height) > MAX_PIXELS {', CC, 'lib', 'no_readable_or_a_huge'),
     ('mask-handed-on-unchecked', PV, '.and_then(|event| segment_route::answer(event, &size)),', '.map(|event| vec![event]),', CC, 'segment_route', 'a_mask_of_the_wrong_size_fails'),
+    ('mask-ignores-the-output-limit', PV, 'Some(size) => output::fetch(&self.http, n, false, None, self.max_output_bytes)', 'Some(size) => output::fetch(&self.http, n, false, None, 1024 * 1024 * 1024)', CC, 'segment_route', 'a_mask_over_the_output_limit'),
 ]
