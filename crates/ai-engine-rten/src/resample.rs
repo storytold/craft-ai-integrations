@@ -38,6 +38,31 @@ fn weights(src: usize, dst: usize) -> Vec<(usize, Vec<f32>)> {
         .collect()
 }
 
+/// Whether the horizontal pass runs first. It does for a picture at least as wide as it is tall,
+/// so the buffer between the passes is the shorter side times [`SIDE`], never the longer.
+fn horizontal_first(w: usize, h: usize) -> bool {
+    h <= w
+}
+
+/// The floats in the buffer between the two passes: the shorter side of the picture by [`SIDE`],
+/// three channels. For a picture of at most 100 megapixels the shorter side is at most 10,000, so
+/// this is at most about 123 MB.
+fn middle_len(w: usize, h: usize) -> Option<usize> {
+    let shorter = if horizontal_first(w, h) { h } else { w };
+    shorter.checked_mul(SIDE)?.checked_mul(3)
+}
+
+/// A zeroed buffer of `len` floats, or a plain error when that much memory cannot be had, so a
+/// hostile size never aborts the process.
+fn zeroed(len: Option<usize>) -> Result<Vec<f32>, AiError> {
+    let too_big = || AiError::invalid("The picture is too large to select from.");
+    let len = len.ok_or_else(too_big)?;
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| too_big())?;
+    v.resize(len, 0.0);
+    Ok(v)
+}
+
 /// An 8-bit RGB picture (`w` by `h`, row by row) as the model's input: `[3, 1024, 1024]` floats,
 /// channel first.
 pub fn preprocess(rgb: &[u8], w: usize, h: usize) -> Result<Vec<f32>, AiError> {
@@ -51,40 +76,76 @@ pub fn preprocess(rgb: &[u8], w: usize, h: usize) -> Result<Vec<f32>, AiError> {
         ));
     }
     let (wx, wy) = (weights(w, SIDE), weights(h, SIDE));
-    // Horizontal pass: h rows of SIDE columns, three channels each.
-    let mut rows = vec![0f32; h * SIDE * 3];
-    for y in 0..h {
-        for (ox, (lo, ws)) in wx.iter().enumerate() {
-            let mut acc = [0f32; 3];
-            for (k, wt) in ws.iter().enumerate() {
-                let at = (y * w + lo + k) * 3;
-                for (c, a) in acc.iter_mut().enumerate() {
-                    *a += wt * f32::from(rgb.get(at + c).copied().unwrap_or(0));
-                }
-            }
-            let to = (y * SIDE + ox) * 3;
-            if let Some(dst) = rows.get_mut(to..to + 3) {
-                dst.copy_from_slice(&acc);
+    let mut middle = zeroed(middle_len(w, h))?;
+    let mut out = zeroed(Some(3 * SIDE * SIDE))?;
+    // The export was made from 8-bit pictures, so each value is rounded to 8 bits before it is
+    // scaled, as an image library would hand it over. The result is written channel first.
+    let mut put = |oy: usize, ox: usize, acc: [f32; 3]| {
+        for (c, a) in acc.iter().enumerate() {
+            let value = a.round().clamp(0.0, 255.0) / 255.0;
+            if let Some(d) = out.get_mut((c * SIDE + oy) * SIDE + ox) {
+                *d = (value - MEAN[c]) / STD[c];
             }
         }
-    }
-    // Vertical pass, written channel first. The export was made from 8-bit pictures, so each
-    // value is rounded to 8 bits before it is scaled, as an image library would hand it over.
-    let mut out = vec![0f32; 3 * SIDE * SIDE];
-    for (oy, (lo, ws)) in wy.iter().enumerate() {
-        for ox in 0..SIDE {
-            let mut acc = [0f32; 3];
-            for (k, wt) in ws.iter().enumerate() {
-                let at = ((lo + k) * SIDE + ox) * 3;
-                for (c, a) in acc.iter_mut().enumerate() {
-                    *a += wt * rows.get(at + c).copied().unwrap_or(0.0);
+    };
+    if horizontal_first(w, h) {
+        // Horizontal pass: h rows of SIDE columns, three channels each.
+        for y in 0..h {
+            for (ox, (lo, ws)) in wx.iter().enumerate() {
+                let mut acc = [0f32; 3];
+                for (k, wt) in ws.iter().enumerate() {
+                    let at = (y * w + lo + k) * 3;
+                    for (c, a) in acc.iter_mut().enumerate() {
+                        *a += wt * f32::from(rgb.get(at + c).copied().unwrap_or(0));
+                    }
+                }
+                let to = (y * SIDE + ox) * 3;
+                if let Some(dst) = middle.get_mut(to..to + 3) {
+                    dst.copy_from_slice(&acc);
                 }
             }
-            for (c, a) in acc.iter().enumerate() {
-                let value = a.round().clamp(0.0, 255.0) / 255.0;
-                if let Some(d) = out.get_mut((c * SIDE + oy) * SIDE + ox) {
-                    *d = (value - MEAN[c]) / STD[c];
+        }
+        // Vertical pass.
+        for (oy, (lo, ws)) in wy.iter().enumerate() {
+            for ox in 0..SIDE {
+                let mut acc = [0f32; 3];
+                for (k, wt) in ws.iter().enumerate() {
+                    let at = ((lo + k) * SIDE + ox) * 3;
+                    for (c, a) in acc.iter_mut().enumerate() {
+                        *a += wt * middle.get(at + c).copied().unwrap_or(0.0);
+                    }
                 }
+                put(oy, ox, acc);
+            }
+        }
+    } else {
+        // Vertical pass: SIDE rows of w columns, three channels each.
+        for (oy, (lo, ws)) in wy.iter().enumerate() {
+            for x in 0..w {
+                let mut acc = [0f32; 3];
+                for (k, wt) in ws.iter().enumerate() {
+                    let at = ((lo + k) * w + x) * 3;
+                    for (c, a) in acc.iter_mut().enumerate() {
+                        *a += wt * f32::from(rgb.get(at + c).copied().unwrap_or(0));
+                    }
+                }
+                let to = (oy * w + x) * 3;
+                if let Some(dst) = middle.get_mut(to..to + 3) {
+                    dst.copy_from_slice(&acc);
+                }
+            }
+        }
+        // Horizontal pass.
+        for oy in 0..SIDE {
+            for (ox, (lo, ws)) in wx.iter().enumerate() {
+                let mut acc = [0f32; 3];
+                for (k, wt) in ws.iter().enumerate() {
+                    let at = (oy * w + lo + k) * 3;
+                    for (c, a) in acc.iter_mut().enumerate() {
+                        *a += wt * middle.get(at + c).copied().unwrap_or(0.0);
+                    }
+                }
+                put(oy, ox, acc);
             }
         }
     }
@@ -92,11 +153,12 @@ pub fn preprocess(rgb: &[u8], w: usize, h: usize) -> Result<Vec<f32>, AiError> {
 }
 
 /// Mask `logits` (`MASK_SIDE` squared) resampled bilinearly, with half-pixel centres, to `w` by
-/// `h` and turned into 0..1 coverage. Anything that is not a full mask gives an empty one.
-pub fn coverage(logits: &[f32], w: usize, h: usize) -> Vec<f32> {
-    let mut out = vec![0f32; w * h];
+/// `h` and turned into 0..1 coverage. Anything that is not a full mask gives an empty one. A size
+/// that overflows, or that cannot be allocated, is an error rather than an abort.
+pub fn coverage(logits: &[f32], w: usize, h: usize) -> Result<Vec<f32>, AiError> {
+    let mut out = zeroed(w.checked_mul(h))?;
     if logits.len() < MASK_SIDE * MASK_SIDE {
-        return out;
+        return Ok(out);
     }
     let at = |x: usize, y: usize| {
         logits
@@ -122,7 +184,7 @@ pub fn coverage(logits: &[f32], w: usize, h: usize) -> Vec<f32> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -166,6 +228,46 @@ mod tests {
         assert!(out[row * SIDE + SIDE - 20] > 1.5);
     }
 
+    /// The buffer between the two passes is the shorter side by `SIDE`, whichever way the picture
+    /// is turned, so a one pixel wide picture of 100 million rows cannot ask for terabytes.
+    #[test]
+    fn the_middle_buffer_follows_the_shorter_side() {
+        let floats = |w, h| middle_len(w, h).unwrap();
+        assert_eq!(floats(1, 99_999_999), SIDE * 3);
+        assert_eq!(floats(99_999_999, 1), SIDE * 3);
+        assert_eq!(floats(10_000, 10_000), 10_000 * SIDE * 3);
+        assert_eq!(floats(300, 200), 200 * SIDE * 3);
+        assert_eq!(floats(200, 300), 200 * SIDE * 3);
+    }
+
+    /// A very long, thin picture is prepared, in either direction, and the two directions agree
+    /// exactly: one is the other turned a quarter.
+    #[test]
+    fn a_long_thin_picture_is_prepared_the_same_turned_either_way() {
+        let n = 50_000usize;
+        let column: Vec<u8> = (0..n)
+            .flat_map(|y| [(y % 251) as u8, (y % 13) as u8, 7])
+            .collect();
+        let tall = preprocess(&column, 1, n).unwrap();
+        let wide = preprocess(&column, n, 1).unwrap();
+        for c in 0..3 {
+            for i in 0..SIDE {
+                for j in 0..SIDE {
+                    let a = tall[(c * SIDE + i) * SIDE + j];
+                    let b = wide[(c * SIDE + j) * SIDE + i];
+                    assert!((a - b).abs() < 1e-6, "channel {c} at {i},{j}");
+                }
+            }
+        }
+    }
+
+    /// A mask size that overflows is an error, not an overflow or an allocation abort.
+    #[test]
+    fn a_mask_size_that_overflows_or_cannot_be_held_is_an_error() {
+        assert!(coverage(&[], usize::MAX, 2).is_err());
+        assert!(coverage(&[0.0; MASK_SIDE * MASK_SIDE], usize::MAX / 2, 2).is_err());
+    }
+
     /// Too few bytes, none, or a size that overflows give an error.
     #[test]
     fn a_short_or_empty_buffer_is_an_error_not_a_panic() {
@@ -188,7 +290,7 @@ mod tests {
                 }
             })
             .collect();
-        let a = coverage(&logits, 8, 2);
+        let a = coverage(&logits, 8, 2).unwrap();
         assert_eq!(a.len(), 16);
         assert!(a[0] > 0.99 && a[7] < 0.01);
     }
@@ -196,7 +298,12 @@ mod tests {
     /// No logits, or too few, give zero coverage everywhere.
     #[test]
     fn anything_but_a_full_mask_gives_an_empty_one() {
-        assert!(coverage(&[], 3, 3).iter().all(|v| *v == 0.0));
-        assert!(coverage(&[5.0; 10], 3, 3).iter().all(|v| *v == 0.0));
+        assert!(coverage(&[], 3, 3).unwrap().iter().all(|v| *v == 0.0));
+        assert!(
+            coverage(&[5.0; 10], 3, 3)
+                .unwrap()
+                .iter()
+                .all(|v| *v == 0.0)
+        );
     }
 }

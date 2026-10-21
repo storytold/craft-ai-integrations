@@ -150,7 +150,7 @@ impl<B: Backend + 'static> LoadedModel for Loaded<B> {
         // A mask with no pixel above zero is the model saying there is nothing there.
         let found = prediction.logits.iter().any(|l| *l > 0.0);
         let alpha = if found {
-            coverage(&prediction.logits, picture.width, picture.height)
+            coverage(&prediction.logits, picture.width, picture.height)?
         } else {
             ctx.notice("Nothing was selected at that spot.");
             vec![0.0; picture.width * picture.height]
@@ -177,6 +177,15 @@ pub(crate) fn read_prompt(request: &Request) -> Result<(Vec<Click>, Option<Area>
     if segment::description(request).is_some() {
         return Err(AiError::unsupported(
             "This option selects by clicking on the picture. To select by describing it, choose another in Set up AI.",
+        ));
+    }
+    if request
+        .inputs
+        .iter()
+        .any(|i| i.role == InputRole::Prompt && !matches!(i.payload, Payload::Text { .. }))
+    {
+        return Err(AiError::unsupported(
+            "This option reads a prompt only as text, and it selects by clicking on the picture.",
         ));
     }
     let clicks = segment::clicks(request)?;

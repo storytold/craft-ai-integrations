@@ -193,6 +193,19 @@ fn a_description_is_refused_in_plain_words_not_answered_with_a_guess() {
     assert!(read_prompt(&blank).is_ok());
 }
 
+/// A prompt that is not text (a picture, a handle) is refused as well, rather than ignored while
+/// the clicks are answered.
+#[test]
+fn a_prompt_that_is_not_text_is_refused() {
+    let png = picture(4, 4, 9);
+    let not_words = Payload::inline("image/png", png.clone()).unwrap();
+    let asked =
+        request(png, json!([click(0.5, 0.5, true)])).with_input(InputRole::Prompt, not_words);
+    let e = read_prompt(&asked).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Unsupported);
+    assert!(e.message.contains("text"), "{}", e.message);
+}
+
 /// Clicks outside the picture, missing or mistyped fields, the wrong shape and too many clicks
 /// are refused; exactly the most allowed is accepted.
 #[test]
