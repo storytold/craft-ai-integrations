@@ -118,7 +118,9 @@ fn private_name(name: &str) -> bool {
     .any(|suffix| name == *suffix || name.ends_with(&format!(".{suffix}")))
 }
 
-fn is_loopback(url: &Url) -> bool {
+/// The same loopback rule that gates `allow_loopback` — shared with the store and the other
+/// downloaders that pass `allow_loopback` to [`check`], to keep the proxy off loopback requests.
+pub fn is_loopback(url: &Url) -> bool {
     match url.host() {
         Some(Host::Domain(name)) => {
             let name = bare(name).to_ascii_lowercase();

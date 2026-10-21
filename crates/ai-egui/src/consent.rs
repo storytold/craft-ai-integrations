@@ -16,6 +16,62 @@ pub enum ConsentChoice {
     Deny,
 }
 
+/// The duration attached to a permission. The host applies it with `ConsentLedger::agree`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimedConsentChoice {
+    Allow(craft_ai_core::ConsentTerm),
+    Deny,
+}
+
+/// State belonging to one consent prompt.
+pub struct ConsentPromptState {
+    term: craft_ai_core::ConsentTerm,
+    disclosure: Option<Disclosure>,
+}
+
+impl Default for ConsentPromptState {
+    /// A fresh prompt: the shortest duration chosen and no disclosure seen yet.
+    fn default() -> Self {
+        Self {
+            term: craft_ai_core::ConsentTerm::ThisTime,
+            disclosure: None,
+        }
+    }
+}
+
+/// The duration-aware prompt; the legacy prompt remains available to existing hosts.
+pub fn consent_prompt_with_terms(
+    ui: &mut Ui,
+    disclosure: &Disclosure,
+    app_label: &str,
+    state: &mut ConsentPromptState,
+) -> Option<TimedConsentChoice> {
+    if state.disclosure.as_ref() != Some(disclosure) {
+        state.term = craft_ai_core::ConsentTerm::ThisTime;
+        state.disclosure = Some(disclosure.clone());
+    }
+    let result =
+        draw_consent(ui, disclosure, app_label, Some(&mut state.term)).map(|choice| match choice {
+            ConsentChoice::Allow => TimedConsentChoice::Allow(state.term),
+            ConsentChoice::Deny => TimedConsentChoice::Deny,
+        });
+    if result.is_some() {
+        *state = ConsentPromptState::default();
+    }
+    result
+}
+
+/// Plain labels for the shared durations; hosts may translate their stable ids instead.
+pub fn consent_term_label(term: craft_ai_core::ConsentTerm) -> &'static str {
+    use craft_ai_core::ConsentTerm;
+    match term {
+        ConsentTerm::ThisTime => "This time only",
+        ConsentTerm::OneHour => "For one hour",
+        ConsentTerm::OneDay => "For one day",
+        ConsentTerm::UntilRevoked => "Until I turn it off",
+    }
+}
+
 /// Label of the button that agrees.
 pub const ALLOW: &str = "Allow";
 /// Label of the button that refuses.
@@ -26,6 +82,17 @@ pub fn consent_prompt(
     ui: &mut Ui,
     disclosure: &Disclosure,
     app_label: &str,
+) -> Option<ConsentChoice> {
+    draw_consent(ui, disclosure, app_label, None)
+}
+
+/// Draws the disclosure and the Allow and Deny buttons. With `term` it also draws one radio per
+/// duration, bound to it; without, it draws none. Returns the button pressed on this frame.
+fn draw_consent(
+    ui: &mut Ui,
+    disclosure: &Disclosure,
+    app_label: &str,
+    term: Option<&mut craft_ai_core::ConsentTerm>,
 ) -> Option<ConsentChoice> {
     let mut choice = None;
     ui.vertical(|ui| {
@@ -40,6 +107,12 @@ pub fn consent_prompt(
             ui.label(format!("\u{2022} {line}"));
         }
         ui.add_space(4.0);
+        if let Some(selected) = term {
+            ui.label("Allow this for:");
+            for duration in craft_ai_core::ConsentTerm::ALL {
+                ui.radio_value(selected, duration, consent_term_label(duration));
+            }
+        }
         ui.horizontal(|ui| {
             if ui.button(ALLOW).clicked() {
                 choice = Some(ConsentChoice::Allow);

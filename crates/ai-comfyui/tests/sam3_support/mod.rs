@@ -67,7 +67,7 @@ pub fn server_nodes(
         "/object_info" => {
             let mut nodes = json!({
                 "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-                "SAM3Grounding":{},"MaskToImage":{},"SaveImage":{}
+                "SAM3Grounding":{},"MaskToImage":{},"PreviewImage":{}
             });
             for name in &extra_nodes {
                 nodes[name.as_str()] = json!({});
@@ -77,7 +77,7 @@ pub fn server_nodes(
         "/upload/image" => Reply::Json(
             200,
             json!({
-                "name":"source.png","type":"input","subfolder":""
+                "name":"source.png","type":"temp","subfolder":""
             })
             .to_string(),
         ),

@@ -164,7 +164,7 @@ fn the_built_in_route_needs_only_the_model() {
 #[test]
 fn what_is_already_there_is_not_offered_again() {
     let f = select_subject();
-    let recipe = f.local.as_ref().unwrap();
+    let recipe = &f.locals[0];
     let have_model = Inventory {
         comfyui_found: true,
         files: recipe
@@ -206,7 +206,7 @@ fn a_tool_with_no_local_model_has_no_offer() {
     let p = pc(Os::Windows, vec![]);
     let hosted_only = craft_ai_features::builtin()
         .into_iter()
-        .find(|f| f.local.is_none())
+        .find(|f| f.locals.is_empty())
         .unwrap();
     assert!(setup_offer(&hosted_only, &p, &empty(), SetupRoute::ComfyUi).is_none());
 }

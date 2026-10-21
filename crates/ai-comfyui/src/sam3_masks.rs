@@ -159,6 +159,8 @@ pub(crate) fn fetch(
     })
 }
 
+/// Checks one SAM 3 mask descriptor before it is fetched: a plain file name, a safe
+/// sub-folder, and a folder type of `output` or `temp` (the scratch area) only.
 fn validate_file(file: &Value) -> Result<(), AiError> {
     let name = file
         .get("filename")
@@ -177,8 +179,10 @@ fn validate_file(file: &Value) -> Result<(), AiError> {
             && !s.contains(['/', '\\', ':'])
             && !s.chars().any(char::is_control)
     };
-    if file.get("type").and_then(Value::as_str) != Some("output")
-        || !safe(name)
+    if !matches!(
+        file.get("type").and_then(Value::as_str),
+        Some("output" | "temp")
+    ) || !safe(name)
         || (!subfolder.is_empty() && !safe(subfolder))
     {
         return Err(bad("SAM 3 mask descriptor is unsafe"));

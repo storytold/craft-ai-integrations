@@ -76,6 +76,10 @@ pub enum State {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
     pub feature: String,
+    /// The recipe this plan is about: its workflow id, such as `sam3-segment`. Empty for a
+    /// feature with no local route.
+    #[serde(default)]
+    pub recipe: String,
     pub state: State,
     pub missing_files: Vec<ModelFile>,
     pub missing_packs: Vec<NodePack>,
@@ -86,20 +90,44 @@ pub struct Plan {
     pub blockers: Vec<Blocker>,
 }
 
-/// Works out what `feature` still needs on a computer described by `inventory`.
+/// Works out what `feature`'s first local recipe still needs on a computer described by
+/// `inventory`. A feature with no local recipe gets [`State::NoLocalRoute`] and an empty
+/// [`Plan::recipe`].
 pub fn plan(feature: &Feature, inventory: &Inventory) -> Plan {
-    let mut out = Plan {
+    match feature.locals.first() {
+        Some(recipe) => plan_recipe(feature, recipe, inventory),
+        None => empty(feature, String::new()),
+    }
+}
+
+/// Works out what every one of `feature`'s local recipes still needs, one [`Plan`] each, in
+/// catalogue order. Each names its recipe in [`Plan::recipe`], so several models for one tool
+/// can be shown and installed side by side without one standing in for another.
+pub fn plans(feature: &Feature, inventory: &Inventory) -> Vec<Plan> {
+    feature
+        .locals
+        .iter()
+        .map(|recipe| plan_recipe(feature, recipe, inventory))
+        .collect()
+}
+
+/// A plan that has found nothing yet, about `recipe` of `feature`.
+fn empty(feature: &Feature, recipe: String) -> Plan {
+    Plan {
         feature: feature.id.clone(),
+        recipe,
         state: State::NoLocalRoute,
         missing_files: Vec::new(),
         missing_packs: Vec::new(),
         download_bytes: 0,
         licences: Vec::new(),
         blockers: Vec::new(),
-    };
-    let Some(recipe) = &feature.local else {
-        return out;
-    };
+    }
+}
+
+/// Compares one recipe of `feature` with `inventory`.
+fn plan_recipe(feature: &Feature, recipe: &LocalRecipe, inventory: &Inventory) -> Plan {
+    let mut out = empty(feature, recipe.workflow.clone());
     if !inventory.comfyui_found {
         out.state = State::NoRuntime;
         return out;
@@ -115,6 +143,7 @@ pub fn plan(feature: &Feature, inventory: &Inventory) -> Plan {
     out
 }
 
+/// Adds what `recipe` is missing on `inventory` to `out`, and anything that blocks it.
 fn fill(out: &mut Plan, recipe: &LocalRecipe, inventory: &Inventory) {
     for model in &recipe.models {
         if inventory.find(model).is_none() {

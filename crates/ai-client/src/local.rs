@@ -39,22 +39,76 @@ pub struct LocalEnabled {
     pub bound: bool,
 }
 
+/// Whether `connection` is one a local recipe of `feature` registered through
+/// [`ToolDesk::enable_local`] or [`ToolDesk::enable_local_recipe`]: the ComfyUI connection
+/// `local-<feature>` or one named `local-<feature>-recipe-<workflow>`. Its model id is the
+/// recipe's workflow, so the picker can tell which recipe it stands for.
+pub(crate) fn is_recipe_connection(connection: &Connection, feature: &str) -> bool {
+    let id = connection.id.as_str();
+    connection.provider == "comfyui"
+        && (id == format!("local-{feature}") || id.starts_with(&format!("local-{feature}-recipe-")))
+}
+
 impl ToolDesk {
-    /// Registers the local model of `feature`, served by the ComfyUI at `endpoint` (a loopback
-    /// address), and binds the tool to it if nothing is chosen yet.
+    /// Registers the first local model of `feature` that can run, served by the ComfyUI at
+    /// `endpoint` (a loopback address), and binds the tool to it if nothing is chosen yet.
     pub fn enable_local(&self, feature: &Feature, endpoint: &str) -> Result<LocalEnabled, AiError> {
-        let recipe = feature.local.as_ref().filter(|r| r.usable).ok_or_else(|| {
+        let recipe = feature.locals.iter().find(|r| r.usable).ok_or_else(|| {
             AiError::unsupported(format!(
                 "{} has no local model that can run yet",
                 feature.title
             ))
         })?;
+        self.enable_recipe(feature, recipe, endpoint)
+    }
+
+    /// Registers one named local model of `feature` (`workflow` is its recipe's workflow id, such
+    /// as `sam3-segment`), served by the ComfyUI at `endpoint`, and binds the tool to it if
+    /// nothing is chosen yet. Refused, with nothing written, when the feature has no recipe of
+    /// that name that can run.
+    pub fn enable_local_recipe(
+        &self,
+        feature: &Feature,
+        workflow: &str,
+        endpoint: &str,
+    ) -> Result<LocalEnabled, AiError> {
+        let recipe = feature
+            .locals
+            .iter()
+            .find(|r| r.workflow == workflow && r.usable)
+            .ok_or_else(|| {
+                AiError::unsupported(format!(
+                    "{} has no local model called {workflow} that can run yet",
+                    feature.title
+                ))
+            })?;
+        self.enable_recipe(feature, recipe, endpoint)
+    }
+
+    /// One recipe becomes one connection offering its model. The first recipe keeps the plain
+    /// `local-<feature>` connection id, so a choice saved by an earlier build still points at it.
+    /// Every other recipe gets `local-<feature>-recipe-<workflow>`: built-in runtimes already use
+    /// `local-<feature>-<provider>`, and a recipe named like one (`candle`) must never replace it.
+    fn enable_recipe(
+        &self,
+        feature: &Feature,
+        recipe: &craft_ai_features::LocalRecipe,
+        endpoint: &str,
+    ) -> Result<LocalEnabled, AiError> {
         let role = feature
             .role()
             .ok_or_else(|| AiError::invalid("the tool id is not valid"))?;
         let address = local_address(endpoint)?;
-        let id = ConnectionId::new(format!("local-{}", feature.id))
-            .map_err(|e| AiError::invalid(e.to_string()))?;
+        let primary = feature
+            .locals
+            .first()
+            .is_some_and(|first| first.workflow == recipe.workflow);
+        let id = if primary {
+            ConnectionId::new(format!("local-{}", feature.id))
+        } else {
+            ConnectionId::new(format!("local-{}-recipe-{}", feature.id, recipe.workflow))
+        }
+        .map_err(|e| AiError::invalid(e.to_string()))?;
         let model_id =
             ModelId::new(&recipe.workflow).map_err(|e| AiError::invalid(e.to_string()))?;
         let model = tool_model(feature, model_id.clone(), &recipe.label);
@@ -63,8 +117,10 @@ impl ToolDesk {
         self.register(connection, role.id, model_id)
     }
 
-    /// Saves `connection` (replacing one with the same id) and binds `role` to it unless a choice
-    /// is already made. A choice already made, even one that no longer works, is never replaced.
+    /// Saves `connection` (replacing one with the same id and the same adapter) and binds `role`
+    /// to it unless a choice is already made. A choice already made, even one that no longer
+    /// works, is never replaced. A connection of another adapter under the same id is refused and
+    /// left untouched, because its binding would then point at a different route.
     fn register(
         &self,
         connection: Connection,
@@ -78,8 +134,14 @@ impl ToolDesk {
             model: model.clone(),
         };
         let mut bound = false;
-        self.shared.update(|store| {
+        let clash = self.shared.update(|store| {
             match store.connections.iter_mut().find(|c| c.id == id) {
+                // The same id with another adapter is another route that happens to share the
+                // name (a custom runtime called `recipe-x` against a recipe called `x`).
+                // Replacing it would swap the route under a binding that still names its model.
+                Some(existing) if existing.provider != connection.provider => {
+                    return Some(existing.provider.clone());
+                }
                 Some(existing) => *existing = connection,
                 None => store.connections.push(connection),
             }
@@ -87,7 +149,13 @@ impl ToolDesk {
                 store.defaults.push(binding);
                 bound = true;
             }
+            None
         })?;
+        if let Some(provider) = clash {
+            return Err(AiError::invalid(format!(
+                "the connection {id} already belongs to a {provider} route and was left as it is"
+            )));
+        }
         Ok(LocalEnabled {
             connection: id,
             model,
@@ -97,16 +165,18 @@ impl ToolDesk {
 }
 
 impl ToolDesk {
-    /// Registers the first built-in runtime of `feature` (its recipe's [`NativeRoute`](craft_ai_features::NativeRoute))
-    /// reading the weights at `weights`, and binds the tool to it if nothing is chosen yet.
+    /// Registers the first built-in runtime ([`NativeRoute`](craft_ai_features::NativeRoute)) of
+    /// `feature`'s first recipe that can run, reading the weights at `weights`, and binds the tool
+    /// to it if nothing is chosen yet.
     pub fn enable_native(
         &self,
         feature: &Feature,
         weights: &Path,
     ) -> Result<LocalEnabled, AiError> {
         let first = feature
-            .local
-            .as_ref()
+            .locals
+            .iter()
+            .find(|r| r.usable)
             .and_then(|r| r.native.first())
             .map(|n| n.provider.clone())
             .ok_or_else(|| {
@@ -115,8 +185,9 @@ impl ToolDesk {
         self.enable_native_with(feature, &first, weights)
     }
 
-    /// Registers the built-in runtime named `provider` (`candle`, `burn`) from the feature's recipe.
-    /// Only a runtime the recipe lists is accepted, matched exactly. Every runtime reads the same
+    /// Registers the built-in runtime named `provider` (`candle`, `burn`) from the feature's first
+    /// recipe that can run, the same recipe [`ToolDesk::enable_local`] and engine advice use. Only
+    /// a runtime that recipe lists is accepted, matched exactly. Every runtime reads the same
     /// weights file and gets its own connection; the tool is bound only if nothing is chosen yet.
     pub fn enable_native_with(
         &self,
@@ -125,9 +196,9 @@ impl ToolDesk {
         weights: &Path,
     ) -> Result<LocalEnabled, AiError> {
         let native = feature
-            .local
-            .as_ref()
-            .filter(|r| r.usable)
+            .locals
+            .iter()
+            .find(|r| r.usable)
             .and_then(|r| r.native.iter().find(|n| n.provider == provider))
             .ok_or_else(|| {
                 AiError::unsupported(format!(

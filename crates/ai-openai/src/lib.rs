@@ -52,6 +52,7 @@ mod images;
 mod jobs;
 mod meta;
 pub mod probe;
+mod stream;
 
 use std::sync::Arc;
 use std::time::Duration;

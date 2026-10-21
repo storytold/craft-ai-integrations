@@ -36,9 +36,10 @@ pub struct Feature {
     #[serde(default)]
     pub inputs: Vec<InputRole>,
     pub uses: Vec<AppUse>,
-    /// Run it on this computer, when a recipe has been worked out and checked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local: Option<LocalRecipe>,
+    /// Run it on this computer, when recipes have been worked out and checked. A tool may offer
+    /// several models; the first is the one a plain `plan` call refers to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locals: Vec<LocalRecipe>,
     /// Hosted routes that have a working adapter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cloud: Vec<CloudOption>,

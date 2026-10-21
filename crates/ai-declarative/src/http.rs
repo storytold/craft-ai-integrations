@@ -31,6 +31,7 @@ impl Http {
     ) -> Self {
         let config = ureq::Agent::config_builder()
             .tls_config(craft_ai_http::tls_config())
+            .proxy(craft_ai_http::proxy_for(&base))
             .http_status_as_error(false)
             .max_redirects(0)
             .max_redirects_will_error(false)

@@ -93,6 +93,7 @@ impl MediaStore {
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
+                .proxy(craft_ai_http::loopback_proxy())
                 .http_status_as_error(false)
                 .max_redirects(0)
                 .max_redirects_will_error(false)
@@ -141,10 +142,20 @@ impl MediaStore {
         let mut hops = 0u8;
         let response = loop {
             url_rules::check_resolved(&url, self.config.allow_loopback)?;
-            let response =
-                self.agent.get(url.as_str()).call().map_err(|_| {
-                    AiError::new(ErrorKind::Network, "could not download the media")
-                })?;
+            // The agent itself carries no proxy, so a loopback link can never leave this
+            // machine; a hosted link may use the environment's proxy, hop by hop.
+            let request = if url_rules::is_loopback(&url) {
+                self.agent.get(url.as_str())
+            } else {
+                self.agent
+                    .get(url.as_str())
+                    .config()
+                    .proxy(craft_ai_http::hosted_proxy())
+                    .build()
+            };
+            let response = request
+                .call()
+                .map_err(|_| AiError::new(ErrorKind::Network, "could not download the media"))?;
             let status = response.status().as_u16();
             if (300..400).contains(&status) {
                 hops += 1;

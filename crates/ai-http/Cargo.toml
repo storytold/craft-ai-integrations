@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-http"
-description = "The one TLS setting every hosted call in Craft AI uses"
+description = "The one TLS setting and proxy policy every call in Craft AI uses"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+craft-ai-core.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [lints]

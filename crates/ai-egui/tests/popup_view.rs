@@ -105,7 +105,7 @@ fn a_provider_to_install_says_how_much_it_downloads_and_can_be_set_up() {
     let mut local = group("SAM 3", GroupState::NotSetUp);
     local.size_bytes = Some(3_449_860_632);
     local.setup = Some(SetupLink::New {
-        option: "local:select-subject".into(),
+        option: "local:select-subject:sam3-segment".into(),
     });
     let mut h = harness(popup(vec![local]));
     h.get_by_label("Download 3.4 GB");
@@ -114,7 +114,7 @@ fn a_provider_to_install_says_how_much_it_downloads_and_can_be_set_up() {
     assert_eq!(
         h.state().last,
         Some(PopupAction::SetUp(SetupLink::New {
-            option: "local:select-subject".into()
+            option: "local:select-subject:sam3-segment".into()
         }))
     );
 }

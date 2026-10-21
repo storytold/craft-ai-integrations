@@ -126,5 +126,7 @@ checkpoint): the tool
 enabled from a weights file, the client planning and starting a job, the output coming back.
 
 For the launcher to offer the model, add a `NativeRoute` (engine name and model id, matching
-`engine()` and `model().id` above) to the tool's recipe in `crates/ai-features/src/catalogue.rs`.
+`engine()` and `model().id` above) to the recipe whose weights it reads, in
+`crates/ai-features/src/catalogue.rs`. A tool can list several recipes; its built-in runtimes are
+taken from the first recipe that can run, the same one `ToolDesk::enable_local` registers.
 Nothing else in any app changes.

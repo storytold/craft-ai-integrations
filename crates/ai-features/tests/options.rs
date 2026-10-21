@@ -6,7 +6,9 @@ fn options_are_derived_from_the_features_not_written_twice() {
     let features = builtin();
     let options = setup_options(&features);
     // One local model (SAM 3), then hosted services.
-    assert!(matches!(&options[0].route, Route::Local { feature } if feature == "select-subject"));
+    assert!(
+        matches!(&options[0].route, Route::Local { feature, recipe } if feature == "select-subject" && recipe == "sam3-segment")
+    );
     assert_eq!(options[0].title, "SAM 3");
     assert_eq!(options[0].unlocks, ["select-subject"]);
     assert!(options[0].usable, "PhotoCraft runs SAM 3 today");
@@ -89,7 +91,7 @@ fn a_local_model_says_how_much_it_downloads_and_a_hosted_service_downloads_nothi
     let options = setup_options(&builtin());
     let sam3 = options
         .iter()
-        .find(|o| o.id == "local:select-subject")
+        .find(|o| o.id == "local:select-subject:sam3-segment")
         .unwrap();
     assert_eq!(sam3.size_bytes, Some(3_449_860_632));
     for service in options

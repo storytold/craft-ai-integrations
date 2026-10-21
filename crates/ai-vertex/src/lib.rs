@@ -76,6 +76,7 @@ impl VertexProvider {
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
+                .proxy(craft_ai_http::proxy_for(base))
                 .http_status_as_error(false)
                 .max_redirects(0)
                 .max_redirects_will_error(false)
@@ -91,6 +92,7 @@ impl VertexProvider {
             sequence: AtomicU64::new(0),
         })
     }
+    /// Guards the job registry, or reports a poisoned lock.
     fn lock(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, HashMap<JobId, Option<JobSnapshot>>>, AiError> {
@@ -98,20 +100,17 @@ impl VertexProvider {
             .lock()
             .map_err(|_| AiError::new(ErrorKind::Internal, "Vertex job registry unavailable"))
     }
+    /// The key is sent only in the `x-goog-api-key` header, never in the URL: request lines are
+    /// what TLS-intercepting proxies and access logs record, and SECURITY.md lists a key
+    /// reaching a log as reportable. Header injection cannot occur because the key was validated
+    /// at construction to contain no control characters or whitespace.
     fn url(&self) -> String {
-        let mut key = String::new();
-        for byte in self.key.expose().bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-                key.push(char::from(byte));
-            } else {
-                key.push_str(&format!("%{byte:02X}"));
-            }
-        }
         format!(
-            "{}/publishers/google/models/{MODEL}:generateContent?key={key}",
+            "{}/publishers/google/models/{MODEL}:generateContent",
             self.base
         )
     }
+    /// Sends one prompt and returns the reply's first inline image, bounded to 48 MiB.
     fn generate(&self, prompt: &str) -> Result<Payload, AiError> {
         let request = json!({"contents":[{"role":"user","parts":[{"text":prompt}]}],
             "generationConfig":{"responseModalities":["TEXT","IMAGE"]}});
@@ -120,6 +119,7 @@ impl VertexProvider {
         let response = self
             .agent
             .post(self.url())
+            .header("x-goog-api-key", self.key.expose())
             .content_type("application/json")
             .send(&body)
             .map_err(|_| AiError::new(ErrorKind::Network, "could not reach Vertex"))?;

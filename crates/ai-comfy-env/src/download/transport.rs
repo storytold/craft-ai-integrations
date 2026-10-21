@@ -2,7 +2,8 @@
 //! small reads built on it (a size probe and a bounded in-memory body).
 //!
 //! Invariants: every hop passes the shared link rules and the allowed-host list; the token goes
-//! only to `auth_host`; redirects are never followed by the HTTP client itself.
+//! only to `auth_host`; redirects are never followed by the HTTP client itself; the agent
+//! carries no proxy and each hop takes the proxy its own address decides (none for loopback).
 
 use craft_ai_core::{AiError, ErrorKind, SecretString};
 use craft_ai_media::links;
@@ -133,7 +134,18 @@ impl Downloader {
                     ));
                 }
             }
-            let mut request = self.agent.get(url.as_str());
+            // The agent itself carries no proxy, so a hop this machine allowed never leaves it;
+            // any other hop may use the environment's proxy. The loopback test is the same rule
+            // that gated the hop above, so the two can never disagree about a host.
+            let mut request = if links::is_loopback(&url) {
+                self.agent.get(url.as_str())
+            } else {
+                self.agent
+                    .get(url.as_str())
+                    .config()
+                    .proxy(craft_ai_http::hosted_proxy())
+                    .build()
+            };
             if let Some(range) = &range {
                 request = request.header("Range", range.as_str());
             }

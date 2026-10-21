@@ -22,7 +22,7 @@ const REQUIRED: &[&str] = &[
     "LoadSAM3Model",
     "SAM3InteractiveCollector",
     "MaskToImage",
-    "SaveImage",
+    "PreviewImage",
 ];
 
 mod prompt;

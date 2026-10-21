@@ -208,7 +208,7 @@ pub fn setup_offer(
     inventory: &Inventory,
     route: SetupRoute,
 ) -> Option<SetupOffer> {
-    let recipe = feature.local.as_ref().filter(|r| r.usable)?;
+    let recipe = feature.locals.first().filter(|r| r.usable)?;
     let mut steps = Vec::new();
     let mut portable = None;
     let mut manual_steps = Vec::new();

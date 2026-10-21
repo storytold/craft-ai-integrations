@@ -6,7 +6,7 @@ source back. A case is CAUGHT only if the mutated code compiled and the test run
 does not compile counts as NOT CAUGHT (a bad mutant), so every survivor is either a test gap or a
 mutant to fix. Cargo runs serially, targeted with -p, with -j 8.
 
-Usage: mutation_check.py u1|u3|u4|p4|p10|v1|v2|v3|sd|lc|lr|nr|ct|u2 [name-substring]
+Usage: mutation_check.py u1|u3|u4|p4|p10|v1|v2|v3|sd|vx|lc|lr|nr|ct|u2|wf [name-substring]
 Saved logs pass through scrub.py so no Windows account name is written. Run it from anywhere;
 logs land in tools/mutation/verification/, which is not committed.
 """
@@ -33,6 +33,9 @@ CATALOG = C + 'ai-openai/src/catalog.rs'
 PROBE_C = C + 'ai-client/src/manage/probe.rs'
 MANAGE = C + 'ai-client/src/manage.rs'
 FACTORY = C + 'ai-client/src/factory.rs'
+CHAT = C + 'ai-openai/src/chat.rs'
+STREAM = C + 'ai-openai/src/stream.rs'
+JOBS = C + 'ai-openai/src/jobs.rs'
 
 PACK = C + 'ai-comfy-env/src/source/pack/mod.rs'
 PACK_RESOLVE = C + 'ai-comfy-env/src/source/pack/resolve.rs'
@@ -42,6 +45,10 @@ HOSTS = C + 'ai-comfy-env/src/source/hosts.rs'
 FORMAT = C + 'ai-comfy-env/src/source/format.rs'
 SPEC = C + 'ai-comfy-env/src/source/spec.rs'
 DOWNLOAD = C + 'ai-comfy-env/src/download.rs'
+SAM21 = C + 'ai-comfyui/src/sam21_session.rs'
+DETECTOR = C + 'ai-comfyui/src/detector.rs'
+CU = 'craft-ai-comfyui'
+SCAN = C + 'ai-comfy-env/src/scan.rs'
 TRANSPORT = C + 'ai-comfy-env/src/download/transport.rs'
 HF = C + 'ai-comfy-env/src/source/resolve/hf.rs'
 GH = C + 'ai-comfy-env/src/source/resolve/github.rs'
@@ -69,7 +76,7 @@ U1 = [
     ('form-header-dropped', DRAFT, 'enabled: self.enabled,\n            key_header,\n        };', 'enabled: self.enabled,\n            key_header: None,\n        };', M, 'custom_connection', 'named_header_is_kept'),
     ('edit-loses-header', DRAFT, 'key_header: c.key_header.clone().unwrap_or_default(),', 'key_header: String::new(),', M, 'custom_connection', 'named_header_is_kept'),
     ('custom-test-wrong-provider', CUSTOM, 'self.provider.trim() == "openai-compatible"', 'self.provider.trim() == "openai"', M, 'custom_connection', 'starts_from_the_other'),
-    ('custom-billing-assumed-free', DRAFT, 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
+    ('custom-billing-assumed-free', C + 'ai-core/src/draft/presets.rs', 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
     ('named-key-sent-as-bearer', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(_) => ("Authorization".to_owned(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('named-key-value-prefixed', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(name) => (name.clone(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('redirects-followed', HTTP, '.max_redirects(0)', '.max_redirects(5)', O, 'custom', 'redirect_never_carries'),
@@ -97,6 +104,15 @@ U1 = [
     ('declared-limit-unchecked', PROBE_C, 'if choices.len() > MAX_DECLARED {', 'if false {', CL, 'custom', 'declared_models_are_checked'),
     ('test-replaces-declared-models', MANAGE, 'if remember && report.probe.is_none() {', 'if remember {', CL, 'custom', 'never_replaces_declared'),
     ('factory-drops-header', FACTORY, 'config.key_header = connection.key_header.clone();', 'config.key_header = None;', CL, 'custom', 'named_header_from_the_saved'),
+    # C5 of the 2026-10-17 audit: a streamed reply is bounded twice - by the bytes it may keep
+    # (stream.rs, the same total as a whole reply) and by the events one job may hold unpollled
+    # (jobs.rs) - and the worker stops reading a stream whose job is dead.
+    ('stream-total-unchecked', STREAM, 'if self.kept() > self.cap {', 'if false {', O, 'lib', 'past_its_total'),
+    ('stream-total-cap-unlimited', STREAM, 'cap: MAX_STREAM_TOTAL,', 'cap: usize::MAX,', O, 'lib', 'past_its_total'),
+    ('event-backlog-unchecked', JOBS, 'if g.events.len() >= MAX_EVENTS {', 'if false {', O, 'lib', 'backlog_past_the_cap'),
+    ('event-backlog-cap-loosened', JOBS, 'const MAX_EVENTS: usize = 65_536;', 'const MAX_EVENTS: usize = 65_537;', O, 'lib', 'backlog_past_the_cap'),
+    ('event-backlog-kept-on-failure', JOBS, 'g.events.clear();\n            return;', 'return;', O, 'lib', 'backlog_past_the_cap'),
+    ('dead-cell-still-read', JOBS, 'if cell.is_terminal() {', 'if false {', O, 'provider', 'unpolled_firehose'),
 ]
 
 E = 'craft-ai-comfy-env'
@@ -123,6 +139,12 @@ U3 = [
     ('download-hosts-unchecked', TRANSPORT, 'if !allowed.iter().any(|pattern| host_matches(pattern, host)) {', 'if false {', E, 'download_sources', 'allowed_hosts'),
     ('size-probe-asks-for-more', TRANSPORT, 'Some("bytes=0-0".to_owned())', 'Some("bytes=0-1".to_owned())', E, 'download_sources', 'one_byte_range'),
     ('size-probe-accepts-zero', TRANSPORT, '.filter(|s| *s > 0)', '.filter(|_| true)', E, 'download_sources', 'one_byte_range'),
+    # The original oversized-part bug recursed until the stack gave out; that shape aborts the
+    # test binary before it can print a summary, so the two halves are pinned separately: the
+    # discarded clear failure (caught by the read-only-folder test on Unix) and the missing
+    # size reset (caught by the throw-away-and-start-again test everywhere).
+    ('download-unclearable-part-discarded', DOWNLOAD, 'std::fs::remove_file(part).map_err(|_| {\n                AiError::new(\n                    ErrorKind::Internal,\n                    "could not clear the oversized unfinished download; delete the .part file manually or check the model folder",\n                )\n            })?;\n            have = 0;', 'let _ = std::fs::remove_file(part);\n            have = 0;', E, 'download', 'read_only_folder'),
+    ('download-part-size-not-reset', DOWNLOAD, '})?;\n            have = 0;\n        }', '})?;\n        }', E, 'download', 'bigger_than_the_model'),
     ('commit-not-required', HF, '.filter(|s| is_hex(s, 40) && s.bytes().all(|b| !b.is_ascii_uppercase()))', '.filter(|_| true)', E, 'source_resolve', 'asked_file_are_refused'),
     ('lfs-size-mismatch-ignored', HF, '.is_some_and(|s| s != size)', '.is_some_and(|s| s == 0)', E, 'source_resolve', 'host_got_wrong'),
     ('lfs-checksum-unchecked', HF, '.filter(|o| is_hex(o, 64))', '.filter(|_| true)', E, 'source_resolve', 'host_got_wrong'),
@@ -165,6 +187,12 @@ U3 = [
     ('folder-unchecked', INSTALL, 'let target_dir = self.comfy.models_dir_for(folder).ok_or(Refusal::Folder)?;', 'let target_dir = self.comfy.base.join("models").join(folder);', E, 'source_install', 'cannot_leave_the_models'),
     ('settings-hosts-not-passed-on', C + 'ai-comfy-env/src/source/settings.rs', 'allowed_hosts: Some(self.download_hosts(kind)),', 'allowed_hosts: None,', E, 'source_install', 'reach_the_downloader'),
     ('registry-overwrites-damage', REGISTRY, 'serde_json::from_str(&text).map_err(|_| unreadable())', 'Ok(serde_json::from_str(&text).unwrap_or_default())', E, 'source_install', 'read_with_care'),
+    ('bundle-path-allows-dot-names', DOWNLOAD, "&& !part.starts_with('.')", '&& true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-depth-unbounded', DOWNLOAD, 'if parts.len() > 3 {', 'if parts.len() > 3000 {', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-allows-empty-parts', DOWNLOAD, '!part.is_empty()', 'true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-parent-link-followed', DOWNLOAD, 'if !actual.starts_with(&root) {', 'if false {', E, 'download', 'links_outside_the_destination'),
+    ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
+    ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {
@@ -235,6 +263,8 @@ P4 = [
     ('output-any-media-accepted', CF_OUT, 'if sniff::media_type(head).map(|(media, _)| media) == Some(expected) {', 'if sniff::media_type(head).is_some() {', CF, 'media_checks', 'an_output_that_is'),
     ('output-on-disk-not-checked', CF_OUT, 'check_bytes(&head, media)?;', 'let _ = (&head, media);', CF, 'media_checks', 'an_output_that_is'),
     ('output-inline-not-checked', CF_OUT, 'check_bytes(&bytes, media)?;', 'let _ = (&bytes, media);', CF, 'media_checks', 'an_output_that_is'),
+    ('output-still-taken-as-video', CF_OUT, 'let animated = node.pointer("/animated/0").and_then(Value::as_bool) == Some(true);', 'let animated = true;', CF, 'media_checks', 'not_taken_as_a_video'),
+    ('output-save-video-missed', CF_OUT, '(true, true) => &["videos", "gifs", "images"],', '(true, true) => &["videos", "gifs"],', CF, 'media_checks', 'from_save_video'),
     ('input-not-checked', CF_IN, 'if sniff::media_type(head).map(|(media, _)| media) != Some(declared) {', 'if false {', CF, 'media_checks', 'never_uploaded'),
     ('input-any-image-accepted', CF_IN, 'if sniff::media_type(head).map(|(media, _)| media) != Some(declared) {', 'if sniff::media_type(head).is_none() {', CF, 'media_checks', 'never_uploaded'),
     ('input-size-unchecked', CF_IN, 'if u64::try_from(data.len()).unwrap_or(u64::MAX) > max {', 'if false {', CF, 'media_checks', 'over_the_limit'),
@@ -358,8 +388,17 @@ SD = [
     ('volcengine-address-accepted', SD_LIB, 'base != "' + BYTEPLUS + '"', 'base != "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
     ('query-string-allowed', SD_LIB, "base.contains(['?', '#'])", 'false', SDC, 'provider', ''),
     ('old-model-served', SD_LIB, 'const MODEL: &str = "dreamina-seedance-2-0-260128";', 'const MODEL: &str = "doubao-seedance-2-0-260128";', SDC, 'provider', ''),
-    ('preset-points-at-volcengine', DRAFT_RS, 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
-    ('preset-named-volcengine', DRAFT_RS, 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
+    ('preset-points-at-volcengine', C + 'ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
+    ('preset-named-volcengine', C + 'ai-core/src/draft/presets.rs', 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
+]
+
+VTX_LIB = C + 'ai-vertex/src/lib.rs'
+VTXC = 'craft-ai-vertex'
+# vx: the Vertex express adapter sends its key in a header, never in the URL (ai-vertex/tests/provider.rs).
+# A request line is what TLS-intercepting proxies and access logs record (C4 of the 2026-10-17 audit).
+VX = [
+    ('vertex-key-back-in-url', VTX_LIB, '"{}/publishers/google/models/{MODEL}:generateContent",\n            self.base', '"{}/publishers/google/models/{MODEL}:generateContent?key={}",\n            self.base,\n            self.key.expose()', VTXC, 'provider', ''),
+    ('vertex-key-header-dropped', VTX_LIB, '.header("x-goog-api-key", self.key.expose())', '', VTXC, 'provider', ''),
 ]
 
 LOCAL_RS = C + 'ai-client/src/local.rs'
@@ -368,7 +407,18 @@ LC = [
     ('non-local-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", "if trimmed.contains(['?', '#']) {", CL, 'local', ''),
     ('query-in-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", 'if !endpoint.is_loopback() {', CL, 'local', ''),
     ('trailing-slash-kept', LOCAL_RS, "input.trim_end_matches('/')", "input.trim_end_matches('~')", CL, 'local', ''),
-    ('unrunnable-recipe-accepted', LOCAL_RS, 'feature.local.as_ref().filter(|r| r.usable)', 'feature.local.as_ref().filter(|_| true)', CL, 'local', ''),
+    ('unrunnable-recipe-accepted', LOCAL_RS, 'feature.locals.iter().find(|r| r.usable)', 'feature.locals.iter().find(|_| true)', CL, 'local', ''),
+    ('unrunnable-named-recipe-accepted', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.workflow == workflow)', CL, 'local_recipes', 'cannot_run_yet'),
+    ('named-recipe-name-ignored', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.usable)', CL, 'local_recipes', ''),
+    ('second-recipe-takes-plain-id', LOCAL_RS, '.is_some_and(|first| first.workflow == recipe.workflow);', '.is_some();', CL, 'local_recipes', 'own_connection'),
+    ('recipe-id-shares-runtime-namespace', LOCAL_RS, 'format!("local-{}-recipe-{}", feature.id, recipe.workflow)', 'format!("local-{}-{}", feature.id, recipe.workflow)', CL, 'local_recipes', 'built_in_runtime_never'),
+    ('picker-ignores-which-recipe-is-installed', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || true)', CL, 'local_recipes', 'keeps_the_setup_link'),
+    ('picker-recipe-connection-never-counts', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || false)', CL, 'local_recipes', 'setup_link'),
+    ('other-adapter-connection-replaced', LOCAL_RS, 'Some(existing) if existing.provider != connection.provider => {', 'Some(existing) if false => {', CL, 'local_recipes', 'never_replaces'),
+    ('advice-from-first-recipe-only', C + 'ai-client/src/engine.rs', 'feature.locals.iter().find(|r| r.usable) else', 'feature.locals.first().filter(|r| r.usable) else', CL, 'local_recipes', 'engine_advice_follows'),
+    ('runtime-from-first-recipe-only', LOCAL_RS, '            .iter()\n            .find(|r| r.usable)\n            .and_then(|r| r.native.first())', '            .first()\n            .and_then(|r| r.native.first())', CL, 'local_recipes', 'built_in_runtime_comes_from'),
+    ('plans-reuse-first-recipe', C + 'ai-features/src/plan.rs', '.map(|recipe| plan_recipe(feature, recipe, inventory))', '.map(|_| plan(feature, inventory))', FE, 'recipes', ''),
+    ('options-share-one-recipe-id', C + 'ai-features/src/options.rs', 'id: format!("local:{}:{}", feature.id, recipe.workflow),', 'id: format!("local:{}", feature.id),', FE, 'recipes', 'own_setup_option'),
     ('replaces-a-choice-made', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if true {', CL, 'local', ''),
     ('never-binds', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if false {', CL, 'local', ''),
     ('moved-address-kept-old', LOCAL_RS, 'Some(existing) => *existing = connection,', 'Some(_) => {}', CL, 'local', ''),
@@ -385,7 +435,7 @@ LR = [
     ('broken-choice-looks-unbound', LOCAL_RS, 'Err(error) => return Err(AiError::unsupported(error.to_string())),', 'Err(_error) => return Ok(None),', CL, 'local_routes', 'a_broken_choice'),
     ('remote-route-leaked', LOCAL_RS, 'if resolved.connection.locality != Locality::Local {', 'if false {', CL, 'local_routes', 'a_remote_choice'),
     ('native-route-treated-as-comfyui', LOCAL_RS, 'if route.provider != "comfyui" {', 'if false {', CL, 'local_routes', 'an_endpoint_cannot'),
-    ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {', 'if false {', CL, 'local_routes', 'a_selected_native'),
+    ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, 'local_routes', 'a_selected_native'),
     ('picker-offers-uninstalled-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', '} else if !client.has_adapter(&connection.provider) {', '} else if false {', CL, 'local_routes', 'a_selected_native'),
     ('picker-false-setup-for-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', 'state != GroupState::Ready && state != GroupState::NeedsAdapter', 'state != GroupState::Ready', CL, 'local_routes', 'a_selected_native'),
 ]
@@ -395,7 +445,7 @@ NR = [
     ('relative-path-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!safetensors || !path.is_file()', CL, 'local_native', 'relative_path'),
     ('any-extension-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!path.is_absolute() || !path.is_file()', CL, 'local_native', 'cannot_be_the_weights'),
     ('missing-file-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!path.is_absolute() || !safetensors', CL, 'local_native', 'cannot_be_the_weights'),
-    ('unusable-recipe-accepted', LOCAL_RS, '.filter(|r| r.usable)\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', '.and_then(|r| r.native.iter().find(|n| n.provider == provider))', CL, 'local_native', 'not_ready_to_use'),
+    ('unusable-recipe-accepted', LOCAL_RS, '.find(|r| r.usable)\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', '.find(|_| true)\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', CL, 'local_recipes', 'built_in_runtime_comes_from'),
     ('file-not-given-to-apps', LOCAL_RS, 'file: resolved.model.local_file.clone(),', 'file: None,', CL, 'local_native', 'registered_bound'),
     ('file-not-stored', LOCAL_RS, 'model.local_file = Some(file);', 'model.local_file = None;', CL, 'local_native', 'registered_bound'),
     ('other-backend-file-served', LOCAL_RS, 'if route.provider != provider {', 'if false {', CL, 'local_native', 'comfyui_route_has_no_file'),
@@ -412,7 +462,7 @@ CT_STORE = C + 'ai-core/src/store.rs'
 T = 'custom_tool_conformance'
 # Declared custom tool, two app clients (tests/custom_tool_conformance.rs).
 CT = [
-    ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {', 'if false {', CL, T, 'without_the_adapter'),
+    ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, T, 'without_the_adapter'),
     ('picker-hides-missing-adapter', CT_PICKER, 'RoleStatus::Unavailable { reason } => Some(reason),', 'RoleStatus::Unavailable { reason } => {\n                    let _ = reason;\n                    None\n                }', CL, T, 'without_the_adapter'),
     ('consent-not-enforced', CT_CLIENT, 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
     ('request-not-forwarded', CT_CLIENT, 'provider.submit(&plan.model, &plan.request) {', 'provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())) {', CL, T, 'two_apps_run'),
@@ -422,6 +472,10 @@ CT = [
 ]
 
 from mutation_u2 import U2, U2_EQUIVALENT  # noqa: E402
+from mutation_contract import CA  # noqa: E402
+from mutation_scratch import SF, SF_EQUIVALENT  # noqa: E402
+from mutation_catalogue import CG  # noqa: E402
+from mutation_consent import CE, CE_EQUIVALENT  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -454,7 +508,36 @@ LG = [
     ('damage-found-only-after-download', LG_IN, 'self.registry.list().map_err(|_| Refusal::Record)?;', '', E, LGT, 'damaged_record'),
     ('install-forgets-the-yes', LG_IN, 'if candidate.licence.accept_required && consents.licence {', 'if false {', E, LGT, 'outlives_the_file'),
 ]
-GROUPS = {'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'lc': LC, 'lr': LR}
+COMFY = 'craft-ai-comfyui'
+WF_LIBRARY = C + 'ai-comfyui/src/library.rs'
+# The workflow library keeps stored file names inside the library directory whatever the id
+# holds (ids are model ids and may contain `/`, `:` and `.`), keeps distinct ids distinct, and
+# saves/removes a workflow by its stored id among the library's json files only.
+WF = [
+    ('library-file-name-not-derived', WF_LIBRARY, 'let path = self.dir.join(file_name(&id)).with_extension(EXTENSION);', 'let path = self.dir.join(&id).with_extension(EXTENSION);', COMFY, 'library', 'escape_the_library'),
+    ('library-id-not-cleaned', WF_LIBRARY, "if c.is_ascii_alphanumeric() || c == '-' {", 'if true {', COMFY, 'library', 'escape_the_library'),
+    ('library-hash-dropped', WF_LIBRARY, 'format!("{clean}-{hash:016x}")', 'format!("{clean}")', COMFY, 'library', 'stay_distinct'),
+    ('library-save-leaves-legacy-file', WF_LIBRARY, 'if stale != path && fs::remove_file(&stale).is_err() {', 'if false && stale != path && fs::remove_file(&stale).is_err() {', COMFY, 'library', 'legacy'),
+    ('library-remove-misses-legacy', WF_LIBRARY, 'let _ = fs::remove_file(&path);', 'let _ = &path;', COMFY, 'library', 'legacy'),
+    ('library-reconciles-non-json', WF_LIBRARY, 'if !is_workflow_file(&path) {', 'if false {', COMFY, 'library', 'non_json'),
+    ('library-save-overwrites-foreign-workflow', WF_LIBRARY, 'if path.exists() && !stale.iter().any(|existing| existing == &path) {', 'if false && path.exists() && !stale.iter().any(|existing| existing == &path) {', COMFY, 'library', 'another_workflow'),
+    ('library-save-ignores-scan-failure', WF_LIBRARY, 'let stale = self.files_storing(&id)?;', 'let stale = self.files_storing(&id).unwrap_or_default();', COMFY, 'library', 'save_refuses_when_the_directory'),
+]
+# s21: SAM 2.1 selects through Florence-2-large; ComfyUI must list that detector before anything is uploaded.
+S21 = [
+    ('detector-check-skipped', SAM21, 'crate::detector::require_detector(&nodes)?;', '', CU, 'sam21_session', ''),
+    ('wrong-detector-asked-for', DETECTOR, 'pub const FLORENCE2_DETECTOR: &str = "Florence-2-large";', 'pub const FLORENCE2_DETECTOR: &str = "Florence-2-base";', CU, 'sam21_session', ''),
+    ('any-listed-detector-accepted', DETECTOR, 'c.as_str() == Some(FLORENCE2_DETECTOR)', 'c.as_str().is_some()', CU, 'sam21_session', ''),
+    ('cpu-run-on-cuda', SAM21, 'Some("cpu") => Ok(("cpu", "fp32")),', 'Some("cpu") => Ok(("cuda", "fp16")),', CU, 'sam21_session', 'uses_the_device'),
+    ('half-precision-off-cuda', SAM21, 'Some("mps") => Ok(("mps", "fp32")),', 'Some("mps") => Ok(("mps", "fp16")),', CU, 'sam21_session', 'uses_the_device'),
+    ('missing-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).or(Some("cuda")) {', CU, 'sam21_session', 'unsupported_device'),
+    ('unknown-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).map(|d| if d == "xpu" { "cuda" } else { d }) {', CU, 'sam21_session', 'unsupported_device'),
+    ('result-errors-name-sam3', SAM21, 'e.message.replace("SAM 3", "SAM 2.1")', 'e.message', CU, 'sam21_session', 'not_sam_3'),
+    ('only-the-last-box-kept', SAM21, '"individual_objects":true', '"individual_objects":false', CU, 'sam21_session', 'every_detected_box'),
+    ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
+]
+
+GROUPS = {'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
@@ -463,9 +546,13 @@ EQUIVALENT = {
     'directory-taken-as-local-file': 'on Windows a directory reports length 0, which the size check also refuses; elsewhere the is_file check is what refuses it',
 }
 EQUIVALENT.update(U2_EQUIVALENT)
+EQUIVALENT.update(SF_EQUIVALENT)
+EQUIVALENT.update(CE_EQUIVALENT)
 # Both reasons above are about Windows; on Linux and macOS they are observed, not assumed.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
 TIMEOUTS = {}
+# Printed by a test that skips itself because the machine cannot do what it needs.
+SKIP_MARK = 'skipped: this machine does not allow directory links'
 
 
 def main():
@@ -495,7 +582,7 @@ def main():
             path.write_bytes(text.replace(old, new).replace('\n', newline).encode('utf-8'))
             # target 'lib' runs the crate's own unit tests instead of an integration test file.
             where = ['--lib'] if target == 'lib' else ['--test', target]
-            command = ['cargo', 'test', '-p', package, *where, test, '-j', '8']
+            command = ['cargo', 'test', '-p', package, *where, test, '-j', '8', '--', '--nocapture']
             proc = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             timed_out = False
             try:
@@ -510,10 +597,13 @@ def main():
                 log += '\nTIMED OUT: the mutated code made the test hang'
             (OUT / ('mutation-' + name + '.txt')).write_text(scrub(log), encoding='utf-8')
             caught = timed_out or (proc.returncode != 0 and 'test result: FAILED' in log)
+            # A test that skips itself (for example, no directory links here) passes whatever the code does,
+            # so a pass that printed the skip proves nothing and is neither caught nor a survivor.
+            skipped = (not caught) and SKIP_MARK in log
             # Equivalent on Windows only: elsewhere the case is expected to be caught, and a miss there is a finding.
-            equivalent = (not caught) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
-            results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'equivalent': EQUIVALENT[name] if equivalent else None})
-            print(name, 'CAUGHT' if caught else ('EQUIVALENT' if equivalent else 'NOT CAUGHT'), flush=True)
+            equivalent = (not caught) and (not skipped) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
+            results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'skipped': skipped, 'equivalent': EQUIVALENT[name] if equivalent else None})
+            print(name, 'CAUGHT' if caught else ('SKIPPED' if skipped else ('EQUIVALENT' if equivalent else 'NOT CAUGHT')), flush=True)
         finally:
             path.write_bytes(original)
             os.utime(path, None)
@@ -527,9 +617,10 @@ def main():
         merged.update({r['mutation']: r for r in results})
         results = list(merged.values())
     saved.write_text(json.dumps(results, indent=2), encoding='utf-8')
-    survivors = [r['mutation'] for r in results if not r['caught_by_runtime_test'] and not r.get('equivalent')]
+    survivors = [r['mutation'] for r in results if not r['caught_by_runtime_test'] and not r.get('equivalent') and not r.get('skipped')]
+    skipped = [r['mutation'] for r in results if r.get('skipped')]
     equivalent = [r['mutation'] for r in results if r.get('equivalent')]
-    print(json.dumps({'mutations': len(results), 'caught': sum(r['caught_by_runtime_test'] for r in results), 'equivalent': equivalent, 'survivors': survivors}))
+    print(json.dumps({'mutations': len(results), 'caught': sum(r['caught_by_runtime_test'] for r in results), 'equivalent': equivalent, 'skipped': skipped, 'survivors': survivors}))
     if survivors:
         raise SystemExit(1)
 

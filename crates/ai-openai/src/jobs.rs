@@ -17,12 +17,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use craft_ai_core::job::{Event, JobSnapshot, JobState};
 use craft_ai_core::{AiError, ErrorKind, JobId, Usage};
 
-use crate::chat::{self, ChatPlan, MAX_SSE_LINE, SseState};
+use crate::chat::{self, ChatPlan};
 use crate::http::Http;
 use crate::images::{self, ImagePlan};
+use crate::stream::{MAX_SSE_LINE, SseState};
 
 /// Finished jobs kept for polling before the oldest are forgotten.
 const KEEP_FINISHED: usize = 64;
+
+/// Most events one job keeps while waiting to be polled. A stream that produces more than
+/// this without a poll fails rather than growing the job's memory without end.
+const MAX_EVENTS: usize = 65_536;
 
 /// A request ready to run.
 pub(crate) enum Plan {
@@ -71,13 +76,29 @@ impl JobCell {
         }
     }
 
+    /// Adds an event for the next poll; a backlog that passes [`MAX_EVENTS`] fails the job
+    /// rather than grows while nobody reads it.
     pub fn push(&self, event: Event) {
         let mut g = self.lock();
-        if !g.state.is_terminal() {
-            g.events.push(event);
+        if g.state.is_terminal() {
+            return;
         }
+        // A backlog no poll ever drains is a hostile stream (or a job nobody reads); refuse
+        // the rest rather than grow it for as long as the request timeout allows.
+        if g.events.len() >= MAX_EVENTS {
+            g.state = JobState::Failed {
+                error: AiError::new(
+                    ErrorKind::Provider,
+                    "too many events are waiting; poll the job while it runs",
+                ),
+            };
+            g.events.clear();
+            return;
+        }
+        g.events.push(event);
     }
 
+    /// Marks the job Succeeded with its usage, unless it already ended.
     fn succeed(&self, usage: Option<Usage>) {
         let mut g = self.lock();
         if !g.state.is_terminal() {
@@ -203,6 +224,7 @@ fn run_image(http: &Http, cell: &JobCell, p: &ImagePlan) -> Result<Option<Usage>
     Ok(usage)
 }
 
+/// Posts one chat request, whole or streamed, and turns the reply into events.
 fn run_chat(http: &Http, cell: &JobCell, p: &ChatPlan) -> Result<Option<Usage>, AiError> {
     let body = serde_json::to_vec(&p.body)
         .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode the request"))?;
@@ -225,7 +247,9 @@ fn run_chat(http: &Http, cell: &JobCell, p: &ChatPlan) -> Result<Option<Usage>, 
         .saturating_add(1);
     loop {
         // Dropping the reader on return closes the connection, which stops the server's work.
-        if cell.is_cancelled() {
+        // Mid-stream a terminal cell means the job was cancelled, or its event backlog grew
+        // past the cap and it failed; either way nothing more will ever be read from it.
+        if cell.is_terminal() {
             return Ok(None);
         }
         line.clear();
@@ -317,6 +341,7 @@ mod tests {
         assert!(matches!(f.snapshot().state, JobState::Failed { .. }));
     }
 
+    /// `start` moves a Queued job to Running once; later starts change nothing.
     #[test]
     fn start_moves_queued_to_running_once() {
         let c = JobCell::new();
@@ -326,5 +351,30 @@ mod tests {
         c.succeed(None);
         c.start();
         assert_eq!(c.snapshot().state, JobState::Succeeded);
+    }
+
+    /// A backlog past the cap fails the job and is dropped; one at the cap survives a poll.
+    #[test]
+    fn an_event_backlog_past_the_cap_fails_the_job() {
+        // 65_536 is MAX_EVENTS, written out so that loosening the cap fails this test.
+        // A snapshot drains the backlog, so the boundary and the refusal use two jobs.
+        let boundary = JobCell::new();
+        boundary.start();
+        for _ in 0..65_536 {
+            boundary.push(text("a"));
+        }
+        let kept = boundary.snapshot();
+        assert_eq!(kept.events.len(), 65_536);
+        assert_eq!(kept.state, JobState::Running { percent: None });
+        let c = JobCell::new();
+        c.start();
+        for _ in 0..65_536 {
+            c.push(text("a"));
+        }
+        // One event more is refused, not grown: the job fails and the backlog is dropped.
+        c.push(text("one too many"));
+        let failed = c.snapshot();
+        assert!(matches!(failed.state, JobState::Failed { .. }));
+        assert!(failed.events.is_empty());
     }
 }

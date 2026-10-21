@@ -16,6 +16,7 @@ use support::{Reply, Server, http_bytes};
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage body";
 const JPEG: &[u8] = b"\xff\xd8\xff\xe0\x00\x10JFIF image body";
 const MP4: &[u8] = b"\0\0\0\x18ftypisom video body";
+const WEBM: &[u8] = b"\x1a\x45\xdf\xa3 video body";
 
 // ---- outputs ----
 
@@ -35,6 +36,11 @@ fn generate_workflow(cap: &str) -> Workflow {
 
 /// A server whose finished job names `filename` and answers `/view` with `body`.
 fn output_server(filename: &'static str, key: &'static str, body: Vec<u8>) -> Server {
+    node_server(json!({key:[{"filename":filename,"type":"output"}]}), body)
+}
+
+/// A server whose finished job reports `node` as the output node's result.
+fn node_server(node: serde_json::Value, body: Vec<u8>) -> Server {
     Server::start(move |r| {
         if r.path == "/object_info" {
             Reply::Json(
@@ -50,9 +56,7 @@ fn output_server(filename: &'static str, key: &'static str, body: Vec<u8>) -> Se
         } else if r.path == "/history/job-1" {
             Reply::Json(
                 200,
-                json!({"job-1":{"status":{"completed":true},"outputs":{"2":{
-                    key:[{"filename":filename,"type":"output"}]}}}})
-                .to_string(),
+                json!({"job-1":{"status":{"completed":true},"outputs":{"2":node}}}).to_string(),
             )
         } else if r.path.starts_with("/view?") {
             http_bytes(200, &[], &body)
@@ -138,6 +142,61 @@ fn real_media_is_accepted_inline_and_on_disk() {
     }
 }
 
+#[test]
+fn a_video_from_save_video_is_fetched_from_its_animated_images_list() {
+    // The shape ComfyUI's SaveVideo and SaveWEBM nodes report.
+    for (name, body, media) in [
+        ("clip.mp4", MP4, "video/mp4"),
+        ("clip.webm", WEBM, "video/webm"),
+    ] {
+        let node = json!({
+            "images":[{"filename":name,"subfolder":"wan","type":"output"}],
+            "animated":[true]
+        });
+        let server = node_server(node.clone(), body.to_vec());
+        let inline = finish(&server, base(&server), "video.generate");
+        assert_eq!(inline.state, JobState::Succeeded, "{name}");
+        assert!(
+            matches!(&inline.outputs().next().unwrap().payload,
+            Payload::Inline { media_type, data } if media_type.as_str() == media && data == body),
+            "{name}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let server = node_server(node, body.to_vec());
+        let saved = finish(
+            &server,
+            base(&server).with_output_dir(dir.path()),
+            "video.generate",
+        );
+        assert_eq!(saved.state, JobState::Succeeded, "{name}");
+        let Payload::Handle(handle) = &saved.outputs().next().unwrap().payload else {
+            panic!("{name}: expected a file handle");
+        };
+        assert_eq!(handle.media_type.as_str(), media);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn an_images_list_without_the_animated_flag_is_not_taken_as_a_video() {
+    for (why, node) in [
+        (
+            "no flag",
+            json!({"images":[{"filename":"a.mp4","type":"output"}]}),
+        ),
+        (
+            "flag false",
+            json!({"images":[{"filename":"a.mp4","type":"output"}],"animated":[false]}),
+        ),
+    ] {
+        let server = node_server(node, MP4.to_vec());
+        let snapshot = finish(&server, base(&server), "video.generate");
+        assert!(matches!(snapshot.state, JobState::Failed { .. }), "{why}");
+        assert_eq!(snapshot.outputs().count(), 0, "{why}");
+    }
+}
+
 // ---- inputs ----
 
 fn inpaint_workflow() -> Workflow {
@@ -158,6 +217,7 @@ fn inpaint_workflow() -> Workflow {
     .unwrap()
 }
 
+/// A scripted ComfyUI with the inpaint nodes installed that accepts uploads to the scratch area.
 fn inpaint_server() -> Server {
     Server::start(|r| {
         match r.path.as_str() {
@@ -180,7 +240,7 @@ fn inpaint_server() -> Server {
             };
             Reply::Json(
                 200,
-                json!({"name":name,"subfolder":"","type":"input"}).to_string(),
+                json!({"name":name,"subfolder":"","type":"temp"}).to_string(),
             )
         }
         "/prompt" => Reply::Json(200, r#"{"prompt_id":"inpaint-job"}"#.into()),
@@ -230,6 +290,7 @@ fn write(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBu
     path
 }
 
+/// A source and mask given as local file handles are read and uploaded exactly like inline bytes.
 #[test]
 fn a_local_file_handle_is_read_and_uploaded_like_inline_bytes() {
     let dir = tempfile::tempdir().unwrap();
@@ -259,8 +320,8 @@ fn a_local_file_handle_is_read_and_uploaded_like_inline_bytes() {
         .find(|r| r.path == "/prompt")
         .unwrap()
         .body_json()["prompt"];
-    assert_eq!(graph["2"]["inputs"]["image"], "returned-source.png");
-    assert_eq!(graph["3"]["inputs"]["image"], "returned-mask.png");
+    assert_eq!(graph["2"]["inputs"]["image"], "returned-source.png [temp]");
+    assert_eq!(graph["3"]["inputs"]["image"], "returned-mask.png [temp]");
 }
 
 #[test]

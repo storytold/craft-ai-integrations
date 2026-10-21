@@ -35,7 +35,10 @@ mod progress;
 mod status;
 pub mod text;
 
-pub use consent::{ALLOW, ConsentChoice, DENY, consent_prompt};
+pub use consent::{
+    ALLOW, ConsentChoice, ConsentPromptState, DENY, TimedConsentChoice, consent_prompt,
+    consent_prompt_with_terms, consent_term_label,
+};
 pub use form::{ConnectionFormState, FormEvent, TestLine, connection_form, words};
 pub use history::{
     CLEAR, CLEAR_NO, CLEAR_YES, EMPTY, EXPORT, HistoryAction, HistoryViewState, NOTHING_MATCHES,

@@ -1,6 +1,6 @@
-//! Chat completions: building the request body and reading the reply, whole or streamed.
-//!
-//! Everything here is pure (no I/O) so it is tested without a server.
+//! Chat completions: building the request body and reading a whole reply. A streamed reply
+//! is accumulated by `stream::SseState` instead. Everything here is pure (no I/O) so it is
+//! tested without a server.
 //!
 //! Inputs map to messages in the order given, except that `system` inputs come first: `system`
 //! becomes a system message, `prompt` and `context` become user messages. Only text inputs are sent; a non-text payload is refused rather
@@ -15,10 +15,8 @@ use craft_ai_core::job::{Event, Output};
 use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request, Usage};
 use serde_json::{Map, Value, json};
 
-/// Largest single SSE line accepted, in bytes.
-pub(crate) const MAX_SSE_LINE: usize = 1024 * 1024;
-/// Most parallel tool calls tracked in one reply.
-const MAX_TOOL_CALLS: usize = 64;
+/// Most parallel tool calls tracked in one reply, whole or streamed.
+pub(crate) const MAX_TOOL_CALLS: usize = 64;
 
 const PASS_THROUGH: &[&str] = &[
     "temperature",
@@ -204,103 +202,6 @@ pub(crate) fn events_for(c: &Completion, structured: bool) -> Result<Vec<Event>,
     Ok(events)
 }
 
-/// Reads a server-sent-events stream one line at a time.
-#[derive(Debug, Default)]
-pub(crate) struct SseState {
-    /// All text so far (needed for the structured check at the end).
-    pub text: String,
-    tools: Vec<(String, String)>,
-    pub usage: Option<Usage>,
-    /// `[DONE]` was seen.
-    pub done: bool,
-    /// A `finish_reason` was seen.
-    pub finished: bool,
-}
-
-impl SseState {
-    /// Feeds one line. Returns the new text, if the line carried any.
-    pub fn line(&mut self, raw: &str) -> Result<Option<String>, AiError> {
-        let line = raw.trim_end_matches(['\r', '\n']);
-        // Blank lines end an event; comments start with a colon; other fields are not used.
-        let Some(data) = line.strip_prefix("data:") else {
-            return Ok(None);
-        };
-        let data = data.trim_start();
-        if data == "[DONE]" {
-            self.done = true;
-            return Ok(None);
-        }
-        let v: Value = serde_json::from_str(data).map_err(|_| {
-            AiError::new(ErrorKind::Provider, "the stream held an unreadable event")
-        })?;
-        if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
-            return Err(AiError::new(ErrorKind::Provider, error_text(e)));
-        }
-        if let Some(u) = usage_from(&v) {
-            self.usage = Some(u);
-        }
-        let Some(choice) = v.pointer("/choices/0") else {
-            return Ok(None);
-        };
-        if choice.get("finish_reason").is_some_and(|f| !f.is_null()) {
-            self.finished = true;
-        }
-        if let Some(calls) = choice
-            .pointer("/delta/tool_calls")
-            .and_then(Value::as_array)
-        {
-            for call in calls {
-                self.tool_delta(call);
-            }
-        }
-        let delta = choice
-            .pointer("/delta/content")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty());
-        Ok(delta.map(|d| {
-            self.text.push_str(d);
-            d.to_owned()
-        }))
-    }
-
-    fn tool_delta(&mut self, call: &Value) {
-        let index = call
-            .get("index")
-            .and_then(Value::as_u64)
-            .and_then(|i| usize::try_from(i).ok())
-            .unwrap_or(0);
-        if index >= MAX_TOOL_CALLS {
-            return;
-        }
-        if self.tools.len() <= index {
-            self.tools.resize(index + 1, (String::new(), String::new()));
-        }
-        if let Some(slot) = self.tools.get_mut(index) {
-            if let Some(n) = call.pointer("/function/name").and_then(Value::as_str) {
-                slot.0.push_str(n);
-            }
-            if let Some(a) = call.pointer("/function/arguments").and_then(Value::as_str) {
-                slot.1.push_str(a);
-            }
-        }
-    }
-
-    /// The finished reply, once the stream has ended.
-    pub fn into_completion(self) -> Completion {
-        let tool_calls = self
-            .tools
-            .into_iter()
-            .filter(|(name, _)| !name.is_empty())
-            .map(|(n, a)| (n, if a.is_empty() { "{}".to_owned() } else { a }))
-            .collect();
-        Completion {
-            text: self.text,
-            tool_calls,
-            usage: self.usage,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,47 +345,5 @@ mod tests {
         );
         let plain = events_for(&bad, false).unwrap();
         assert!(matches!(&plain[0], Event::TextDelta { .. }));
-    }
-
-    #[test]
-    fn sse_accumulates_text_tools_and_usage() {
-        let mut s = SseState::default();
-        let lines = [
-            ": keep-alive",
-            "",
-            "event: message",
-            r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#,
-            r#"data:{"choices":[{"delta":{"content":"lo"}}]}"#,
-            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"f","arguments":"{\"a\""}}]}}]}"#,
-            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":1}"}}]},"finish_reason":"tool_calls"}]}"#,
-            r#"data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":4}}"#,
-            "data: [DONE]",
-        ];
-        let mut deltas = Vec::new();
-        for l in lines {
-            if let Some(d) = s.line(l).unwrap() {
-                deltas.push(d);
-            }
-        }
-        assert_eq!(deltas, ["Hel", "lo"]);
-        assert!(s.done && s.finished);
-        let c = s.into_completion();
-        assert_eq!(c.text, "Hello");
-        assert_eq!(c.tool_calls, [("f".into(), "{\"a\":1}".into())]);
-        assert_eq!(c.usage.unwrap().input_units, Some(2));
-    }
-
-    #[test]
-    fn sse_errors_and_garbage_are_errors_not_panics() {
-        let mut s = SseState::default();
-        assert!(s.line("data: {not json").is_err());
-        assert!(
-            s.line(r#"data: {"error":{"message":"overloaded"}}"#)
-                .is_err()
-        );
-        // Hostile indices are ignored rather than allocated.
-        s.line(r#"data: {"choices":[{"delta":{"tool_calls":[{"index":4000000000,"function":{"name":"x"}}]}}]}"#)
-            .unwrap();
-        assert!(s.into_completion().tool_calls.is_empty());
     }
 }

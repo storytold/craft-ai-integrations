@@ -1,5 +1,7 @@
 //! The listing requests the resolver makes: small JSON replies, no redirects, a token only for the
-//! host its kind names, and every address checked against the kind's hosts first.
+//! host its kind names, and every address checked against the kind's hosts first. The agent
+//! carries no proxy; each request takes the proxy its address decides, so a loopback source
+//! never sends its requests (token included) to a proxy host.
 
 use std::io::Read;
 
@@ -24,6 +26,7 @@ impl<'a> Api<'a> {
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
+                .proxy(craft_ai_http::loopback_proxy())
                 .http_status_as_error(false)
                 .max_redirects(0)
                 .max_redirects_will_error(false)
@@ -42,7 +45,17 @@ impl<'a> Api<'a> {
         token: Option<&SecretString>,
     ) -> Result<Value, AiError> {
         let (url, token) = self.checked(kind, url, token)?;
-        let mut request = self.agent.get(url.as_str());
+        // The agent itself carries no proxy, so a loopback source an app allowed never sends
+        // its requests (token included) to a proxy host; a hosted one may use the environment's.
+        let mut request = if links::is_loopback(&url) {
+            self.agent.get(url.as_str())
+        } else {
+            self.agent
+                .get(url.as_str())
+                .config()
+                .proxy(craft_ai_http::hosted_proxy())
+                .build()
+        };
         if let Some(token) = token {
             request = request.header("Authorization", format!("Bearer {}", token.expose()));
         }
@@ -57,10 +70,17 @@ impl<'a> Api<'a> {
         token: Option<&SecretString>,
     ) -> Result<Value, AiError> {
         let (url, token) = self.checked(kind, url, token)?;
-        let mut request = self
-            .agent
-            .post(url.as_str())
-            .content_type("application/json");
+        // The same proxy split as `get`: no proxy on the agent, loopback requests keep none.
+        let mut request = if links::is_loopback(&url) {
+            self.agent.post(url.as_str())
+        } else {
+            self.agent
+                .post(url.as_str())
+                .config()
+                .proxy(craft_ai_http::hosted_proxy())
+                .build()
+        }
+        .content_type("application/json");
         if let Some(token) = token {
             request = request.header("Authorization", format!("Bearer {}", token.expose()));
         }

@@ -8,10 +8,11 @@ add their own connection, model or tool route and plug it in.
 
 This workspace is the runtime half of the Craft AI layer: provider adapters, secret stores, the app-facing
 client, local runtime setup and reusable egui widgets. The pure contract they all speak
-(`craft-ai-core`: connections, capabilities, requests, jobs, consent, the shared store format) is
-proposed for `storytold/craft-libs` and is **provisional until that review finishes**. Until it merges,
-the same crate lives here under `crates/ai-core`; this workspace will then depend on the merged revision
-instead. Nothing here is a final API.
+(`craft-ai-core`: connections, capabilities, requests, jobs, consent, the shared store format) has
+landed in `storytold/craft-libs`. This workspace still uses a local copy with newer consent-term and
+model-folder additions. It carries the upstream safety fixes, but cannot switch to a pinned upstream
+revision until the required additions are reviewed there. See [docs/CORE-SYNC.md](docs/CORE-SYNC.md)
+for that boundary and the dependency-switch gates. The extension APIs are still evolving.
 
 Layout and rules mirror craft-libs: edition 2024, `MIT OR Apache-2.0`, no `unsafe`, and every
 `lib.rs` denies `unwrap`, `expect` and `panic` in shipped code.

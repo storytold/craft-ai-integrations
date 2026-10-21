@@ -170,7 +170,7 @@ fn a_second_import_with_the_same_id_replaces_the_first() {
 
 #[test]
 fn remove_deletes_the_file_and_only_that_file() {
-    let (lib, dir) = library();
+    let (lib, _dir) = library();
     lib.save(&spec("keep")).unwrap();
     lib.save(&spec("drop")).unwrap();
     lib.remove("keep").unwrap();
@@ -181,7 +181,14 @@ fn remove_deletes_the_file_and_only_that_file() {
         .map(|w| w.id().as_str().to_owned())
         .collect();
     assert_eq!(ids, ["drop"]);
-    assert!(!path_in(&dir, "keep.json").exists());
+    // What remains in the directory is the one file that was kept, under its derived name.
+    let mut remaining: Vec<String> = fs::read_dir(lib.dir())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    remaining.sort();
+    assert_eq!(remaining.len(), 1);
+    assert!(remaining[0].ends_with(".json"));
 }
 
 #[test]
@@ -190,7 +197,14 @@ fn the_library_directory_is_created_on_demand() {
     let target = dir.path().join("nested").join("workflows");
     let lib = WorkflowLibrary::at(&target).unwrap();
     lib.save(&spec("fresh")).unwrap();
-    assert!(target.join("fresh.json").exists());
+    // The file lands under a derived name, so the directory is checked, not one path.
+    let mut names: Vec<String> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 1);
+    assert!(names[0].ends_with(".json"));
     assert_eq!(lib.load().unwrap().len(), 1);
 }
 
@@ -237,6 +251,291 @@ fn workflow_specs_round_trip_through_the_library_file() {
             .unwrap()["1"]["inputs"]["text"],
         "checked"
     );
+}
+
+#[test]
+fn hostile_ids_cannot_escape_the_library_directory() {
+    let (lib, dir) = library();
+    // A file just outside the library directory that a traversal id must not touch.
+    let canary = dir.path().join("connections.json");
+    fs::write(&canary, "keep").unwrap();
+    for id in ["../connections", "C:/evil", "a/b", "."] {
+        lib.save(&spec(id)).unwrap();
+    }
+    assert_eq!(
+        fs::read_to_string(&canary).unwrap(),
+        "keep",
+        "an id escaped the library directory"
+    );
+    // Everything written stays inside the library, under plain file names.
+    for entry in fs::read_dir(lib.dir()).unwrap() {
+        let file_name = entry.unwrap().file_name();
+        let name = file_name.to_string_lossy();
+        assert!(!name.contains('/'), "name escaped into a folder: {name}");
+        assert!(
+            !name.starts_with('.'),
+            "name escaped into a dotfile: {name}"
+        );
+    }
+    // The raw ids survive inside the files: the graph still loads under each of them.
+    let ids: Vec<String> = lib
+        .load()
+        .unwrap()
+        .iter()
+        .map(|w| w.id().as_str().to_owned())
+        .collect();
+    for id in ["../connections", "C:/evil", "a/b", "."] {
+        assert!(ids.contains(&id.to_owned()), "{id} did not survive");
+    }
+}
+
+#[test]
+fn ids_that_clean_alike_stay_distinct() {
+    let (lib, _dir) = library();
+    // `a/b` and `a.b` both clean to `a_b`; the file name must still tell them apart.
+    lib.save(&spec("a/b")).unwrap();
+    lib.save(&spec("a.b")).unwrap();
+    let ids: Vec<String> = lib
+        .load()
+        .unwrap()
+        .iter()
+        .map(|w| w.id().as_str().to_owned())
+        .collect();
+    assert!(ids.contains(&"a/b".to_owned()), "a/b was lost");
+    assert!(ids.contains(&"a.b".to_owned()), "a.b was lost");
+    assert_eq!(ids.len(), 2);
+}
+
+#[test]
+fn remove_only_reaches_files_inside_the_library() {
+    let (lib, dir) = library();
+    // A file just outside the library directory that a traversal id must not delete.
+    let canary = dir.path().join("evil.json");
+    fs::write(&canary, "keep").unwrap();
+    lib.remove("../evil").unwrap();
+    assert_eq!(
+        fs::read_to_string(&canary).unwrap(),
+        "keep",
+        "remove reached outside the library directory"
+    );
+    // A saved workflow really is removed by its raw id.
+    lib.save(&spec("gone")).unwrap();
+    lib.remove("gone").unwrap();
+    assert!(lib.load().unwrap().is_empty());
+}
+
+#[test]
+fn a_legacy_file_named_after_the_id_is_replaced_by_a_save() {
+    let (lib, dir) = library();
+    // A file from before ids stopped being file names: the id inside, the id as the name.
+    let legacy = path_in(&dir, "legacy.json");
+    fs::write(
+        &legacy,
+        json!({
+            "id":"legacy",
+            "capability":"image.generate",
+            "graph":graph("original"),
+            "prompt":{"node":"1","class_type":"CLIPTextEncode","input":"text"},
+            "output_node":"2"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    lib.save(&spec("legacy")).unwrap();
+    // One workflow per id: the legacy file must not survive as a second copy.
+    let stored: Vec<String> = fs::read_dir(dir.path().join("workflows"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(stored.len(), 1, "save left more than one file: {stored:?}");
+    assert!(!legacy.exists(), "the legacy file survived the save");
+    assert_eq!(lib.load().unwrap().len(), 1);
+}
+
+#[test]
+fn remove_reaches_a_legacy_file_named_after_the_id() {
+    let (lib, dir) = library();
+    let legacy = path_in(&dir, "legacy.json");
+    fs::write(
+        &legacy,
+        json!({
+            "id":"legacy",
+            "capability":"image.generate",
+            "graph":graph("original"),
+            "prompt":{"node":"1","class_type":"CLIPTextEncode","input":"text"},
+            "output_node":"2"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        lib.load().unwrap().len(),
+        1,
+        "the legacy file does not load"
+    );
+    lib.remove("legacy").unwrap();
+    assert!(!legacy.exists(), "remove missed the legacy file");
+    assert!(lib.load().unwrap().is_empty());
+}
+
+#[test]
+fn ids_that_share_a_cleaned_prefix_stay_distinct() {
+    let (lib, _dir) = library();
+    // Both ids clean to the same 40 characters; only the hash tells the files apart.
+    let long = "x".repeat(45);
+    let other = format!("{}y", "x".repeat(44));
+    lib.save(&spec(&long)).unwrap();
+    lib.save(&spec(&other)).unwrap();
+    let ids: Vec<String> = lib
+        .load()
+        .unwrap()
+        .iter()
+        .map(|w| w.id().as_str().to_owned())
+        .collect();
+    assert!(ids.contains(&long), "the first long id was lost");
+    assert!(ids.contains(&other), "the second long id was lost");
+    assert_eq!(ids.len(), 2);
+}
+
+#[test]
+fn non_json_files_are_not_workflows_even_when_they_hold_one() {
+    let (lib, dir) = library();
+    // A file the library never shows — load_specs only reads `json` files — but that
+    // happens to contain a valid workflow, stored under the id reconcile would look for.
+    let notes = path_in(&dir, "notes.txt");
+    fs::write(
+        &notes,
+        json!({
+            "id":"legacy",
+            "capability":"image.generate",
+            "graph":graph("original"),
+            "prompt":{"node":"1","class_type":"CLIPTextEncode","input":"text"},
+            "output_node":"2"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        lib.load().unwrap().is_empty(),
+        "a non-json file must not load as a workflow"
+    );
+    lib.remove("legacy").unwrap();
+    assert!(notes.exists(), "remove deleted a file it never showed");
+    lib.save(&spec("legacy")).unwrap();
+    assert!(notes.exists(), "save tidied away a file it never showed");
+}
+
+#[test]
+fn save_refuses_when_the_directory_cannot_be_read() {
+    let (lib, dir) = library();
+    lib.save(&spec("early")).unwrap();
+    fs::remove_dir_all(dir.path().join("workflows")).unwrap();
+    // The scan fails before anything is written: the error names the scan, not the write,
+    // and nothing recreates the directory — `at` created it, not `save`.
+    let err = lib.save(&spec("later")).unwrap_err();
+    assert!(
+        err.message
+            .contains("could not read the workflow directory"),
+        "{err}"
+    );
+    assert!(
+        !dir.path().join("workflows").exists(),
+        "save recreated the directory it refused to scan"
+    );
+}
+
+#[test]
+fn remove_stays_quiet_when_the_directory_cannot_be_read() {
+    let (lib, dir) = library();
+    fs::remove_dir_all(dir.path().join("workflows")).unwrap();
+    // Missing is fine: an unreadable directory is not an error, nothing is deleted
+    // and remove keeps its best-effort contract.
+    lib.remove("anything").unwrap();
+}
+
+// Linux only: the premise is a name the filesystem accepts but `to_str` refuses, and ext4 is
+// byte-transparent while macOS (APFS) refuses to create a non-UTF-8 name at all (EILSEQ), so
+// the scenario cannot be set up there. Windows is excluded by the byte-level OsString import.
+#[cfg(target_os = "linux")]
+#[test]
+fn remove_reaches_a_file_whose_name_is_not_utf8() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let (lib, dir) = library();
+    // A name a unix filesystem accepts but `to_str` refuses; the id inside decides what it is.
+    let file = dir
+        .path()
+        .join("workflows")
+        .join(OsString::from_vec(b"bad\xff.json".to_vec()));
+    fs::write(
+        &file,
+        json!({
+            "id":"legacy",
+            "capability":"image.generate",
+            "graph":graph("original"),
+            "prompt":{"node":"1","class_type":"CLIPTextEncode","input":"text"},
+            "output_node":"2"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        lib.load().unwrap().len(),
+        1,
+        "the non-utf8-named file does not load"
+    );
+    lib.remove("legacy").unwrap();
+    assert!(!file.exists(), "remove missed the non-utf8-named file");
+}
+
+#[test]
+fn save_refuses_a_destination_storing_another_workflow() {
+    let (lib, dir) = library();
+    lib.save(&spec("a")).unwrap();
+    // The id inside the destination file is hand-edited to another workflow's; the file name
+    // stays derived from `a`, so writing to it would overwrite the other workflow.
+    let stored: Vec<PathBuf> = fs::read_dir(dir.path().join("workflows"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(stored.len(), 1);
+    fs::write(
+        &stored[0],
+        json!({
+            "id":"b",
+            "capability":"image.generate",
+            "graph":graph("other"),
+            "prompt":{"node":"1","class_type":"CLIPTextEncode","input":"text"},
+            "output_node":"2"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        lib.load().unwrap().len(),
+        1,
+        "the hand-edited workflow does not load"
+    );
+    let err = lib.save(&spec("a")).unwrap_err();
+    assert!(err.message.contains("another workflow"), "{}", err.message);
+    // The refusal path writes nothing at all: no temporary file is left behind either.
+    let entries = fs::read_dir(dir.path().join("workflows"))
+        .unwrap()
+        .flatten()
+        .count();
+    assert_eq!(entries, 1, "the refusal left {entries} entries behind");
+    // The hand-edited workflow survives, and remove("a") does not reach it either.
+    let ids: Vec<String> = lib
+        .load()
+        .unwrap()
+        .iter()
+        .map(|w| w.id().as_str().to_owned())
+        .collect();
+    assert_eq!(ids, ["b".to_owned()]);
+    lib.remove("a").unwrap();
+    assert_eq!(lib.load().unwrap().len(), 1);
 }
 
 #[test]

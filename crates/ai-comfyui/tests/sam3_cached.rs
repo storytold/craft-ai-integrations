@@ -7,6 +7,8 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+/// Asking for the same grounding twice gives the sink a new cache key each time while the
+/// source, model and inference nodes keep theirs, so the repeat still returns a mask.
 #[test]
 fn repeated_grounding_has_a_fresh_sink_without_invalidating_inference_nodes() {
     let seen = Arc::new(Mutex::new(HashSet::<String>::new()));
@@ -17,13 +19,13 @@ fn repeated_grounding_has_a_fresh_sink_without_invalidating_inference_nodes() {
             200,
             json!({
                 "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-                "SAM3Grounding":{},"MaskToImage":{},"SaveImage":{}
+                "SAM3Grounding":{},"MaskToImage":{},"PreviewImage":{}
             })
             .to_string(),
         ),
         "/upload/image" => Reply::Json(
             200,
-            json!({"name":"source.png","type":"input","subfolder":""}).to_string(),
+            json!({"name":"source.png","type":"temp","subfolder":""}).to_string(),
         ),
         "/prompt" => {
             let graph = r.body_json()["prompt"].clone();

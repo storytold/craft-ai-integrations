@@ -10,6 +10,7 @@ use craft_ai_features::{Route, SetupOption};
 use craft_ai_native::secrets::secret_for;
 
 use crate::client::AiClient;
+use crate::local::is_recipe_connection;
 use crate::picker::{GroupState, PickerGroup, PickerModel, SetupLink};
 
 /// The binding the app would use: its own choice first, then the launcher default.
@@ -120,10 +121,15 @@ pub(crate) fn unset_groups(
                 }
                 (None, format!("Not connected. {}", option.note))
             }
-            Route::Local { .. } => {
+            Route::Local { feature, recipe } => {
+                // A connection a recipe registered stands for that recipe only; any other local
+                // connection still counts for every model, as before.
                 let have_local = store.connections.iter().any(|c| {
                     c.locality == Locality::Local
-                        && c.models.iter().any(|m| fits(role, m).is_some())
+                        && c.models.iter().any(|m| {
+                            fits(role, m).is_some()
+                                && (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)
+                        })
                 });
                 if have_local {
                     continue;

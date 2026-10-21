@@ -7,8 +7,11 @@ bad mutant (fix the mutant). Cargo runs serially, targeted with `-p`, with `-j 8
 
 | Script | Groups |
 |---|---|
-| `mutation_check.py` | `u1 u3 u4 p4 p10 v1 v2 v3 sd lc lr nr ct u2` (connections, model sources, node packs, media, client flows, declarative adapter). Cases for `u2` are in `mutation_u2.py`. |
+| `mutation_check.py` | `u1 u3 u4 p4 p10 v1 v2 v3 sd vx lc lr nr ct u2 wf` (connections, model sources, node packs, media, client flows, declarative adapter, workflow library). Cases for `u2` are in `mutation_u2.py`. |
+| `mutation_check.py s21` | SAM 2.1 selection (`sam21_session.rs`, `detector.rs`): the Florence-2-large preflight, the detector name and the choice check. |
+| `mutation_check.py ca` | Upstream contract alignment: model-test address provenance, required inputs, and app-facing refusal before key access. Cases in `mutation_contract.py`. |
 | `mutation_check.py ps` | Node pack status report (`pack/status.rs`): links, hidden folders, names, the install record. |
+| `mutation_check.py vx` | Vertex express adapter (`ai-vertex/src/lib.rs`): the API key travels in the `x-goog-api-key` header, never in the request URL. |
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 

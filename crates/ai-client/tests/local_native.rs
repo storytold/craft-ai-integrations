@@ -215,14 +215,14 @@ fn a_relative_path_is_refused_even_when_it_points_at_a_real_file() {
 fn a_runtime_that_is_not_ready_to_use_is_refused() {
     let w = World::new();
     let mut f = feature("select-subject");
-    f.local.as_mut().unwrap().usable = false;
+    f.locals[0].usable = false;
     assert!(
         w.desk("launcher")
             .enable_native(&f, &w.weights("sam3.safetensors"))
             .is_err()
     );
     let mut f = feature("select-subject");
-    f.local.as_mut().unwrap().native.clear();
+    f.locals[0].native.clear();
     assert!(
         w.desk("launcher")
             .enable_native(&f, &w.weights("sam3.safetensors"))

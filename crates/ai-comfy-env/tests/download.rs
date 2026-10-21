@@ -398,19 +398,28 @@ fn internal_and_plain_http_sources_are_refused_by_default() {
     assert_eq!(server.count(), 0);
 }
 
+/// File names that could escape the destination folder are refused.
 #[test]
 fn file_names_that_could_escape_the_folder_are_refused() {
     let data = body();
+    // A scripted local server, so a validator that is broken still cannot reach the internet.
+    let server = range_server(data.clone(), true);
     let dir = tempfile::tempdir().unwrap();
     for name in [
         "../evil.safetensors",
-        "a/b.safetensors",
         "a\\b.safetensors",
+        "a/../b.safetensors",
+        "a//b.safetensors",
+        "/abs.safetensors",
+        "a/b/c/d.safetensors",
+        "a/.hidden",
+        "a/b.",
+        "a/b:c",
         ".hidden",
         "",
         "C:x",
     ] {
-        let mut file = model(&data, "https://example.com/m");
+        let mut file = model(&data, &format!("{}/m", origin(&server)));
         file.filename = name.into();
         let err = run(
             &downloader(),
@@ -424,6 +433,60 @@ fn file_names_that_could_escape_the_folder_are_refused() {
         assert_eq!(err.kind, ErrorKind::InvalidRequest, "{name}");
     }
     assert!(names(dir.path()).is_empty());
+    assert_eq!(server.count(), 0, "a refused name must never be fetched");
+}
+
+#[test]
+/// A bundle file lands in its own sub folder with no stray part file.
+fn a_bundle_file_lands_in_its_own_sub_folder_with_no_stray_part_file() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let mut file = model(&data, &format!("{}/m", origin(&server)));
+    file.filename = "Bundle/m.safetensors".into();
+    let path = run(
+        &downloader(),
+        &file,
+        dir.path(),
+        None,
+        &AtomicBool::new(false),
+    )
+    .0
+    .unwrap();
+    assert_eq!(path, dir.path().join("Bundle").join("m.safetensors"));
+    assert_eq!(std::fs::read(&path).unwrap(), data);
+    assert_eq!(names(dir.path()), ["Bundle"]);
+    assert_eq!(names(&dir.path().join("Bundle")), ["m.safetensors"]);
+}
+
+/// Makes `link` a directory link to `target`. Fails where the machine does not allow links.
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return std::os::windows::fs::symlink_dir(target, link);
+}
+
+/// A bundle sub-folder that links outside the destination takes no download, no part file and no new folder.
+#[test]
+fn a_bundle_folder_that_links_outside_the_destination_is_refused() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    if link_dir(outside.path(), &dir.path().join("Bundle")).is_err() {
+        eprintln!("skipped: this machine does not allow directory links");
+        return;
+    }
+    let mut file = model(&data, &format!("{}/m", origin(&server)));
+    file.filename = "Bundle/Deeper/m.safetensors".into();
+    let cancel = AtomicBool::new(false);
+    let err = downloader()
+        .fetch(&file, dir.path(), None, &cancel, &mut |_| {})
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+    assert!(names(outside.path()).is_empty(), "wrote through the link");
+    assert_eq!(server.count(), 0, "nothing may be fetched for it");
 }
 
 #[test]
@@ -498,6 +561,52 @@ fn a_part_file_bigger_than_the_model_is_thrown_away_and_the_download_starts_agai
         server.recorded()[0].header("range").is_none(),
         "no range from a part file that cannot be right"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_part_file_in_a_read_only_folder_is_named_and_left_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.safetensors.part"),
+        vec![9u8; data.len() + 10],
+    )
+    .unwrap();
+    // A folder without write permission refuses deletion on Unix - except for a root
+    // process, which bypasses permission bits. Probe with a separate folder and skip
+    // where the premise does not hold, rather than fail there. The folder is restored
+    // afterwards so the temporary folder cleans up.
+    let probe_dir = tempfile::tempdir().unwrap();
+    std::fs::write(probe_dir.path().join("probe"), b"x").unwrap();
+    std::fs::set_permissions(probe_dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let read_only_refuses_deletion = std::fs::remove_file(probe_dir.path().join("probe")).is_err();
+    std::fs::set_permissions(probe_dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !read_only_refuses_deletion {
+        eprintln!("skipped: this process deletes from a read-only folder");
+        return;
+    }
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    unclearable_part_check(&data, dir.path(), &server);
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// A stale part bigger than the recipe that cannot be deleted either must be reported
+/// by name: the alternative is another attempt on unchanged state, which recursed
+/// until the stack gave out and took the whole process down with it.
+///
+/// The removal failure is injected with a read-only folder, so this runs on Unix
+/// only; nothing in std makes remove_file fail on Windows any more (a read-only
+/// attribute, an open handle and a range lock are all bypassed by its POSIX-semantics
+/// delete), so the rule is pinned there by the mutation case instead.
+fn unclearable_part_check(data: &[u8], dir: &Path, server: &Server) {
+    let file = model(data, &format!("{}/m", origin(server)));
+    let (result, _) = run(&downloader(), &file, dir, None, &AtomicBool::new(false));
+    let err = result.unwrap_err();
+    assert!(err.message.contains("could not clear"), "{}", err.message);
+    assert_eq!(names(dir), ["m.safetensors.part"]);
 }
 
 #[test]

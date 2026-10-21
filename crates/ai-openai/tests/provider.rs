@@ -401,6 +401,7 @@ fn cancel_passes_the_conformance_check_on_a_slow_stream() {
     .unwrap();
 }
 
+/// Cancelling mid-stream stops the worker at its next line and drops the connection.
 #[test]
 fn cancelling_mid_stream_closes_the_connection() {
     let server = slow_stream_server();
@@ -433,6 +434,45 @@ fn cancelling_mid_stream_closes_the_connection() {
     }
 }
 
+/// An unpollled flood fails the job at the event cap, and the worker drops the connection.
+#[test]
+fn an_unpolled_firehose_fails_the_job_and_closes_the_stream() {
+    // A hostile server streams at full speed for as long as the request timeout allows, and
+    // nobody polls. The job must fail once its backlog passes the cap (65_536, MAX_EVENTS in
+    // jobs.rs) and the worker must stop reading and drop the connection, not keep the stream
+    // open and the thread busy until the timeout.
+    // The flood must leave far more unread than kernel socket buffers can swallow when the
+    // worker stops: the server only reports the drop when a write fails, so if everything it
+    // still holds (a million minus the 65_537 lines read, about 44 MB) could drain into the
+    // kernel, the server would finish writing and never notice. 70_000 events left about
+    // 210 KB and lost that race on CI (Linux autotunes its buffers into the megabytes). The
+    // byte total kept stays far under the stream cap: each line holds one byte of text, and
+    // only 65_537 lines are ever read.
+    let flood: Vec<Step> = (0..1_000_000)
+        .map(|_| chunk(json!({"content": "x"})))
+        .collect();
+    let flood = std::sync::Mutex::new(Some(flood));
+    let server =
+        Server::start(move |_| Reply::Sse(flood.lock().unwrap().take().unwrap_or_default()));
+    let p = provider(&server.url);
+    let job = p.submit(&model("gpt-4o"), &text_req().streaming()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !server
+        .client_dropped
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker never dropped the firehose"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let snap = p.poll(&job).unwrap();
+    assert_eq!(failed(&snap.state).kind, ErrorKind::Provider);
+    assert!(snap.events.is_empty());
+}
+
+/// A redirect is never followed, so the key cannot be forwarded to another host.
 #[test]
 fn redirects_are_not_followed_so_the_key_cannot_be_forwarded() {
     let elsewhere = Server::start(|_| Reply::Json(200, completion("stolen")));

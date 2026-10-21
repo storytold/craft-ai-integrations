@@ -9,7 +9,7 @@ No real hosted service, download host or repository was contacted by these tests
 
 | Area | Crate | Notes |
 |---|---|---|
-| OpenAI-compatible text and images | `craft-ai-openai` | Streaming, tools, structured output; image generate, edit and inpaint. |
+| OpenAI-compatible text and images | `craft-ai-openai` | Streaming, tools, structured output; image generate, edit and inpaint. A streamed reply is bounded three ways: per line (1 MiB), total bytes kept (the same as a whole reply, 128 MiB), and events held for one poll (65,536; a stream that passes it without a poll fails the job and the connection is dropped). |
 | FLUX image and video | `craft-ai-bfl` | |
 | Seedance video through BytePlus ModelArk | `craft-ai-seedance` | The Volcengine China address is refused. |
 | Gemini images on Vertex express mode | `craft-ai-vertex` | An express-mode key is not a full-project Vertex credential and has no free key probe. |

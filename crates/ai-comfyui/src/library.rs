@@ -3,7 +3,9 @@
 //! The launcher (or an app's Preferences) copies or writes a workflow file into the library
 //! directory; every ComfyUI connection built from the same directory sees the same workflows.
 //! Nothing is inferred from a file name beyond a derived id; the graph, the prompt binding and
-//! the output node are stored inside each file and re-validated on every load.
+//! the output node are stored inside each file and re-validated on every load. Stored file
+//! names are derived safely ([`file_name`]): an id may contain `/`, `:` and `.` (it is a model
+//! id, not a file name), and still cannot name a file outside the library directory.
 //!
 //! File shape (all fields except `graph` optional; see [`WorkflowSpec::import`]):
 //!
@@ -34,7 +36,7 @@ use craft_ai_core::{AiError, ErrorKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Largest workflow file accepted, in bytes. A graph is JSON text; a few MiB is generous.
@@ -319,14 +321,11 @@ impl WorkflowLibrary {
         let mut paths: Vec<PathBuf> = entries
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == EXTENSION))
+            .filter(|p| is_workflow_file(p))
             .collect();
         paths.sort();
         for path in paths {
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("workflow");
+            let stem = workflow_stem(&path);
             if let Ok(bytes) = read_bounded(&path)
                 && let Ok(spec) = WorkflowSpec::parse(&bytes, Some(stem))
             {
@@ -355,7 +354,8 @@ impl WorkflowLibrary {
         Ok(id)
     }
 
-    /// Writes one workflow file. The id becomes the file name.
+    /// Writes one workflow file. The id becomes the file name. A file from before ids stopped
+    /// being file names is replaced, not left as a second copy of the same workflow.
     pub fn save(&self, spec: &WorkflowSpec) -> Result<(), AiError> {
         let id = craft_ai_core::ModelId::new(spec.id.trim())
             .map_err(|_| AiError::new(ErrorKind::InvalidRequest, "workflow id is not usable"))?
@@ -363,20 +363,135 @@ impl WorkflowLibrary {
             .to_owned();
         let json = serde_json::to_vec(spec)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode the workflow"))?;
-        let path = self.dir.join(format!("{id}.{EXTENSION}"));
-        fs::write(&path, &json)
-            .map_err(|_| AiError::new(ErrorKind::Internal, "could not write the workflow file"))
+        let path = self.dir.join(file_name(&id)).with_extension(EXTENSION);
+        // Scan before writing: a library that cannot be scanned is not one to change, and the
+        // scan's failure must not hide that the previous file was never replaced.
+        let stale = self.files_storing(&id)?;
+        // The destination's name is derived from `id`, but names do not confer ownership — a
+        // hand-edited or launcher-written file may store a different workflow under that name.
+        // Refuse rather than overwrite it; a destination the scan does identify is replaced.
+        if path.exists() && !stale.iter().any(|existing| existing == &path) {
+            return Err(AiError::new(
+                ErrorKind::Internal,
+                "the destination file stores another workflow or cannot be read",
+            ));
+        }
+        // Write the whole file before it becomes the workflow: a torn write to the destination
+        // would leave JSON no scan can identify, wedging that id until the file is deleted by
+        // hand. The temp file has no `json` extension, so no scan ever sees it. Same shape as
+        // `ai-native`'s atomic store writes, flushed before the rename.
+        let write_err = || AiError::new(ErrorKind::Internal, "could not write the workflow file");
+        let mut tmp = tempfile::NamedTempFile::new_in(&self.dir).map_err(|_| write_err())?;
+        tmp.write_all(&json)
+            .and_then(|()| tmp.as_file().sync_all())
+            .map_err(|_| write_err())?;
+        tmp.persist(&path).map_err(|_| write_err())?;
+        // One workflow per id, whatever file it arrived in. Damaged and foreign files that
+        // cannot be parsed are left alone.
+        for stale in stale {
+            if stale != path && fs::remove_file(&stale).is_err() {
+                return Err(AiError::new(
+                    ErrorKind::Internal,
+                    "could not remove the workflow's previous file",
+                ));
+            }
+        }
+        Ok(())
     }
 
-    /// Deletes one workflow file. Missing is fine.
+    /// Deletes one workflow file, whatever name it was stored under. Missing is fine — an
+    /// unreadable library is left untouched, not reported, like a missing file.
     pub fn remove(&self, id: &str) -> Result<(), AiError> {
         let id = craft_ai_core::ModelId::new(id)
             .map_err(|_| AiError::new(ErrorKind::InvalidRequest, "workflow id is not usable"))?
             .as_str()
             .to_owned();
-        let _ = fs::remove_file(self.dir.join(format!("{id}.{EXTENSION}")));
+        let Ok(paths) = self.files_storing(&id) else {
+            return Ok(());
+        };
+        for path in paths {
+            let _ = fs::remove_file(&path);
+        }
         Ok(())
     }
+
+    /// Every `json` file in the library that stores the workflow `id`, whatever its file name —
+    /// including files named `{id}.json` before ids stopped being file names. Paths are only
+    /// ever taken from the directory listing, never built from the id. What counts as a stored
+    /// file is decided by the same helpers `load_specs` uses, so a workflow the person can see
+    /// is one save and remove can always reach.
+    fn files_storing(&self, id: &str) -> Result<Vec<PathBuf>, AiError> {
+        let mut paths = Vec::new();
+        let entries = fs::read_dir(&self.dir).map_err(|_| {
+            AiError::new(ErrorKind::Internal, "could not read the workflow directory")
+        })?;
+        for entry in entries {
+            // An entry that cannot be produced is the listing failing partway. A partial
+            // scan must never drive a mutation — save would leave the missed copies behind
+            // and remove would report success while skipping them — so it is the same
+            // failure as the directory not being readable at all. Unreadable or damaged
+            // files stay skippable: one bad file is not a broken listing.
+            let path = entry
+                .map_err(|_| {
+                    AiError::new(ErrorKind::Internal, "could not read the workflow directory")
+                })?
+                .path();
+            if !is_workflow_file(&path) {
+                continue;
+            }
+            let stem = workflow_stem(&path);
+            let Ok(bytes) = read_bounded(&path) else {
+                continue;
+            };
+            if let Ok(spec) = WorkflowSpec::parse(&bytes, Some(stem))
+                && spec.id.trim() == id
+            {
+                paths.push(path);
+            }
+        }
+        Ok(paths)
+    }
+}
+
+/// Whether a directory entry is a stored workflow: only `json` files are, everywhere the
+/// library looks. Loading, saving and removing must all agree on what the library contains —
+/// a file this rejects is never shown, so it must never be reconciled away either.
+fn is_workflow_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == EXTENSION)
+}
+
+/// The stem a stored file is parsed under. A name that is not UTF-8 — possible on unix
+/// filesystems — falls back to `workflow`, so a file with an explicit id inside still loads,
+/// and still counts as the workflow it names for save and remove.
+fn workflow_stem(path: &Path) -> &str {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("workflow")
+}
+
+/// The file name a workflow id is stored under. A model id may contain `/`, `:` and `.` and is
+/// not a file name; the readable part is cleaned to characters that cannot escape the library
+/// directory, and a 64-bit hash of the exact id is appended so ids that clean alike (such as
+/// `a/b` and `a.b`, or two long ids sharing the first 40 cleaned characters) stay distinct —
+/// and cannot be collided on purpose by whoever picks a shared workflow's id. The id itself
+/// travels inside the file. Same shape as `ai-native`'s consent `file_name`.
+fn file_name(id: &str) -> String {
+    let clean: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(40)
+        .collect();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.bytes() {
+        hash = (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{clean}-{hash:016x}")
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, AiError> {

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use craft_ai_client::{AiClient, GroupState, RoleStatus, ToolDesk};
+use craft_ai_client::{AiClient, GroupState, RoleStatus, SetupLink, ToolDesk};
 use craft_ai_core::{
     AppId, Binding, CapabilityId, CapabilitySpec, Connection, ConnectionId, InputRole, Locality,
     ModelId, ModelInfo, Role, StoreFile,
@@ -143,6 +143,8 @@ fn a_choice_a_person_already_made_is_left_alone() {
     );
 }
 
+/// Enabling the same local tool twice leaves one connection and one default; enabling it at a
+/// new address moves the app's endpoint to that address.
 #[test]
 fn enabling_twice_changes_nothing_and_a_moved_address_is_updated() {
     let w = World::new();
@@ -167,6 +169,8 @@ fn enabling_twice_changes_nothing_and_a_moved_address_is_updated() {
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
+/// `enable_local` refuses a non-local address, a tool with no local recipe and a tool whose
+/// recipes cannot run yet, and a refusal writes nothing to the shared store.
 #[test]
 fn only_a_local_address_and_only_a_runnable_local_recipe_are_accepted() {
     let w = World::new();
@@ -188,9 +192,9 @@ fn only_a_local_address_and_only_a_runnable_local_recipe_are_accepted() {
         desk.enable_local(&feature("generative-fill"), SAM3_URL)
             .is_err()
     );
-    // A recipe that cannot run yet is not offered as ready.
+    // A tool none of whose recipes can run yet is not offered as ready.
     let mut later = feature("select-subject");
-    if let Some(local) = later.local.as_mut() {
+    for local in &mut later.locals {
         local.usable = false;
     }
     assert!(desk.enable_local(&later, SAM3_URL).is_err());
@@ -201,6 +205,8 @@ fn only_a_local_address_and_only_a_runnable_local_recipe_are_accepted() {
     );
 }
 
+/// After SAM 3 is enabled the picker lists it as ready, not as something to install, and still
+/// offers SAM 2.1, which is not installed.
 #[test]
 fn the_picker_then_lists_sam_3_as_ready_not_as_something_to_install() {
     let w = World::new();
@@ -209,9 +215,17 @@ fn the_picker_then_lists_sam_3_as_ready_not_as_something_to_install() {
         .unwrap();
     let options = craft_ai_features::setup_options(&craft_ai_features::builtin());
     let view = w.client("photocraft").picker(&role(), &options).unwrap();
-    assert_eq!(view.groups.len(), 1);
+    // SAM 3 is ready; SAM 2.1 is not installed, so it keeps its way in.
+    assert_eq!(view.groups.len(), 2);
     assert_eq!(view.groups[0].state, GroupState::Ready);
     assert!(view.groups[0].models[0].selected);
+    assert_eq!(view.groups[1].state, GroupState::NotSetUp);
+    assert_eq!(
+        view.groups[1].setup,
+        Some(SetupLink::New {
+            option: "local:select-subject:sam21-segment".into()
+        })
+    );
     assert!(view.current.unwrap().problem.is_none());
 }
 
