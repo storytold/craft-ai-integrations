@@ -346,10 +346,6 @@ impl Provider for ComfyProvider {
             job.snapshot.state = JobState::Failed {
                 error: AiError::new(ErrorKind::Provider, "ComfyUI workflow execution failed"),
             };
-            if job.segment.is_some() {
-                // The picture may be what went wrong (a restart clears the scratch area).
-                self.uploads().clear();
-            }
         } else if record.pointer("/status/completed").and_then(Value::as_bool) == Some(true) {
             let node = record.get("outputs").and_then(|o| o.get(&job.output_node));
             let result = node
@@ -384,6 +380,11 @@ impl Provider for ComfyProvider {
             }
         } else {
             job.snapshot.state = JobState::Running { percent: None };
+        }
+        if job.segment.is_some() && matches!(job.snapshot.state, JobState::Failed { .. }) {
+            // The picture may be what went wrong (a restart clears the scratch area), whether
+            // ComfyUI reported an error or its mask was refused.
+            self.uploads().clear();
         }
         Ok(JobSnapshot {
             state: job.snapshot.state.clone(),

@@ -21,5 +21,5 @@ GU_CASES = [
     ('stale-upload-not-retried', PV, STALE, 'Err(e) if false && reused && e.kind == ErrorKind::InvalidRequest => {', CC, 'segment_route', 'a_cleared_scratch'),
     ('fresh-refusal-retried', PV, STALE, 'Err(e) if e.kind == ErrorKind::InvalidRequest => {', CC, 'segment_route', 'a_refusal_for_a_fresh'),
     ('stale-name-kept', PV, '                self.uploads().retain(|(k, _)| *k != key);\n', '', CC, 'segment_route', 'a_cleared_scratch'),
-    ('failed-job-keeps-the-upload', PV, '                self.uploads().clear();\n', '', CC, 'segment_route', 'a_failed_job_makes'),
+    ('failed-job-keeps-the-upload', PV, '            self.uploads().clear();\n', '', CC, 'segment_route', 'a_failed_job_makes'),
 ]

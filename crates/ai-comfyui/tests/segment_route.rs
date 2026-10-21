@@ -439,6 +439,23 @@ fn a_failed_job_makes_the_next_selection_send_the_picture_again() {
     assert_eq!(s.uploads.load(Ordering::SeqCst), 2);
 }
 
+/// A job that ComfyUI finished but whose mask was refused (here the wrong size) fails too, and the
+/// next selection sends the picture again just as after an error status.
+#[test]
+fn a_failed_job_makes_the_next_selection_send_the_picture_again_after_a_refused_mask() {
+    let s = script(png_of(ColorType::Rgb, 5, 5, 255));
+    let server = start(s.clone());
+    let p = provider(&server);
+    let picture = png_of(ColorType::Rgb, 6, 4, 9);
+    let id = p
+        .submit(&model(), &request(picture.clone(), "the dog"))
+        .unwrap();
+    let (state, _) = finish(&p, &id);
+    assert!(matches!(state, JobState::Failed { .. }), "{state:?}");
+    p.submit(&model(), &request(picture, "the dog")).unwrap();
+    assert_eq!(s.uploads.load(Ordering::SeqCst), 2);
+}
+
 /// A selection workflow is only built with its source mapped and connected to the output.
 #[test]
 fn a_selection_workflow_needs_its_source_mapped_and_connected() {
