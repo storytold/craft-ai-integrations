@@ -3,7 +3,7 @@
 use super::florence2::florence2_large_files;
 use crate::recipe::{Component, Licence, LocalRecipe, ModelFile, NativeRoute, NodePack, Source};
 
-/// The published ONNX export of SAM 2.1 (small size) at a pinned revision. The built-in rten
+/// The published ONNX export of SAM 2.1 (tiny size) at a pinned revision. The built-in rten
 /// engine reads these two files as they are: no conversion, nothing hosted by us. Both sit in
 /// one folder, `encoder.onnx` first (the weights file the connection records).
 fn sam21_onnx_files() -> Vec<ModelFile> {
