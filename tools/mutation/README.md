@@ -20,6 +20,15 @@ python tools/mutation/mutation_check.py u2            # one group
 python tools/mutation/mutation_check.py u2 stale      # cases whose name contains "stale"
 ```
 
+The "Deliberate-bug checks" workflow runs a group on Ubuntu and macOS. It takes the group and an
+optional case-name filter, so one case can be checked on both systems in minutes instead of waiting
+for the group:
+
+```text
+group:  p4
+filter: input-folder-read
+```
+
 Group ids are historical labels. The header of each test file says what it covers.
 
 Run them exclusively. They snapshot and restore source files, so do not edit, format or build those

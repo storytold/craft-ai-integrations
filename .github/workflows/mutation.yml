@@ -9,6 +9,10 @@ on:
         description: Case group to run, for example u3 or u4
         required: true
         default: u3
+      filter:
+        description: Only run cases whose name contains this text (optional)
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,6 +35,14 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: python3 tools/mutation/mutation_check.py "$GROUP"
+      - name: Run ${{ inputs.group }} deliberate-bug checks
         env:
           GROUP: ${{ inputs.group }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          set -eu
+          if [ -n "$FILTER" ]; then
+            python3 tools/mutation/mutation_check.py "$GROUP" "$FILTER"
+          else
+            python3 tools/mutation/mutation_check.py "$GROUP"
+          fi
