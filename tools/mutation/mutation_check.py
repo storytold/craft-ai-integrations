@@ -6,7 +6,9 @@ source back. A case is CAUGHT only if the mutated code compiled and the test run
 does not compile counts as NOT CAUGHT (a bad mutant), so every survivor is either a test gap or a
 mutant to fix. Cargo runs serially, targeted with -p, with -j 8.
 
-Usage: mutation_check.py u1|u3|u4|p4|p10|v1|v2|v3|sd|vx|lc|lr|nr|ct|u2|wf [name-substring]
+Usage: mutation_check.py <group> [name-substring]. The groups are the keys of `GROUPS` below and are
+described in README.md (for example `rt` for the rten engine and `seg` for the selection contract);
+an unknown group lists them all.
 Saved logs pass through scrub.py so no Windows account name is written. Run it from anywhere;
 logs land in tools/mutation/verification/, which is not committed.
 """
