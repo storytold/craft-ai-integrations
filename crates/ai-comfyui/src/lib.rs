@@ -23,6 +23,7 @@ mod sam3_masks;
 mod sam3_point;
 mod sam3_session;
 mod scratch;
+mod segment_route;
 mod workflow;
 pub use detector::FLORENCE2_DETECTOR;
 pub use library::{WorkflowLibrary, WorkflowSpec};
