@@ -3,6 +3,7 @@
 use crate::Workflow;
 use crate::http::Http;
 use crate::output;
+use crate::segment_route;
 use craft_ai_core::endpoint::Endpoint;
 use craft_ai_core::job::{JobSnapshot, JobState};
 use craft_ai_core::model::InputRole;
@@ -76,6 +77,8 @@ struct Job {
     prompt_id: String,
     output_node: String,
     video: bool,
+    /// The size the mask must be, for an `image.segment` job.
+    segment: Option<segment_route::Size>,
     snapshot: JobSnapshot,
 }
 
@@ -169,10 +172,16 @@ impl ComfyProvider {
     }
 
     /// Sends the picture, then queues the selection with the name ComfyUI gave it.
-    fn submit_segment(&self, workflow: &Workflow, request: &Request) -> Result<Value, AiError> {
+    fn submit_segment(
+        &self,
+        workflow: &Workflow,
+        request: &Request,
+    ) -> Result<(Value, segment_route::Size), AiError> {
         let image = self.read_role(request, InputRole::Source)?;
+        let size = segment_route::size_of(&image)?;
         let name = self.upload(InputRole::Source, &image)?;
-        self.queue_segment(workflow, request, &name)
+        let response = self.queue_segment(workflow, request, &name)?;
+        Ok((response, size))
     }
 }
 
@@ -191,7 +200,7 @@ impl Provider for ComfyProvider {
             .collect()
     }
     /// Checks the request and the installed nodes, sends what the workflow needs sent and queues
-    /// the graph. A selection request sends its picture first.
+    /// the graph. A selection request sends its picture and records the size its mask must be.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let workflow = self
             .workflows
@@ -219,8 +228,11 @@ impl Provider for ComfyProvider {
         }
         let installed = self.http.get_object_info()?;
         workflow.validate_installation(&installed)?;
+        let mut segment = None;
         let queued = if workflow.capability().as_str() == "image.segment" {
-            Some(self.submit_segment(workflow, request)?)
+            let (response, size) = self.submit_segment(workflow, request)?;
+            segment = Some(size);
+            Some(response)
         } else {
             None
         };
@@ -264,11 +276,13 @@ impl Provider for ComfyProvider {
             prompt_id: prompt_id.to_owned(),
             output_node: workflow.output_node().to_owned(),
             video: workflow.capability().as_str() == "video.generate",
+            segment,
             snapshot: JobSnapshot::new(JobState::Queued),
         });
         Ok(id)
     }
-    /// Reads the job history and, once done, fetches the output.
+    /// Reads the job history and, once done, fetches the output. A selection job answers with a
+    /// checked mask and the shared result.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let mut jobs = self.jobs();
         let job = jobs
@@ -299,19 +313,23 @@ impl Provider for ComfyProvider {
                         "workflow output node returned no media",
                     )
                 })
-                .and_then(|n| {
-                    output::fetch(
+                .and_then(|n| match job.segment {
+                    // A mask is small and is checked before anyone sees it, so it is read inline.
+                    Some(size) => output::fetch(&self.http, n, false, None, self.max_output_bytes)
+                        .and_then(|event| segment_route::answer(event, &size)),
+                    None => output::fetch(
                         &self.http,
                         n,
                         job.video,
                         self.output_dir.as_deref(),
                         self.max_output_bytes,
                     )
+                    .map(|event| vec![event]),
                 });
             match result {
-                Ok(event) => {
+                Ok(events) => {
                     job.snapshot.state = JobState::Succeeded;
-                    job.snapshot.events.push(event);
+                    job.snapshot.events.extend(events);
                 }
                 Err(error) => {
                     job.snapshot.state = JobState::Failed { error };
