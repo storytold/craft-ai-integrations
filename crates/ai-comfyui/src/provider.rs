@@ -82,6 +82,13 @@ struct Job {
     snapshot: JobSnapshot,
 }
 
+/// Pictures already in ComfyUI's scratch area, newest last, so a second selection on the same
+/// picture does not send it again.
+type Uploads = Vec<(segment_route::CacheKey, String)>;
+
+/// How many pictures the provider remembers having sent.
+const REMEMBERED_UPLOADS: usize = 4;
+
 pub struct ComfyProvider {
     http: Http,
     workflows: Vec<Workflow>,
@@ -90,6 +97,7 @@ pub struct ComfyProvider {
     max_upload_bytes: u64,
     targeted_interrupt: bool,
     jobs: Mutex<Vec<Job>>,
+    uploads: Mutex<Uploads>,
 }
 impl std::fmt::Debug for ComfyProvider {
     /// Prints the name only, so no address or job is written out.
@@ -132,11 +140,16 @@ impl ComfyProvider {
                 .clamp(1, crate::input::HARD_MAX_UPLOAD_BYTES),
             targeted_interrupt: config.targeted_interrupt,
             jobs: Mutex::new(Vec::new()),
+            uploads: Mutex::new(Vec::new()),
         })
     }
     /// The jobs this provider holds, with a poisoned lock recovered.
     fn jobs(&self) -> MutexGuard<'_, Vec<Job>> {
         self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// The pictures already sent, with a poisoned lock recovered.
+    fn uploads(&self) -> MutexGuard<'_, Uploads> {
+        self.uploads.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Reads and checks one input image. Nothing is sent yet.
@@ -159,6 +172,25 @@ impl ComfyProvider {
             .upload_image(role.as_str(), &image.media_type, &image.data)
     }
 
+    /// The scratch name of `image`: the one already sent, or a fresh upload that is remembered.
+    /// The flag says whether an earlier upload was reused.
+    fn scratch_upload(
+        &self,
+        key: segment_route::CacheKey,
+        image: &crate::input::Image,
+    ) -> Result<(String, bool), AiError> {
+        if let Some((_, name)) = self.uploads().iter().find(|(k, _)| *k == key) {
+            return Ok((name.clone(), true));
+        }
+        let name = self.upload(InputRole::Source, image)?;
+        let mut uploads = self.uploads();
+        uploads.push((key, name.clone()));
+        if uploads.len() > REMEMBERED_UPLOADS {
+            uploads.remove(0);
+        }
+        Ok((name, false))
+    }
+
     /// Queues one `image.segment` graph with the picture `name` in the scratch area.
     fn queue_segment(
         &self,
@@ -171,7 +203,9 @@ impl ComfyProvider {
         self.http.post("/prompt", &json!({"prompt":graph}))
     }
 
-    /// Sends the picture, then queues the selection with the name ComfyUI gave it.
+    /// Sends the picture once (or reuses the earlier upload), then queues the selection. When a
+    /// reused file has gone, because ComfyUI was restarted and cleared its scratch area, the
+    /// picture is sent again and the job queued once more.
     fn submit_segment(
         &self,
         workflow: &Workflow,
@@ -179,8 +213,16 @@ impl ComfyProvider {
     ) -> Result<(Value, segment_route::Size), AiError> {
         let image = self.read_role(request, InputRole::Source)?;
         let size = segment_route::size_of(&image)?;
-        let name = self.upload(InputRole::Source, &image)?;
-        let response = self.queue_segment(workflow, request, &name)?;
+        let key = segment_route::cache_key(&image);
+        let (name, reused) = self.scratch_upload(key, &image)?;
+        let response = match self.queue_segment(workflow, request, &name) {
+            Err(e) if reused && e.kind == ErrorKind::InvalidRequest => {
+                self.uploads().retain(|(k, _)| *k != key);
+                let (name, _) = self.scratch_upload(key, &image)?;
+                self.queue_segment(workflow, request, &name)?
+            }
+            other => other?,
+        };
         Ok((response, size))
     }
 }
@@ -200,7 +242,7 @@ impl Provider for ComfyProvider {
             .collect()
     }
     /// Checks the request and the installed nodes, sends what the workflow needs sent and queues
-    /// the graph. A selection request sends its picture and records the size its mask must be.
+    /// the graph. A selection request sends its picture once and records the size its mask must be.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let workflow = self
             .workflows
@@ -282,7 +324,7 @@ impl Provider for ComfyProvider {
         Ok(id)
     }
     /// Reads the job history and, once done, fetches the output. A selection job answers with a
-    /// checked mask and the shared result.
+    /// checked mask and the shared result, and a failed one forgets the pictures sent.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let mut jobs = self.jobs();
         let job = jobs
@@ -338,6 +380,11 @@ impl Provider for ComfyProvider {
             }
         } else {
             job.snapshot.state = JobState::Running { percent: None };
+        }
+        if job.segment.is_some() && matches!(job.snapshot.state, JobState::Failed { .. }) {
+            // The picture may be what went wrong (a restart clears the scratch area), whether
+            // ComfyUI reported an error or its mask was refused.
+            self.uploads().clear();
         }
         Ok(JobSnapshot {
             state: job.snapshot.state.clone(),

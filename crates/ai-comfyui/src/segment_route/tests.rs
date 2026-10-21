@@ -123,6 +123,16 @@ fn jpeg_segments_before_the_frame_are_skipped() {
     assert_eq!(jpeg_size(&[0xFF, 0xD8, 0x00, 0x00]), None);
 }
 
+/// The same bytes give the same key; any other bytes give another.
+#[test]
+fn the_cache_key_follows_the_bytes() {
+    let a = image("image/png", png_of(ColorType::Rgb, 2, 2, 1));
+    let same = image("image/png", a.data.clone());
+    let other = image("image/png", png_of(ColorType::Rgb, 2, 2, 2));
+    assert_eq!(cache_key(&a), cache_key(&same));
+    assert_ne!(cache_key(&a), cache_key(&other));
+}
+
 /// Any colour type is reduced to one channel, white kept, and the answer is a grayscale PNG at the
 /// picture's size followed by a result saying it matched.
 #[test]
