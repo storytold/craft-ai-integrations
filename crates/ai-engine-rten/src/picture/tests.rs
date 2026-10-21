@@ -223,6 +223,9 @@ fn a_huge_png_is_refused_from_its_header() {
     for (w, h, message) in [
         (20_000u32, 20_000u32, "too large"),
         (100_000, 2_000, "too large"),
+        // Few pixels, but a side no decoder here accepts.
+        (70_000, 1, "too large"),
+        (1, 70_000, "too large"),
     ] {
         let mut png = png_of(ColorType::Rgb, 2, 2, &[0; 12]);
         // The header chunk: width, height, then its checksum over the type and the data.

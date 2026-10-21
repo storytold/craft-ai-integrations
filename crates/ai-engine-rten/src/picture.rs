@@ -15,6 +15,10 @@ use png::{BitDepth, ColorType, Transformations};
 /// Pictures larger than this are refused before any pixel is read.
 pub const MAX_PIXELS: u64 = 100_000_000;
 
+/// The longest side either decoder accepts. It is the most a JPEG can hold, and it keeps the
+/// resampler's per-row tables small for a very long, thin picture.
+pub const MAX_SIDE: u64 = 65_535;
+
 /// The most memory either decoder may ask for. A 100 megapixel picture is 300 MB of RGB.
 const MAX_ALLOC: usize = 900 * 1024 * 1024;
 
@@ -31,9 +35,11 @@ pub struct Rgb {
     pub bytes: Vec<u8>,
 }
 
-/// The refusal for a picture over [`MAX_PIXELS`], in plain words.
+/// The refusal for a picture over [`MAX_PIXELS`] or [`MAX_SIDE`], in plain words.
 fn too_large() -> AiError {
-    AiError::invalid("The picture is too large to select from (over 100 megapixels).")
+    AiError::invalid(
+        "The picture is too large to select from (over 100 megapixels, or a side over 65,535 pixels).",
+    )
 }
 
 /// Turns any decoder error into the one plain "could not be read" message, so no library detail
@@ -62,7 +68,7 @@ fn decode_png(data: &[u8]) -> Result<Rgb, AiError> {
     let mut reader = decoder.read_info().map_err(unreadable)?;
     let info = reader.info();
     let (w, h) = (u64::from(info.width), u64::from(info.height));
-    if w == 0 || h == 0 || w * h > MAX_PIXELS {
+    if w == 0 || h == 0 || w * h > MAX_PIXELS || w > MAX_SIDE || h > MAX_SIDE {
         return Err(too_large());
     }
     let mut buffer = vec![0u8; reader.output_buffer_size().ok_or_else(too_large)?];
@@ -102,7 +108,12 @@ fn decode_jpeg(data: &[u8]) -> Result<Rgb, AiError> {
     reader.limits(limits);
     let mut decoder = reader.into_decoder().map_err(unreadable)?;
     let (width, height) = decoder.dimensions();
-    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
+    if width == 0
+        || height == 0
+        || u64::from(width) * u64::from(height) > MAX_PIXELS
+        || u64::from(width) > MAX_SIDE
+        || u64::from(height) > MAX_SIDE
+    {
         return Err(too_large());
     }
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
