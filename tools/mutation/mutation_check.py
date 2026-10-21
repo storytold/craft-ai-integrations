@@ -542,13 +542,14 @@ GROUPS = {'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
     'non-local-address-accepted': 'SharedStore::update calls write, which validates every connection; a non-loopback Local endpoint is refused even without the earlier local_address check (local.rs test confirms nothing written)',
-    'input-folder-read': 'a directory cannot be opened on Windows, and where it can be opened reading it fails with the same message; the check exists for pipes and devices, which cannot be made here (not proven on Linux or macOS)',
-    'directory-taken-as-local-file': 'on Windows a directory reports length 0, which the size check also refuses; elsewhere the is_file check is what refuses it',
+    'input-folder-read': 'a folder is also refused by the read that follows, with the same message, so a folder alone does not catch this check going missing; on Windows a folder cannot be opened at all. Only the character-device case in only_plain_local_files_are_read notices, and Windows cannot make one',
+    'directory-taken-as-local-file': 'on Windows a directory reports length 0, which the size check also refuses; on Linux and macOS it reports a real length, so the is_file check is the only refusal',
 }
 EQUIVALENT.update(U2_EQUIVALENT)
 EQUIVALENT.update(SF_EQUIVALENT)
 EQUIVALENT.update(CE_EQUIVALENT)
-# Both reasons above are about Windows; on Linux and macOS they are observed, not assumed.
+# Both reasons above are about Windows; on Linux and macOS both cases are caught. Observed on
+# ubuntu-latest and macos-latest through the Deliberate-bug checks workflow.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
 TIMEOUTS = {}
 # Printed by a test that skips itself because the machine cannot do what it needs.

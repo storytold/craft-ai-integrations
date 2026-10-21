@@ -284,6 +284,24 @@ fn file_handle(path: &std::path::Path, media: &str) -> Payload {
     Payload::handle(&uri, media, None).unwrap()
 }
 
+/// The case only Unix can make: a character device opens like a file and reads as no bytes at all,
+/// so without the is_file check an empty body passes where a file was expected. Windows has no such
+/// path, so this case only exists on Unix.
+#[cfg(unix)]
+fn device_cases() -> Vec<(&'static str, Payload, ErrorKind, &'static str)> {
+    vec![(
+        "a device",
+        file_handle(std::path::Path::new("/dev/null"), "image/png"),
+        ErrorKind::InvalidRequest,
+        "could not be read",
+    )]
+}
+
+#[cfg(not(unix))]
+fn device_cases() -> Vec<(&'static str, Payload, ErrorKind, &'static str)> {
+    Vec::new()
+}
+
 fn write(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = dir.path().join(name);
     std::fs::write(&path, bytes).unwrap();
@@ -416,7 +434,9 @@ fn only_plain_local_files_are_read() {
     let folder = dir.path().join("folder.png");
     std::fs::create_dir(&folder).unwrap();
     // Each case names the kind and the words of the refusal, so a check that went missing cannot
-    // hide behind another check that happens to refuse the same input.
+    // hide behind another check that happens to refuse the same input. A folder breaks that rule:
+    // reading it fails with the same refusal, so only the device case below notices the is_file
+    // check going missing.
     let cases: Vec<(&str, Payload, ErrorKind, &str)> = vec![
         (
             "a web address",
@@ -448,7 +468,10 @@ fn only_plain_local_files_are_read() {
             ErrorKind::InvalidRequest,
             "could not be read",
         ),
-    ];
+    ]
+    .into_iter()
+    .chain(device_cases())
+    .collect();
     for (why, bad, kind, words) in cases {
         let server = inpaint_server();
         let p = provider(&server, |c| c);
