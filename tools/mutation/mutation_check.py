@@ -571,9 +571,11 @@ def main():
                 bad.append((name, text.count(old)))
         print('mutations:', len(GROUPS[group]), 'without exactly one target:', bad)
         raise SystemExit(1 if bad else 0)
-    for name, rel, old, new, package, target, test in GROUPS[group]:
-        if only not in name:
-            continue
+    selected = [case for case in GROUPS[group] if only in case[0]]
+    if not selected:
+        # A mistyped filter would otherwise check nothing and still report success.
+        raise SystemExit('no case in ' + group + ' contains ' + repr(only))
+    for name, rel, old, new, package, target, test in selected:
         path = ROOT / rel
         original = path.read_bytes()
         text = original.decode('utf-8').replace('\r\n', '\n')

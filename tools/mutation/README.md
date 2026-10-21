@@ -22,7 +22,7 @@ python tools/mutation/mutation_check.py u2 stale      # cases whose name contain
 
 The "Deliberate-bug checks" workflow runs a group on Ubuntu and macOS. It takes the group and an
 optional case-name filter, so one case can be checked on both systems in minutes instead of waiting
-for the group:
+for the group. A filter that names no case in the group fails instead of reporting success:
 
 ```text
 group:  p4
