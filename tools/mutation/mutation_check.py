@@ -452,7 +452,7 @@ NR = [
     ('vanished-file-served', LOCAL_RS, 'if !path.is_file() {', 'if false {', CL, 'local_native', 'vanished'),
     ('unbound-is-an-error', LOCAL_RS, 'let Some(route) = self.local_route_for(role)? else {\n            return Ok(None);\n        };\n        if route.provider != provider', 'let Some(route) = self.local_route_for(role)? else {\n            return Err(AiError::unsupported("unbound"));\n        };\n        if route.provider != provider', CL, 'local_native', 'nothing_bound'),
     ('native-replaces-a-choice', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if true {', CL, 'local_native', 'left_alone'),
-    ('native-connection-id-shared-with-comfyui', LOCAL_RS, 'format!("local-{}-{}", feature.id, native.provider)', 'format!("local-{}", feature.id)', CL, 'local_native', 'left_alone'),
+    ('native-connection-id-shared-with-comfyui', LOCAL_RS, 'format!("local-{feature}-{provider}")', 'format!("local-{feature}")', CL, 'local_native', 'left_alone'),
 ]
 
 CT_CLIENT = C + 'ai-client/src/client.rs'
@@ -480,6 +480,7 @@ from mutation_native import NF  # noqa: E402
 from mutation_native_setup import NS  # noqa: E402
 from mutation_native_session import NQ  # noqa: E402
 from mutation_native_widget import NW  # noqa: E402
+from mutation_segment import SEG_CASES  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -541,7 +542,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
+GROUPS = {'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

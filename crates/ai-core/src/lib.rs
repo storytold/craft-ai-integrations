@@ -25,6 +25,7 @@
 //! | [`consent`] | [`Disclosure`], [`ConsentLedger`], [`ConsentTerm`] |
 //! | [`store`] | [`StoreFile`], the launcher's versioned shared store |
 //! | [`picks`] | model presets: [`Pick`], the curated [`Catalog`], and [`picks::choose`] |
+//! | [`segment`] | the `image.segment` contract: clicks, a box, and what a selection found |
 //! | [`spec`] | a provider described as data: types, checker and substitutions |
 //! | [`provider`] | the [`Provider`] trait |
 //! | [`mock`], [`conformance`] | scripted provider and reusable behaviour checks |
@@ -58,6 +59,7 @@ pub mod provider;
 pub mod request;
 pub mod role;
 pub mod secret;
+pub mod segment;
 pub mod spec;
 pub mod store;
 
