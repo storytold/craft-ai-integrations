@@ -932,6 +932,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-engine-rten"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-core",
+ "image",
+ "jpeg-encoder",
+ "png",
+ "tempfile",
+]
+
+[[package]]
 name = "craft-ai-features"
 version = "0.1.0"
 dependencies = [
