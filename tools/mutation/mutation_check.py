@@ -6,7 +6,9 @@ source back. A case is CAUGHT only if the mutated code compiled and the test run
 does not compile counts as NOT CAUGHT (a bad mutant), so every survivor is either a test gap or a
 mutant to fix. Cargo runs serially, targeted with -p, with -j 8.
 
-Usage: mutation_check.py u1|u3|u4|p4|p10|v1|v2|v3|sd|vx|lc|lr|nr|ct|u2|wf [name-substring]
+Usage: mutation_check.py <group> [name-substring]. The groups are the keys of `GROUPS` below and are
+described in README.md (for example `rt` for the rten engine and `seg` for the selection contract);
+an unknown group lists them all.
 Saved logs pass through scrub.py so no Windows account name is written. Run it from anywhere;
 logs land in tools/mutation/verification/, which is not committed.
 """
@@ -480,6 +482,7 @@ from mutation_native import NF  # noqa: E402
 from mutation_native_setup import NS  # noqa: E402
 from mutation_native_session import NQ  # noqa: E402
 from mutation_native_widget import NW  # noqa: E402
+from mutation_rten import RTEN_CASES  # noqa: E402
 from mutation_generic import GS_CASES  # noqa: E402
 from mutation_generic_mask import GM_CASES  # noqa: E402
 from mutation_generic_uploads import GU_CASES  # noqa: E402
@@ -545,7 +548,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
+GROUPS = {'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

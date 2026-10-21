@@ -1,0 +1,23 @@
+[package]
+name = "craft-ai-engine-rten"
+description = "The rten engine for Craft AI, picture handling part: PNG and JPEG in, mask PNG out, and the resampling a selection model needs. Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+craft-ai-core.workspace = true
+png = "0.18"
+# JPEG only: the decoder (zune-jpeg) and the EXIF turn come through this crate.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Makes the JPEGs the tests decode.
+jpeg-encoder = "0.7"
+
+[lints]
+workspace = true

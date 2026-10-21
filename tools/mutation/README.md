@@ -9,6 +9,8 @@ bad mutant (fix the mutant). Cargo runs serially, targeted with `-p`, with `-j 8
 |---|---|
 | `mutation_check.py` | `u1 u3 u4 p4 p10 v1 v2 v3 sd vx lc lr nr ct u2 wf` (connections, model sources, node packs, media, client flows, declarative adapter, workflow library). Cases for `u2` are in `mutation_u2.py`. |
 | `mutation_check.py seg` | Shared selection contract: points, box, description and checked result metadata. |
+| `mutation_check.py rt` | rten engine picture handling: bounded PNG and JPEG decoding, mask encoding, resampling. |
+| `mutation_check.py gs` | Generic selection: scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gs` | Generic selection workflows: the scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gu` | Generic selection uploads: one upload per picture, the bounded memory, the resend after a cleared scratch area or a failed job. |
 | `mutation_check.py gm` | Generic selection masks: size, one channel, the empty-mask answer and the picture header. |
