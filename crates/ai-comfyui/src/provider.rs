@@ -64,6 +64,7 @@ impl ComfyConfig {
         self.max_upload_bytes = bytes.clamp(1, crate::input::HARD_MAX_UPLOAD_BYTES);
         self
     }
+    /// Adds a workflow the provider can run.
     pub fn with_workflow(mut self, workflow: Workflow) -> Self {
         self.workflows.push(workflow);
         self
@@ -88,11 +89,14 @@ pub struct ComfyProvider {
     jobs: Mutex<Vec<Job>>,
 }
 impl std::fmt::Debug for ComfyProvider {
+    /// Prints the name only, so no address or job is written out.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ComfyProvider")
     }
 }
 impl ComfyProvider {
+    /// Builds the provider. It refuses an address that is not a loopback origin without a path, and
+    /// a repeated workflow id.
     pub fn new(config: ComfyConfig) -> Result<Self, AiError> {
         let base = config.base_url.trim_end_matches('/');
         let endpoint =
@@ -127,6 +131,7 @@ impl ComfyProvider {
             jobs: Mutex::new(Vec::new()),
         })
     }
+    /// The jobs this provider holds, with a poisoned lock recovered.
     fn jobs(&self) -> MutexGuard<'_, Vec<Job>> {
         self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -145,13 +150,35 @@ impl ComfyProvider {
         crate::input::read_image(&input.payload, self.max_upload_bytes)
     }
 
+    /// Sends one image to the scratch area of ComfyUI and returns the name its loader reads.
     fn upload(&self, role: InputRole, image: &crate::input::Image) -> Result<String, AiError> {
         self.http
             .upload_image(role.as_str(), &image.media_type, &image.data)
     }
+
+    /// Queues one `image.segment` graph with the picture `name` in the scratch area.
+    fn queue_segment(
+        &self,
+        workflow: &Workflow,
+        request: &Request,
+        name: &str,
+    ) -> Result<Value, AiError> {
+        let mut graph = workflow.render_with_source(request, name)?;
+        crate::scratch::route_sinks(&mut graph)?;
+        self.http.post("/prompt", &json!({"prompt":graph}))
+    }
+
+    /// Sends the picture, then queues the selection with the name ComfyUI gave it.
+    fn submit_segment(&self, workflow: &Workflow, request: &Request) -> Result<Value, AiError> {
+        let image = self.read_role(request, InputRole::Source)?;
+        let name = self.upload(InputRole::Source, &image)?;
+        self.queue_segment(workflow, request, &name)
+    }
 }
 
 impl Provider for ComfyProvider {
+    /// Checks the server answers and the nodes each workflow needs are installed, then lists the
+    /// workflows as models.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         self.http.get_json("/system_stats")?;
         let installed = self.http.get_object_info()?;
@@ -163,6 +190,8 @@ impl Provider for ComfyProvider {
             })
             .collect()
     }
+    /// Checks the request and the installed nodes, sends what the workflow needs sent and queues
+    /// the graph. A selection request sends its picture first.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let workflow = self
             .workflows
@@ -170,7 +199,7 @@ impl Provider for ComfyProvider {
             .find(|w| w.id() == model)
             .ok_or_else(|| AiError::unsupported("workflow is not configured"))?;
         workflow.validate_request(request)?;
-        if workflow.capability().as_str() != "image.inpaint" {
+        if !workflow.needs_uploads() {
             // Generation paths can render before any network traffic.
             workflow.render(request)?;
         }
@@ -190,7 +219,14 @@ impl Provider for ComfyProvider {
         }
         let installed = self.http.get_object_info()?;
         workflow.validate_installation(&installed)?;
-        let graph = if workflow.capability().as_str() == "image.inpaint" {
+        let queued = if workflow.capability().as_str() == "image.segment" {
+            Some(self.submit_segment(workflow, request)?)
+        } else {
+            None
+        };
+        let graph = if queued.is_some() {
+            Value::Null
+        } else if workflow.capability().as_str() == "image.inpaint" {
             // Both are read and checked before either is sent, so a bad mask costs no upload.
             let source = self.read_role(request, InputRole::Source)?;
             let mask = self.read_role(request, InputRole::Mask)?;
@@ -200,7 +236,10 @@ impl Provider for ComfyProvider {
         } else {
             workflow.render(request)?
         };
-        let response = self.http.post("/prompt", &json!({"prompt":graph}))?;
+        let response = match queued {
+            Some(response) => response,
+            None => self.http.post("/prompt", &json!({"prompt":graph}))?,
+        };
         let prompt_id = response
             .get("prompt_id")
             .and_then(Value::as_str)
@@ -229,6 +268,7 @@ impl Provider for ComfyProvider {
         });
         Ok(id)
     }
+    /// Reads the job history and, once done, fetches the output.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let mut jobs = self.jobs();
         let job = jobs
