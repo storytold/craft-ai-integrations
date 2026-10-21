@@ -127,16 +127,18 @@ fn decode_jpeg(data: &[u8]) -> Result<Rgb, AiError> {
     })
 }
 
+/// One coverage value, 0..1, as the 8-bit sample the mask PNG stores; above 127 is selected.
+pub fn quantize(alpha: f32) -> u8 {
+    (alpha.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 /// Coverage 0..1 per pixel as an 8-bit grayscale PNG (white is selected).
 pub fn encode_mask(alpha: &[f32], width: usize, height: usize) -> Result<Vec<u8>, AiError> {
     /// Turns any encoder or size-conversion error into an internal "could not be saved" error.
     fn fail<E>(_: E) -> AiError {
         AiError::new(ErrorKind::Internal, "The mask could not be saved.")
     }
-    let gray: Vec<u8> = alpha
-        .iter()
-        .map(|a| (a.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect();
+    let gray: Vec<u8> = alpha.iter().map(|a| quantize(*a)).collect();
     let mut out = Vec::new();
     let mut encoder = png::Encoder::new(
         &mut out,
