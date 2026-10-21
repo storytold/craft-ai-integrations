@@ -13,7 +13,10 @@
 //!   picture's bytes.
 //!
 //! The graph's output is read inline and bounded, so a hostile or broken graph cannot ask for more
-//! memory than a 100 megapixel mask needs.
+//! memory than a 100 megapixel mask needs. The byte limit is the provider's output limit (never
+//! more than the 32 MiB inline cap), the same as for any inline answer; a selection mask is never
+//! written to the app's output folder, because `answer` needs the PNG bytes in hand. A mask PNG
+//! over that limit fails the job.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

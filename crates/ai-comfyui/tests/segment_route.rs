@@ -223,6 +223,30 @@ fn a_mask_of_the_wrong_size_fails_the_job() {
     assert!(outputs.is_empty());
 }
 
+/// A mask is read inline under the provider's output limit, which an app lowers with
+/// `with_max_output_bytes`: a mask bigger than the limit fails the job and hands on nothing. There
+/// is no separate limit and no output folder for a selection mask.
+#[test]
+fn a_mask_over_the_output_limit_fails_the_job() {
+    let mask = png_of(ColorType::Rgb, 6, 4, 255);
+    let server = start(script(mask.clone()));
+    let p = ComfyProvider::new(
+        ComfyConfig::new(server.url.trim_end_matches("/v1"))
+            .with_workflow(workflow())
+            .with_max_output_bytes(mask.len() as u64 - 1),
+    )
+    .unwrap();
+    let id = p
+        .submit(
+            &model(),
+            &request(png_of(ColorType::Rgb, 6, 4, 9), "the dog"),
+        )
+        .unwrap();
+    let (state, outputs) = finish(&p, &id);
+    assert!(matches!(state, JobState::Failed { .. }), "{state:?}");
+    assert!(outputs.is_empty());
+}
+
 /// The same picture is sent once however many selections follow, and each queued graph has a
 /// sink of its own so ComfyUI does not answer the second from cache with no output.
 #[test]

@@ -360,7 +360,8 @@ impl Provider for ComfyProvider {
                     )
                 })
                 .and_then(|n| match job.segment {
-                    // A mask is small and is checked before anyone sees it, so it is read inline.
+                    // A mask is checked before anyone sees it, so it is read inline under the output
+                    // limit and never to the output folder.
                     Some(size) => output::fetch(&self.http, n, false, None, self.max_output_bytes)
                         .and_then(|event| segment_route::answer(event, &size)),
                     None => output::fetch(
