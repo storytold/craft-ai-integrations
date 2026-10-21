@@ -1,9 +1,9 @@
-//! The generic `image.segment` route against a scripted ComfyUI: the mask is checked before an
-//! app sees it, and "nothing there" is an answer, not a failure.
+//! The generic `image.segment` route against a scripted ComfyUI: the picture is sent once, the mask
+//! is checked before an app sees it, and "nothing there" is an answer, not a failure.
 #[path = "../../ai-openai/tests/support/mod.rs"]
 mod support;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use craft_ai_comfyui::{Binding, ComfyConfig, ComfyProvider, Workflow};
 use craft_ai_core::capability::CapabilityId;
@@ -73,7 +73,11 @@ fn request(picture: Vec<u8>, subject: &str) -> Request {
 struct Script {
     mask: Vec<u8>,
     uploads: AtomicUsize,
+    /// How many `/prompt` calls to refuse with a 400 first, as a cleared scratch area would.
+    refuse_prompts: AtomicUsize,
     prompts: AtomicUsize,
+    /// While set, the server reports every job as failed.
+    fail_jobs: AtomicBool,
 }
 
 /// Starts a scripted ComfyUI that follows `script`.
@@ -90,8 +94,20 @@ fn start(script: Arc<Script>) -> Server {
         }
         "/prompt" => {
             script.prompts.fetch_add(1, Ordering::SeqCst);
+            if script
+                .refuse_prompts
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                return Reply::Json(400, "{}".into());
+            }
             Reply::Json(200, r#"{"prompt_id":"seg-job"}"#.into())
         }
+        "/history/seg-job" if script.fail_jobs.load(Ordering::SeqCst) => Reply::Json(
+            200,
+            json!({"seg-job":{"status":{"completed":false,"status_str":"error"},"outputs":{}}})
+                .to_string(),
+        ),
         "/history/seg-job" => Reply::Json(
             200,
             json!({"seg-job":{"status":{"completed":true,"status_str":"success"},
@@ -109,7 +125,9 @@ fn script(mask: Vec<u8>) -> Arc<Script> {
     Arc::new(Script {
         mask,
         uploads: AtomicUsize::new(0),
+        refuse_prompts: AtomicUsize::new(0),
         prompts: AtomicUsize::new(0),
+        fail_jobs: AtomicBool::new(false),
     })
 }
 
@@ -207,10 +225,10 @@ fn a_mask_of_the_wrong_size_fails_the_job() {
     assert!(outputs.is_empty());
 }
 
-/// Each queued graph has a sink of its own, so ComfyUI does not answer a repeat from cache with no
-/// output.
+/// The same picture is sent once however many selections follow, and each queued graph has a
+/// sink of its own so ComfyUI does not answer the second from cache with no output.
 #[test]
-fn every_selection_has_its_own_sink() {
+fn a_picture_is_sent_once_and_every_selection_has_its_own_sink() {
     let s = script(png_of(ColorType::Rgb, 6, 4, 255));
     let server = start(s.clone());
     let p = provider(&server);
@@ -224,6 +242,7 @@ fn every_selection_has_its_own_sink() {
         &request(png_of(ColorType::Rgb, 6, 4, 10), "the dog"),
     )
     .unwrap();
+    assert_eq!(s.uploads.load(Ordering::SeqCst), 2, "one per picture");
     let recorded = server.recorded();
     let prefixes: Vec<_> = recorded
         .iter()
@@ -234,6 +253,22 @@ fn every_selection_has_its_own_sink() {
     for (i, a) in prefixes.iter().enumerate() {
         assert!(prefixes[i + 1..].iter().all(|b| a != b), "{prefixes:?}");
     }
+}
+
+/// When ComfyUI no longer has the earlier upload (a restart clears the scratch area), the picture
+/// is sent again and the selection still goes through.
+#[test]
+fn a_cleared_scratch_area_costs_one_more_upload_not_the_selection() {
+    let s = script(png_of(ColorType::Rgb, 6, 4, 255));
+    let server = start(s.clone());
+    let p = provider(&server);
+    let picture = png_of(ColorType::Rgb, 6, 4, 9);
+    p.submit(&model(), &request(picture.clone(), "the dog"))
+        .unwrap();
+    s.refuse_prompts.store(1, Ordering::SeqCst);
+    p.submit(&model(), &request(picture, "the cat")).unwrap();
+    assert_eq!(s.uploads.load(Ordering::SeqCst), 2);
+    assert_eq!(s.prompts.load(Ordering::SeqCst), 3);
 }
 
 /// A route that selects by description says so when asked to click, before anything is sent.
@@ -317,6 +352,69 @@ fn a_stored_workflow_can_be_a_selection_workflow() {
         json!({"node":"1","class_type":"LoadImage","input":"image"}),
     );
     assert!(parse(spec(with_mask.into())).is_err(), "a mask binding");
+}
+
+/// Only the last few pictures are remembered: the oldest is sent again after four others.
+#[test]
+fn the_oldest_picture_is_forgotten_after_four_others() {
+    let s = script(png_of(ColorType::Rgb, 6, 4, 255));
+    let server = start(s.clone());
+    let p = provider(&server);
+    let picture = |v| png_of(ColorType::Rgb, 6, 4, v);
+    for v in 1..=5 {
+        p.submit(&model(), &request(picture(v), "the dog")).unwrap();
+    }
+    assert_eq!(s.uploads.load(Ordering::SeqCst), 5);
+    p.submit(&model(), &request(picture(5), "the dog")).unwrap();
+    assert_eq!(
+        s.uploads.load(Ordering::SeqCst),
+        5,
+        "the newest is remembered"
+    );
+    p.submit(&model(), &request(picture(1), "the dog")).unwrap();
+    assert_eq!(
+        s.uploads.load(Ordering::SeqCst),
+        6,
+        "the oldest was dropped"
+    );
+}
+
+/// A picture that was just sent is not sent twice when the server refuses the job: the refusal is
+/// the person's to see, not something to retry.
+#[test]
+fn a_refusal_for_a_fresh_upload_is_not_retried() {
+    let s = script(png_of(ColorType::Rgb, 6, 4, 255));
+    s.refuse_prompts.store(1, Ordering::SeqCst);
+    let server = start(s.clone());
+    let p = provider(&server);
+    let e = p
+        .submit(
+            &model(),
+            &request(png_of(ColorType::Rgb, 6, 4, 9), "the dog"),
+        )
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+    assert_eq!(s.uploads.load(Ordering::SeqCst), 1);
+    assert_eq!(s.prompts.load(Ordering::SeqCst), 1);
+}
+
+/// After a job fails, the next selection sends the picture again, since the file may be what went
+/// wrong.
+#[test]
+fn a_failed_job_makes_the_next_selection_send_the_picture_again() {
+    let s = script(png_of(ColorType::Rgb, 6, 4, 255));
+    let server = start(s.clone());
+    let p = provider(&server);
+    let picture = png_of(ColorType::Rgb, 6, 4, 9);
+    s.fail_jobs.store(true, Ordering::SeqCst);
+    let id = p
+        .submit(&model(), &request(picture.clone(), "the dog"))
+        .unwrap();
+    let (state, _) = finish(&p, &id);
+    assert!(matches!(state, JobState::Failed { .. }), "{state:?}");
+    s.fail_jobs.store(false, Ordering::SeqCst);
+    p.submit(&model(), &request(picture, "the dog")).unwrap();
+    assert_eq!(s.uploads.load(Ordering::SeqCst), 2);
 }
 
 /// A selection workflow is only built with its source mapped and connected to the output.

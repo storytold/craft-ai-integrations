@@ -9,10 +9,14 @@
 //! - it is reduced to one 8-bit channel, white where selected, whatever colour type the graph
 //!   saved;
 //! - a mask with no pixel above half is an empty mask and `matched: false`, never a failed job;
+//! - a repeat of the same picture reuses the file already in ComfyUI's scratch area, keyed by the
+//!   picture's bytes.
 //!
 //! The graph's output is read inline and bounded, so a hostile or broken graph cannot ask for more
 //! memory than a 100 megapixel mask needs.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 
 use craft_ai_core::job::{Event, Output};
@@ -43,6 +47,16 @@ impl Size {
         (width == self.width && height == self.height)
             || (self.turnable && width == self.height && height == self.width)
     }
+}
+
+/// A picture's identity for the upload cache: a hash of its bytes and their length.
+pub(crate) type CacheKey = (u64, usize);
+
+/// What lets a repeat of the same picture reuse its upload.
+pub(crate) fn cache_key(image: &Image) -> CacheKey {
+    let mut hasher = DefaultHasher::new();
+    image.data.hash(&mut hasher);
+    (hasher.finish(), image.data.len())
 }
 
 /// The size of `image`, read from its header, or a refusal when it is empty or over the limit.
