@@ -34,7 +34,7 @@ craft-ai-engine-candle = { path = "../ai-engine-candle", package = "craft-ai-eng
 serde_json.workspace = true
 tempfile = "3"
 url = "2"
-png = "0.17"
+png = "0.18"
 
 [lints]
 workspace = true

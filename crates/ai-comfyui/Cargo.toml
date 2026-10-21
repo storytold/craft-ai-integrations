@@ -17,8 +17,8 @@ craft-ai-http.workspace = true
 craft-ai-media = { path = "../ai-media", package = "craft-ai-media" }
 serde.workspace = true
 serde_json.workspace = true
-png = "0.17"
-base64 = "0.22"
+png = "0.18"
+base64 = "0.23"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 tempfile = "3"
 url = "2"
@@ -30,5 +30,5 @@ craft-ai-native = { path = "../ai-native", package = "craft-ai-native" }
 [dev-dependencies]
 craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 tempfile = "3"
-png = "0.17"
-base64 = "0.22"
+png = "0.18"
+base64 = "0.23"
