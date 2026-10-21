@@ -21,7 +21,7 @@ use craft_ai_core::{
 };
 use craft_ai_engine::{LoadedModel, ModelRunner, RunContext};
 
-use crate::picture::{decode_picture, encode_mask};
+use crate::picture::{decode_picture, encode_mask, quantize};
 use crate::resample::{coverage, preprocess};
 use crate::sam21::{Area, Backend, Click, DECODER_FILE, ENCODER_FILE, Rten};
 
@@ -149,12 +149,18 @@ impl<B: Backend + 'static> LoadedModel for Loaded<B> {
 
         // A mask with no pixel above zero is the model saying there is nothing there.
         let found = prediction.logits.iter().any(|l| *l > 0.0);
-        let alpha = if found {
+        let mut alpha = if found {
             coverage(&prediction.logits, picture.width, picture.height)?
         } else {
-            ctx.notice("Nothing was selected at that spot.");
             vec![0.0; picture.width * picture.height]
         };
+        // What counts is the mask the person is handed: a positive speck that the resampling to a
+        // small picture never samples leaves no pixel selected, so it is no match.
+        let found = found && alpha.iter().any(|a| quantize(*a) > 127);
+        if !found {
+            ctx.notice("Nothing was selected at that spot.");
+            alpha.fill(0.0);
+        }
         let png = encode_mask(&alpha, picture.width, picture.height)?;
         let result = Found {
             matched: found,

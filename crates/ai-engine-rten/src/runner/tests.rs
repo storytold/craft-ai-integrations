@@ -319,6 +319,24 @@ fn nothing_selected_is_said_so_and_the_mask_is_empty() {
     assert!(mask.bytes.iter().all(|b| *b == 0));
 }
 
+/// One positive logit that the resampling to a small picture never samples is not a selection: the
+/// mask the person is handed is empty, so the answer says no match.
+#[test]
+fn a_speck_the_resampling_loses_is_no_match() {
+    let mut logits = vec![-20.0; MASK_SIDE * MASK_SIDE];
+    logits[0] = 8.0;
+    let mut model = Loaded::new(Fake::answering(logits));
+    let out = run(
+        &mut model,
+        &request(picture(10, 6, 7), json!([click(0.5, 0.5, true)])),
+    )
+    .unwrap();
+    let found = segment::read_found(&out).unwrap();
+    assert!(!found.matched);
+    assert_eq!(found.score, None);
+    assert!(mask_of(&out).bytes.iter().all(|b| *b == 0));
+}
+
 /// A link in place of the picture is unsupported and no picture is an invalid request.
 #[test]
 fn a_link_instead_of_a_picture_and_a_missing_picture_are_refused() {
