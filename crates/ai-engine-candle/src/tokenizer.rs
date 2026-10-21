@@ -143,16 +143,27 @@ impl Tokenizer {
     }
 }
 
-/// The words of `text` that can matter: at most [`MAX_TEXT_CHARS`] characters of it, lower-cased,
-/// split like CLIP, with each word cut to [`MAX_WORD_CHARS`] characters.
+/// The words of `text` that can matter: whitespace collapsed first, then at most
+/// [`MAX_TEXT_CHARS`] characters of what is left, lower-cased, split like CLIP, with each word
+/// cut to [`MAX_WORD_CHARS`] characters. Spaces never use up the allowance, and the text is
+/// copied only as far as the allowance reaches.
 fn bounded_words(text: &str) -> Vec<String> {
-    let clipped: String = text.chars().take(MAX_TEXT_CHARS).collect();
-    let normal = clipped
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-    pre_tokenize(&normal)
+    let mut normal = String::new();
+    let mut count = 0;
+    for word in text.split_whitespace() {
+        if count >= MAX_TEXT_CHARS {
+            break;
+        }
+        if count > 0 {
+            normal.push(' ');
+            count += 1;
+        }
+        for c in word.chars().take(MAX_TEXT_CHARS.saturating_sub(count)) {
+            normal.push(c);
+            count += 1;
+        }
+    }
+    pre_tokenize(&normal.to_lowercase())
         .into_iter()
         .map(|word| word.chars().take(MAX_WORD_CHARS).collect())
         .collect()
@@ -273,5 +284,25 @@ mod tests {
         let (ids, valid) = t.encode(&fit);
         assert_eq!(ids[CONTEXT - 1], EOS);
         assert!(valid.iter().all(|v| *v));
+    }
+
+    /// Spaces before the first word, or between words, do not use up the character allowance.
+    #[test]
+    fn leading_and_repeated_whitespace_does_not_eat_the_allowance() {
+        let padded = format!(
+            "{}cat{}dog",
+            " ".repeat(MAX_TEXT_CHARS * 2),
+            "\n".repeat(5_000)
+        );
+        assert_eq!(bounded_words(&padded), ["cat", "dog"]);
+        let vocab: HashMap<String, u32> = [("cat</w>", 5)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let t = Tokenizer::new(vocab, "");
+        assert_eq!(
+            t.encode(&format!("{}cat", " ".repeat(5_000))),
+            t.encode("cat")
+        );
     }
 }
