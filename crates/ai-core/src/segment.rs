@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::error::AiError;
 use crate::job::Output;
-use crate::payload::{Payload, PayloadKind};
+use crate::payload::Payload;
 use crate::request::Request;
 
 /// The capability id this module describes.
@@ -180,12 +180,18 @@ pub fn read_found(outputs: &[Output]) -> Option<Found> {
     })
 }
 
-/// The first image output: the mask.
+/// The media type of the mask: the contract says an inline PNG.
+pub const MASK_MEDIA_TYPE: &str = "image/png";
+
+/// The first inline PNG output: the mask. A preview in another format, or an image that is only a
+/// handle, is not the mask and is skipped.
 pub fn mask(outputs: &[Output]) -> Option<&Payload> {
-    outputs
-        .iter()
-        .map(|o| &o.payload)
-        .find(|p| p.kind() == PayloadKind::Image)
+    outputs.iter().map(|o| &o.payload).find(|p| {
+        matches!(
+            p,
+            Payload::Inline { media_type, .. } if media_type.as_str() == MASK_MEDIA_TYPE
+        )
+    })
 }
 
 #[cfg(test)]

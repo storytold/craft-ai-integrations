@@ -128,6 +128,26 @@ fn the_result_and_its_mask_read_back() {
     assert_eq!(mask(&outputs[1..]), None);
 }
 
+/// A JPEG preview or an image handle that comes before the mask is not taken for it, and an
+/// answer with only such images has no mask.
+#[test]
+fn only_an_inline_png_is_the_mask() {
+    let output = |payload: Payload| Output {
+        payload,
+        label: None,
+    };
+    let jpeg = output(Payload::inline("image/jpeg", vec![9, 9]).unwrap());
+    let handle = output(Payload::Handle(crate::payload::PayloadHandle {
+        uri: "file:///elsewhere.png".into(),
+        media_type: crate::payload::MediaType::new("image/png").unwrap(),
+        size_bytes: None,
+    }));
+    let png = output(Payload::inline("image/png", vec![1, 2, 3]).unwrap());
+    let outputs = vec![jpeg.clone(), handle.clone(), png.clone()];
+    assert_eq!(mask(&outputs), Some(&png.payload));
+    assert_eq!(mask(&[jpeg, handle]), None);
+}
+
 /// A name that is too long, blank or holds control characters, and a score outside 0 to 1, are
 /// dropped on reading, so another program cannot put them on the screen. The match stays.
 #[test]
