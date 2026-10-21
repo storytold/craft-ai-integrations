@@ -67,7 +67,7 @@ fn an_app_that_only_has_comfyui_is_advised_comfyui_and_the_built_in_ones_are_lis
         .client()
         .engine_advice(&select_subject(), &windows_nvidia());
     let providers: Vec<&str> = advice.iter().map(|a| a.provider.as_str()).collect();
-    assert_eq!(providers, ["comfyui", "candle", "burn", "rten"]);
+    assert_eq!(providers, ["comfyui", "rten", "candle", "burn"]);
     assert!(advice[0].recommended && advice[0].usable);
     assert!(advice[1..].iter().all(|a| !a.usable && !a.recommended));
 }

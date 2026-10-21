@@ -13,5 +13,6 @@ CG = [
     ('detector-file-unpinned', C + 'florence2.rs', 'revision: Some(REVISION.to_owned()),', 'revision: None,', FE, 'sam21', 'pinned_revision'),
     ('disclosure-gates-download', C + 'sam21.rs', '        url: Some(url.to_owned()),\n        accept_required: false,', '        url: Some(url.to_owned()),\n        accept_required: true,', FE, 'sam21', 'none_of_it_gates'),
     ('add-on-download-not-disclosed', C + 'sam21.rs', 'this add-on downloads it from Hugging Face by itself', 'this add-on may fetch it', FE, 'sam21', 'none_of_it_gates'),
-    ('sam21-not-offered', C + 'mod.rs', 'select.locals = vec![sam3(), sam21()];', 'select.locals = vec![sam3()];', FE, 'sam21', 'offers_sam_3_then'),
+    ('sam21-not-offered', C + 'mod.rs', 'select.locals = vec![sam21(), sam3()];', 'select.locals = vec![sam3()];', FE, 'sam21', 'offers_sam_2_1_then'),
+    ('sam3-listed-first-again', C + 'mod.rs', 'select.locals = vec![sam21(), sam3()];', 'select.locals = vec![sam3(), sam21()];', FE, 'sam21', 'offers_sam_2_1_then'),
 ]

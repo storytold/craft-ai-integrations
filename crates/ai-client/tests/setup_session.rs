@@ -5,7 +5,7 @@ use craft_ai_client::{
 };
 use craft_ai_core::{AiError, AppId};
 use craft_ai_native::{secrets::MemoryStore, shared::SharedStore};
-use native_setup_support::{feature, world};
+use native_setup_support::{candle, candle_mut, feature, sam3_mut, world};
 use std::sync::Arc;
 
 /// The client of a temporary store, whose engine factory refuses to build a model.
@@ -238,7 +238,7 @@ fn a_different_route_discards_the_approval_and_the_running_request() {
     session.accept_licences(true);
     let request = session.begin(SetupTask::Download).unwrap();
     let mut other = feature();
-    other.locals[0].native[0].models[0].filename = "other.safetensors".to_owned();
+    candle_mut(&mut other).models[0].filename = "other.safetensors".to_owned();
     let changed = desk
         .prepare_native_setup(&other, "candle", &app(&dir))
         .unwrap();
@@ -386,9 +386,9 @@ fn a_result_from_another_runtime_is_not_accepted() {
     )
     .with_factory(factory);
     let mut feature = feature();
-    let mut other = feature.locals[0].native[0].clone();
+    let mut other = candle(&feature).clone();
     other.provider = "other".into();
-    feature.locals[0].native.push(other);
+    sam3_mut(&mut feature).native.push(other);
     let candle = desk.prepare_native_setup(&feature, "candle", &app).unwrap();
     let elsewhere = desk.prepare_native_setup(&feature, "other", &app).unwrap();
     let destination = candle.destination().unwrap();

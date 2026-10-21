@@ -6,14 +6,14 @@ use craft_ai_comfy_env::{DownloadConfig, Downloader};
 use craft_ai_core::ErrorKind;
 
 mod native_setup_support;
-use native_setup_support::{feature, world};
+use native_setup_support::{candle, candle_mut, feature, sam3_mut, world};
 
 /// A recipe marked unusable gives no file list and no download destination.
 #[test]
 fn an_unusable_recipe_offers_neither_files_nor_a_download_destination() {
     let (_dir, desk, _) = world();
     let mut feature = feature();
-    feature.locals[0].usable = false;
+    sam3_mut(&mut feature).usable = false;
     assert!(desk.native_download_dir(&feature, "candle").is_err());
     assert!(desk.native_files(&feature, "candle").is_err());
 }
@@ -24,7 +24,7 @@ fn an_unusable_recipe_offers_neither_files_nor_a_download_destination() {
 fn an_unusable_first_recipe_does_not_hide_a_usable_one_from_file_setup() {
     let (_dir, desk, _) = world();
     let mut feature = feature();
-    let mut parked = feature.locals[0].clone();
+    let mut parked = sam3_mut(&mut feature).clone();
     parked.usable = false;
     parked.native.clear();
     feature.locals.insert(0, parked);
@@ -64,7 +64,7 @@ fn existing_files_are_hashed_before_the_weights_path_can_be_enabled() {
     let feature = feature();
     let directory = models.join("personal-models");
     std::fs::create_dir(&directory).unwrap();
-    for file in &feature.locals[0].native[0].models {
+    for file in &candle(&feature).models {
         std::fs::write(
             directory.join(&file.filename),
             vec![b'x'; file.size_bytes as usize],
@@ -96,7 +96,7 @@ fn a_recipe_filename_cannot_escape_the_discovered_model_directory() {
     let mut feature = feature();
     let directory = models.join("personal-models");
     std::fs::create_dir(&directory).unwrap();
-    for file in &feature.locals[0].native[0].models {
+    for file in &candle(&feature).models {
         std::fs::write(
             directory.join(&file.filename),
             vec![b'x'; file.size_bytes as usize],
@@ -104,7 +104,7 @@ fn a_recipe_filename_cannot_escape_the_discovered_model_directory() {
         .unwrap();
     }
     std::fs::write(models.join("outside.safetensors"), b"x").unwrap();
-    feature.locals[0].native[0].models[0].filename = "../outside.safetensors".into();
+    candle_mut(&mut feature).models[0].filename = "../outside.safetensors".into();
     let error = desk
         .verify_native_files(&feature, "candle", &AtomicBool::new(false), &mut |_, _| {})
         .unwrap_err();

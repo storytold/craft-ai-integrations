@@ -71,7 +71,7 @@ fn try_builtin() -> Option<Vec<Feature>> {
         ("EffectCraft", "Roto and matte"),
     ]);
     select.inputs = vec![InputRole::Source, InputRole::Prompt];
-    select.locals = vec![sam3(), sam21()];
+    select.locals = vec![sam21(), sam3()];
 
     let mut background = feature(
         "remove-background",

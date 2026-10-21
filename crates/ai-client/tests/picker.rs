@@ -299,8 +299,8 @@ fn the_local_model_is_greyed_until_a_local_connection_offers_one_for_the_tool() 
             .map(|g| (g.title.as_str(), g.state))
             .collect::<Vec<_>>(),
         [
-            ("SAM 3", GroupState::NotSetUp),
-            ("SAM 2.1", GroupState::NotSetUp)
+            ("SAM 2.1", GroupState::NotSetUp),
+            ("SAM 3", GroupState::NotSetUp)
         ]
     );
     assert!(
@@ -312,7 +312,7 @@ fn the_local_model_is_greyed_until_a_local_connection_offers_one_for_the_tool() 
     let native = view
         .groups
         .iter()
-        .find(|g| g.title.contains("built in"))
+        .find(|g| g.title.starts_with("SAM 3, built in"))
         .unwrap();
     if cfg!(feature = "candle") {
         assert_eq!(native.state, GroupState::NotSetUp);
@@ -328,10 +328,10 @@ fn the_local_model_is_greyed_until_a_local_connection_offers_one_for_the_tool() 
         links,
         [
             Some(SetupLink::New {
-                option: "local:select-subject:sam3-segment".into()
+                option: "local:select-subject:sam21-segment".into()
             }),
             Some(SetupLink::New {
-                option: "local:select-subject:sam21-segment".into()
+                option: "local:select-subject:sam3-segment".into()
             })
         ]
     );
@@ -489,13 +489,21 @@ fn an_uninstalled_local_model_carries_its_download_size_and_a_hosted_service_non
     let local = w.picker(&select_subject());
     let comfy = local.groups.iter().find(|g| g.title == "SAM 3").unwrap();
     assert_eq!(comfy.size_bytes, Some(3_449_860_632));
-    // The built-in engine downloads its own three files, not the ComfyUI checkpoint.
-    let native = local
-        .groups
-        .iter()
-        .find(|g| g.title.contains("built in"))
-        .unwrap();
-    assert_eq!(native.size_bytes, Some(3_441_325_459));
+    // Each built-in engine downloads its own files, not the ComfyUI checkpoint: Candle its three,
+    // rten SAM 2.1's two ONNX files.
+    let built_in = |title: &str| {
+        local
+            .groups
+            .iter()
+            .find(|g| g.title.starts_with(title))
+            .unwrap()
+            .size_bytes
+    };
+    assert_eq!(built_in("SAM 3, built in"), Some(3_441_325_459));
+    assert_eq!(
+        built_in("SAM 2.1, built in"),
+        Some(109_473_919 + 20_655_795)
+    );
     let hosted = w.picker(&builtin_role("generative-fill"));
     assert_eq!(hosted.groups[0].size_bytes, None);
 

@@ -32,7 +32,10 @@ fn native_files_already_present_are_ready_without_comfyui() {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    let candle = &feature.locals[0].native[0];
+    let candle = feature
+        .engine_recipe("candle")
+        .and_then(|r| r.native.iter().find(|n| n.provider == "candle"))
+        .unwrap();
     let inventory = Inventory {
         files: candle
             .models
@@ -105,21 +108,30 @@ fn a_recipe_apps_cannot_run_yet_offers_no_native_download() {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    feature.locals[0].usable = false;
+    for recipe in feature.locals.iter_mut() {
+        if recipe.workflow == "sam3-segment" {
+            recipe.usable = false;
+        }
+    }
     let plan = plan_native(&feature, "candle", &Inventory::default());
     assert_eq!(plan.state, State::NoLocalRoute);
     assert!(plan.missing_files.is_empty());
 }
 
-/// `select-subject` with a recipe that cannot run listed before the real one, and a later copy of
-/// the real one under another workflow id. Only the first usable recipe may serve a built-in
-/// runtime, the same one `enable_native` and engine advice use.
+/// `select-subject` with a SAM 3 recipe that cannot run listed before the real one, and a later
+/// copy of the real one under another workflow id. Only the first usable recipe that lists Candle
+/// may serve it, the same one `enable_native_with` and file setup use.
 fn unusable_first() -> craft_ai_features::Feature {
     let mut feature = builtin()
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    let real = feature.locals[0].clone();
+    let real = feature
+        .locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap()
+        .clone();
     let mut parked = real.clone();
     parked.usable = false;
     parked.workflow = "parked".to_owned();
@@ -190,5 +202,39 @@ fn native_options_follow_every_local_option_of_every_feature() {
     assert!(
         kinds.is_sorted(),
         "locals, then runtimes, then services: {kinds:?}"
+    );
+}
+
+/// Each built-in engine follows its own recipe: the first usable one that lists it. SAM 2.1 comes
+/// first and lists only rten, so rten plans from SAM 2.1 while Candle still plans from SAM 3, and
+/// the setup options offer both, each with its own files.
+#[test]
+fn each_engine_plans_from_the_first_usable_recipe_that_lists_it() {
+    let feature = builtin()
+        .into_iter()
+        .find(|f| f.id == "select-subject")
+        .unwrap();
+    assert_eq!(feature.engines(), ["rten", "candle", "burn"]);
+    let none = Inventory::default();
+    let rten = plan_native(&feature, "rten", &none);
+    assert_eq!(rten.recipe, "sam21-segment");
+    let names: Vec<_> = rten
+        .missing_files
+        .iter()
+        .map(|f| f.filename.as_str())
+        .collect();
+    assert_eq!(names, ["encoder.onnx", "decoder.onnx"]);
+    let candle = plan_native(&feature, "candle", &none);
+    assert_eq!(candle.recipe, "sam3-segment");
+    assert_eq!(candle.download_bytes, 3_441_325_459);
+    let options = setup_options(std::slice::from_ref(&feature));
+    let native: Vec<_> = options
+        .iter()
+        .filter(|o| matches!(o.route, Route::Native { .. }))
+        .map(|o| o.id.as_str())
+        .collect();
+    assert_eq!(
+        native,
+        ["native:select-subject:rten", "native:select-subject:candle"]
     );
 }

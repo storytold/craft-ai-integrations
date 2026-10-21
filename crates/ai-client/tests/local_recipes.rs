@@ -16,8 +16,9 @@ fn two_models() -> Feature {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    // Start from SAM 3 alone, whatever else the catalogue lists.
-    f.locals.truncate(1);
+    // Start from SAM 3 alone, found by its workflow, whatever else the catalogue lists.
+    f.locals.retain(|r| r.workflow == "sam3-segment");
+    assert_eq!(f.locals.len(), 1);
     let mut other = f.locals[0].clone();
     other.label = "Other".into();
     other.workflow = "other-segment".into();
@@ -217,7 +218,8 @@ fn a_built_in_runtime_comes_from_the_first_recipe_that_can_run() {
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
-/// The setup links the picker offers for `f`, as option ids, in catalogue order.
+/// The setup links the picker offers for `f`'s local models, as option ids, in catalogue order.
+/// Built-in engine links are left out: with an engine's cargo feature on, they appear too.
 fn setup_links(w: &World, f: &Feature) -> Vec<String> {
     let client = AiClient::new(
         AppId::new("launcher").unwrap(),
@@ -229,7 +231,7 @@ fn setup_links(w: &World, f: &Feature) -> Vec<String> {
     view.groups
         .iter()
         .filter_map(|g| match &g.setup {
-            Some(SetupLink::New { option }) => Some(option.clone()),
+            Some(SetupLink::New { option }) if option.starts_with("local:") => Some(option.clone()),
             _ => None,
         })
         .collect()

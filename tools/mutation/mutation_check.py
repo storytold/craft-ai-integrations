@@ -410,7 +410,7 @@ LC = [
     ('unrunnable-recipe-accepted', LOCAL_RS, 'feature.locals.iter().find(|r| r.usable)', 'feature.locals.iter().find(|_| true)', CL, 'local', ''),
     ('unrunnable-named-recipe-accepted', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.workflow == workflow)', CL, 'local_recipes', 'cannot_run_yet'),
     ('named-recipe-name-ignored', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.usable)', CL, 'local_recipes', ''),
-    ('second-recipe-takes-plain-id', LOCAL_RS, '.is_some_and(|first| first.workflow == recipe.workflow);', '.is_some();', CL, 'local_recipes', 'own_connection'),
+    ('second-recipe-takes-plain-id', LOCAL_RS, '            None => feature\n                .locals\n                .first()\n                .is_some_and(|first| first.workflow == recipe.workflow),', '            None => true,', CL, 'local_recipes', 'own_connection'),
     ('recipe-id-shares-runtime-namespace', LOCAL_RS, 'format!("local-{}-recipe-{}", feature.id, recipe.workflow)', 'format!("local-{}-{}", feature.id, recipe.workflow)', CL, 'local_recipes', 'built_in_runtime_never'),
     ('picker-ignores-which-recipe-is-installed', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || true)', CL, 'local_recipes', 'keeps_the_setup_link'),
     ('picker-recipe-connection-never-counts', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || false)', CL, 'local_recipes', 'setup_link'),

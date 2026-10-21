@@ -2,6 +2,7 @@
 //! catalogue says so with complete, checkable data.
 use craft_ai_features::{Feature, Source};
 
+/// The built-in `select-subject` feature.
 fn select_subject() -> Feature {
     craft_ai_features::builtin()
         .into_iter()
@@ -9,10 +10,13 @@ fn select_subject() -> Feature {
         .unwrap()
 }
 
+/// Candle's recipe is SAM 3, and its runtime names its own weights and tokenizer files in one
+/// folder, each pinned, hashed and behind the licence, not the ComfyUI checkpoint.
 #[test]
 fn every_built_in_sam3_runtime_names_its_own_complete_files() {
     let feature = select_subject();
-    let recipe = feature.locals.first().unwrap();
+    let recipe = feature.engine_recipe("candle").unwrap();
+    assert_eq!(recipe.workflow, "sam3-segment");
     let comfy: Vec<&str> = recipe.models.iter().map(|m| m.filename.as_str()).collect();
     for route in recipe.native.iter().filter(|r| r.provider == "candle") {
         let weights = route.weights().unwrap();
@@ -42,6 +46,7 @@ fn every_built_in_sam3_runtime_names_its_own_complete_files() {
     }
 }
 
+/// A route with its files cleared has no weights file and nothing to download.
 #[test]
 fn a_route_without_files_of_its_own_has_no_weights() {
     let feature = select_subject();
@@ -51,10 +56,11 @@ fn a_route_without_files_of_its_own_has_no_weights() {
     assert_eq!(route.total_bytes(), 0);
 }
 
+/// The Burn slot names no files, so it has no weights and nothing to download.
 #[test]
 fn a_runtime_with_no_code_yet_offers_no_download() {
     let feature = select_subject();
-    let recipe = feature.locals.first().unwrap();
+    let recipe = feature.engine_recipe("burn").unwrap();
     let burn = recipe.native.iter().find(|r| r.provider == "burn").unwrap();
     assert!(burn.models.is_empty() && burn.weights().is_none());
     assert_eq!(burn.total_bytes(), 0);

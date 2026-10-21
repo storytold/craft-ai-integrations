@@ -6,7 +6,7 @@ mod support;
 use craft_ai_client::NativeInstall;
 use craft_ai_comfy_env::{DownloadConfig, Downloader};
 use craft_ai_features::{Feature, Source, State, plan_native};
-use native_setup_support::{feature, world};
+use native_setup_support::{candle, candle_mut, feature, world};
 use std::sync::atomic::AtomicBool;
 use support::{Reply, Server};
 
@@ -35,7 +35,7 @@ fn serving(corrupt: bool) -> Server {
 /// The test feature with every native file pointed at the scripted server.
 fn from_server(server: &Server) -> Feature {
     let mut feature = feature();
-    for model in &mut feature.locals[0].native[0].models {
+    for model in &mut candle_mut(&mut feature).models {
         model.source = Source::Url {
             url: format!("{}/{}", server.url, model.filename),
         };
@@ -99,7 +99,7 @@ fn all_declared_files_download_verify_and_can_be_reused_without_another_request(
         )
         .unwrap();
     assert_eq!(server.count(), 3);
-    for (index, model) in feature.locals[0].native[0].models.iter().enumerate() {
+    for (index, model) in candle(&feature).models.iter().enumerate() {
         assert_eq!(
             std::fs::read(directory.join(&model.filename)).unwrap(),
             vec![b'x'; model.size_bytes as usize]

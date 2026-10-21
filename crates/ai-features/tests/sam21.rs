@@ -3,7 +3,7 @@
 
 use craft_ai_features::{
     FLORENCE2_LARGE_DIR, Feature, InstalledFile, Inventory, LocalRecipe, Source, State, builtin,
-    plans,
+    plan, plans,
 };
 
 /// The built-in Select subject feature.
@@ -22,9 +22,12 @@ fn sam21(f: &Feature) -> &LocalRecipe {
         .unwrap()
 }
 
-/// Select subject lists SAM 3 first, then SAM 2.1, and both are marked usable by apps.
+/// Select subject lists SAM 2.1 first, then SAM 3, and both are marked usable by apps. SAM 2.1
+/// leads because of its licence: Meta releases it under Apache 2.0, while SAM 3 is under the SAM
+/// License behind a gated download. The first recipe is the one a plain plan, `enable_local` and
+/// the plain built-in offer use, so it is the starter a newcomer is offered.
 #[test]
-fn select_subject_offers_sam_3_then_sam_2_1_and_apps_can_run_both() {
+fn select_subject_offers_sam_2_1_then_sam_3_and_apps_can_run_both() {
     let f = select_subject();
     let listed: Vec<_> = f
         .locals
@@ -34,9 +37,21 @@ fn select_subject_offers_sam_3_then_sam_2_1_and_apps_can_run_both() {
     assert_eq!(
         listed,
         [
-            ("SAM 3", "sam3-segment", true),
-            ("SAM 2.1", "sam21-segment", true)
+            ("SAM 2.1", "sam21-segment", true),
+            ("SAM 3", "sam3-segment", true)
         ]
+    );
+    assert_eq!(
+        f.first_usable_recipe().map(|r| r.workflow.as_str()),
+        Some("sam21-segment")
+    );
+    assert_eq!(plan(&f, &Inventory::default()).recipe, "sam21-segment");
+    assert!(
+        f.locals[0]
+            .models
+            .iter()
+            .all(|m| !m.licence.accept_required),
+        "the starter asks no one to accept a licence"
     );
 }
 
@@ -129,7 +144,12 @@ fn every_part_of_the_workflow_is_disclosed_and_none_of_it_gates_anything() {
     // The readiness scan compares names and sizes only, so the note must not claim a hash check.
     assert!(!note.contains("is checked before"), "{note}");
     // A recipe whose parts have not been reviewed lists none rather than implying a clean bill.
-    assert!(f.locals[0].components.is_empty());
+    let sam3 = f
+        .locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap();
+    assert!(sam3.components.is_empty());
 }
 
 /// SAM 2.1 plans as Ready only with the checkpoint, every detector file and both node packs; a

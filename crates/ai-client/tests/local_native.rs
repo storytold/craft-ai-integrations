@@ -1,5 +1,6 @@
-//! One SAM 3 weights file, two runtimes: the launcher registers the built-in (Candle) route next to the
-//! ComfyUI one, both for the same tool, and an app reads the exact file it is meant to load.
+//! Built-in runtimes beside the ComfyUI route: the launcher registers a built-in route (rten for SAM
+//! 2.1 by default, Candle for SAM 3 when asked) next to the ComfyUI one, both for the same tool, and
+//! an app reads the exact file it is meant to load.
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -52,29 +53,32 @@ impl World {
     }
 }
 
-/// Registering the Candle route binds the tool and an app reads the exact weights file back, with
-/// no address.
+/// The plain call registers and binds the first recipe's first runtime, SAM 2.1 on rten, with
+/// the weights file it was given, and an app reads that route with no address.
 #[test]
 fn the_native_route_is_registered_bound_and_carries_the_file() {
     let w = World::new();
-    let file = w.weights("sam3.safetensors");
+    let file = w.weights("encoder.onnx");
     let done = w
         .desk("launcher")
         .enable_native(&feature("select-subject"), &file)
         .unwrap();
     assert!(done.bound);
-    assert_eq!(done.connection.as_str(), "local-select-subject-candle");
-    assert_eq!(done.model.as_str(), "sam3");
+    // The plain call takes the first recipe's first runtime: SAM 2.1 on rten, reading the ONNX
+    // encoder file.
+    assert_eq!(done.connection.as_str(), "local-select-subject-rten");
+    assert_eq!(done.model.as_str(), "sam21");
     let route = w
         .client("lightcraft")
         .local_route_for(&role())
         .unwrap()
         .unwrap();
-    assert_eq!(route.provider, "candle");
+    assert_eq!(route.provider, "rten");
     assert_eq!(route.endpoint, None);
     assert_eq!(route.file.as_deref(), file.to_str());
 }
 
+/// Two apps read the one weights file Candle was registered with.
 /// SAM 2.1 on rten reads published `.onnx` files: the encoder file is accepted as the weights,
 /// registered under the rten connection and bound, and an app reads that exact file back.
 #[test]
@@ -103,7 +107,7 @@ fn two_apps_read_the_same_file() {
     let w = World::new();
     let file = w.weights("sam3.safetensors");
     w.desk("launcher")
-        .enable_native(&feature("select-subject"), &file)
+        .enable_native_with(&feature("select-subject"), "candle", &file)
         .unwrap();
     for app in ["lightcraft", "photocraft"] {
         assert_eq!(
@@ -194,12 +198,16 @@ fn a_choice_already_made_is_left_alone_and_both_routes_are_registered() {
 fn registering_again_moves_the_file_and_keeps_one_connection() {
     let w = World::new();
     w.desk("launcher")
-        .enable_native(&feature("select-subject"), &w.weights("old.safetensors"))
+        .enable_native_with(
+            &feature("select-subject"),
+            "candle",
+            &w.weights("old.safetensors"),
+        )
         .unwrap();
     let new = w.weights("new.safetensors");
     let done = w
         .desk("launcher")
-        .enable_native(&feature("select-subject"), &new)
+        .enable_native_with(&feature("select-subject"), "candle", &new)
         .unwrap();
     assert!(!done.bound, "already bound by the first call");
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
@@ -211,7 +219,8 @@ fn registering_again_moves_the_file_and_keeps_one_connection() {
     );
 }
 
-/// A missing file, a folder and a wrong extension are each refused and nothing is registered.
+/// A missing file, a folder, a wrong extension and a relative path are each refused and nothing is
+/// registered.
 #[test]
 fn a_file_that_cannot_be_the_weights_is_refused_and_nothing_is_written() {
     let w = World::new();
@@ -247,11 +256,13 @@ fn a_relative_path_is_refused_even_when_it_points_at_a_real_file() {
     assert!(w.shared.load().unwrap().connections.is_empty());
 }
 
-/// With no recipe able to run, or none with a built-in route, the runtime is refused and nothing is
-/// written.
+/// A feature with no usable recipe, or with no built-in route, refuses the built-in runtime and
+/// writes nothing.
 #[test]
 fn a_runtime_that_is_not_ready_to_use_is_refused() {
     let w = World::new();
+    // No recipe that can run: nothing to register. (A later recipe that can run is used instead,
+    // see `the_next_recipe_that_can_run_supplies_the_built_in_runtime`.)
     let mut f = feature("select-subject");
     f.locals.iter_mut().for_each(|r| r.usable = false);
     assert!(
@@ -267,6 +278,44 @@ fn a_runtime_that_is_not_ready_to_use_is_refused() {
             .is_err()
     );
     assert!(w.shared.load().unwrap().connections.is_empty());
+}
+
+/// With SAM 2.1 unable to run, the plain call registers SAM 3's first runtime, Candle; rten,
+/// listed only by SAM 2.1, is refused, and a file of neither kind writes nothing.
+#[test]
+fn the_next_recipe_that_can_run_supplies_the_built_in_runtime() {
+    let w = World::new();
+    let mut f = feature("select-subject");
+    assert_eq!(f.locals[0].workflow, "sam21-segment");
+    f.locals[0].usable = false;
+    // SAM 2.1 cannot run, so the built-in runtime is the first one SAM 3 lists, Candle.
+    let weights = w.weights("sam3.safetensors");
+    let enabled = w.desk("launcher").enable_native(&f, &weights).unwrap();
+    let store = w.shared.load().unwrap();
+    let connection = store
+        .connections
+        .iter()
+        .find(|c| c.provider == "candle")
+        .expect("the candle connection is saved");
+    assert_eq!(connection.models[0].id.as_str(), "sam3");
+    assert_eq!(
+        connection.models[0].local_file.as_deref(),
+        weights.to_str(),
+        "{enabled:?}"
+    );
+    // rten is listed only by SAM 2.1, which cannot run, so it is refused.
+    assert!(
+        w.desk("launcher")
+            .enable_native_with(&f, "rten", &w.weights("encoder.onnx"))
+            .is_err()
+    );
+    // A file that is neither kind is still refused, and nothing more is written.
+    assert!(
+        w.desk("launcher")
+            .enable_native(&f, &w.weights("encoder.bin"))
+            .is_err()
+    );
+    assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
 /// Every other tool refuses a built-in runtime and writes nothing.
@@ -293,7 +342,7 @@ fn a_file_that_vanished_is_an_error_not_unbound() {
     let w = World::new();
     let file = w.weights("sam3.safetensors");
     w.desk("launcher")
-        .enable_native(&feature("select-subject"), &file)
+        .enable_native_with(&feature("select-subject"), "candle", &file)
         .unwrap();
     std::fs::remove_file(&file).unwrap();
     let error = w
@@ -307,8 +356,8 @@ fn a_file_that_vanished_is_an_error_not_unbound() {
     );
 }
 
-/// With the ComfyUI model and the built-in runtime both registered, the picker lists two groups
-/// with different titles, one of them saying "built in".
+/// With the ComfyUI model and a built-in runtime both registered, the picker lists them as separate
+/// groups with different titles, one of them saying "built in".
 #[test]
 fn the_picker_offers_the_two_runtimes_of_one_model_side_by_side() {
     let w = World::new();
@@ -328,8 +377,6 @@ fn the_picker_offers_the_two_runtimes_of_one_model_side_by_side() {
     assert!(titles.iter().any(|t| t.contains("built in")), "{titles:?}");
 }
 
-/// A model saved before `local_file` existed loads with none, and the field is not written out when
-/// it is absent.
 #[test]
 fn old_stores_without_the_field_load_and_it_is_not_written_when_absent() {
     let json = r#"{"id":"sam3","label":"SAM 3"}"#;

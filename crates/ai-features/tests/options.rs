@@ -1,17 +1,19 @@
 use craft_ai_core::PRESETS;
 use craft_ai_features::{Route, builtin, setup_options};
 
+/// The options start with the local models in catalogue order, SAM 2.1 first and usable, and
+/// every option id is unique.
 #[test]
 fn options_are_derived_from_the_features_not_written_twice() {
     let features = builtin();
     let options = setup_options(&features);
-    // One local model (SAM 3), then hosted services.
+    // The local models in catalogue order (SAM 2.1 first), then built-in runtimes and services.
     assert!(
-        matches!(&options[0].route, Route::Local { feature, recipe } if feature == "select-subject" && recipe == "sam3-segment")
+        matches!(&options[0].route, Route::Local { feature, recipe } if feature == "select-subject" && recipe == "sam21-segment")
     );
-    assert_eq!(options[0].title, "SAM 3");
+    assert_eq!(options[0].title, "SAM 2.1");
     assert_eq!(options[0].unlocks, ["select-subject"]);
-    assert!(options[0].usable, "PhotoCraft runs SAM 3 today");
+    assert!(options[0].usable, "PhotoCraft runs SAM 2.1 today");
     assert!(options.iter().skip(1).all(|o| o.usable));
     // Ids are unique.
     let mut ids: Vec<_> = options.iter().map(|o| o.id.clone()).collect();

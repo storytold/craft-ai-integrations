@@ -12,6 +12,7 @@ use craft_ai_native::shared::SharedStore;
 
 const SAM3_URL: &str = "http://127.0.0.1:8000";
 
+/// The built-in `select-subject` feature.
 fn feature() -> Feature {
     craft_ai_features::builtin()
         .into_iter()
@@ -19,6 +20,7 @@ fn feature() -> Feature {
         .unwrap()
 }
 
+/// The role of the feature under test.
 fn role() -> Role {
     feature().role().unwrap()
 }
@@ -29,15 +31,18 @@ struct World {
 }
 
 impl World {
+    /// An empty shared store in a temporary folder.
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let shared = SharedStore::new(dir.path().join("connections.json"));
         shared.replace(&StoreFile::default()).unwrap();
         Self { dir, shared }
     }
+    /// A `ToolDesk` acting as the launcher over the shared store of the test world.
     fn desk(&self) -> ToolDesk {
         ToolDesk::new(self.client("launcher"), self.shared.clone(), None)
     }
+    /// An `AiClient` for the app `app` over the shared store of the test world.
     fn client(&self, app: &str) -> AiClient {
         AiClient::new(
             AppId::new(app).unwrap(),
@@ -45,6 +50,7 @@ impl World {
             Arc::new(MemoryStore::new()),
         )
     }
+    /// Writes a stand-in weights file in the world's folder and returns its path.
     fn weights(&self) -> PathBuf {
         let p = self.dir.path().join("sam3.safetensors");
         std::fs::write(&p, b"not really weights").unwrap();
@@ -52,10 +58,13 @@ impl World {
     }
 }
 
+/// The recipe that serves Candle (SAM 3) lists Candle, then the Burn slot.
 #[test]
 fn the_catalogue_lists_candle_then_burn_for_select_subject() {
     let f = feature();
-    let providers: Vec<&str> = f.locals[0]
+    let providers: Vec<&str> = f
+        .engine_recipe("candle")
+        .unwrap()
         .native
         .iter()
         .map(|n| n.provider.as_str())
@@ -63,11 +72,16 @@ fn the_catalogue_lists_candle_then_burn_for_select_subject() {
     assert_eq!(providers, ["candle", "burn"]);
 }
 
+/// Burn registers its own connection beside Candle's, reading the same weights file, and leaves
+/// the binding Candle made alone.
 #[test]
 fn burn_is_registered_beside_candle_without_taking_the_binding() {
     let w = World::new();
     let file = w.weights();
-    let first = w.desk().enable_native(&feature(), &file).unwrap();
+    let first = w
+        .desk()
+        .enable_native_with(&feature(), "candle", &file)
+        .unwrap();
     let burn = w
         .desk()
         .enable_native_with(&feature(), "burn", &file)
@@ -94,6 +108,8 @@ fn burn_is_registered_beside_candle_without_taking_the_binding() {
     );
 }
 
+/// A tool bound to the Burn slot reads back as Burn with its weights file, and the Candle and
+/// ComfyUI lookups refuse it in plain words.
 #[test]
 fn a_tool_bound_to_burn_is_read_as_burn_and_refused_by_the_other_adapters() {
     let w = World::new();
@@ -125,6 +141,8 @@ fn a_tool_bound_to_burn_is_read_as_burn_and_refused_by_the_other_adapters() {
     }
 }
 
+/// With the Burn slot chosen and no app holding an adapter for it, the app's status says it cannot
+/// run the model and the picker lists the route greyed.
 #[test]
 fn an_app_without_a_burn_adapter_is_not_ready_and_the_picker_says_so() {
     let w = World::new();
@@ -153,12 +171,16 @@ fn an_app_without_a_burn_adapter_is_not_ready_and_the_picker_says_so() {
     );
 }
 
+/// With ComfyUI, Candle and Burn all registered, the picker shows three groups a person can
+/// tell apart by their titles.
 #[test]
 fn the_picker_shows_comfyui_candle_and_burn_as_three_different_choices() {
     let w = World::new();
     let file = w.weights();
     w.desk().enable_local(&feature(), SAM3_URL).unwrap();
-    w.desk().enable_native(&feature(), &file).unwrap();
+    w.desk()
+        .enable_native_with(&feature(), "candle", &file)
+        .unwrap();
     w.desk()
         .enable_native_with(&feature(), "burn", &file)
         .unwrap();

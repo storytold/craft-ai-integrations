@@ -291,13 +291,31 @@ fn removing_the_last_folder_leaves_none_not_the_old_list() {
     );
 }
 
-/// The built-in `select-subject` feature with tiny file sizes, so tests can write real files cheaply.
+/// The Candle route of `feature`, from that engine's own recipe (SAM 3), never by position.
+fn candle(feature: &craft_ai_features::Feature) -> &craft_ai_features::NativeRoute {
+    feature
+        .engine_recipe("candle")
+        .and_then(|r| r.native.iter().find(|n| n.provider == "candle"))
+        .unwrap()
+}
+
+/// [`candle`], to change for one test.
+fn candle_mut(feature: &mut craft_ai_features::Feature) -> &mut craft_ai_features::NativeRoute {
+    feature
+        .locals
+        .iter_mut()
+        .find(|r| r.workflow == "sam3-segment")
+        .and_then(|r| r.native.iter_mut().find(|n| n.provider == "candle"))
+        .unwrap()
+}
+
+/// The built-in `select-subject` feature with Candle's files given tiny sizes, so tests can write real files cheaply.
 fn small_native_feature() -> craft_ai_features::Feature {
     let mut feature = builtin()
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    let route = &mut feature.locals[0].native[0];
+    let route = candle_mut(&mut feature);
     for (index, model) in route.models.iter_mut().enumerate() {
         model.size_bytes = (index + 1) as u64;
     }
@@ -310,7 +328,7 @@ fn finds_a_complete_native_model_in_an_arbitrary_layout_without_comfyui() {
     let w = world();
     let feature = small_native_feature();
     let directory = w.models.path().join("personal/models/hugging-face");
-    for model in &feature.locals[0].native[0].models {
+    for model in &candle(&feature).models {
         write(
             &directory,
             &model.filename,
@@ -332,7 +350,7 @@ fn finds_a_complete_native_model_in_an_arbitrary_layout_without_comfyui() {
 fn native_files_in_separate_directories_do_not_count_as_a_working_model() {
     let w = world();
     let feature = small_native_feature();
-    let models = &feature.locals[0].native[0].models;
+    let models = &candle(&feature).models;
     let a = w.models.path().join("first");
     let b = w.models.path().join("second");
     write(&a, &models[0].filename, b"x");
@@ -356,7 +374,7 @@ fn a_registered_folder_that_has_gone_does_not_stop_native_discovery() {
     let w = world();
     let feature = small_native_feature();
     let directory = w.models.path().join("kept");
-    for model in &feature.locals[0].native[0].models {
+    for model in &candle(&feature).models {
         write(
             &directory,
             &model.filename,
@@ -412,7 +430,7 @@ fn native_install_requires_licence_and_rehashes_existing_files() {
         "5dde896887f6754c9b15bfe3a441ae4806df2fde94001311e08bf110622e0bbe",
         "cd2eb0837c9b4c962c22d2ff8b5441b7b45805887f051d39bf133b583baf6860",
     ];
-    for (model, hash) in feature.locals[0].native[0].models.iter_mut().zip(hashes) {
+    for (model, hash) in candle_mut(&mut feature).models.iter_mut().zip(hashes) {
         model.sha256 = hash.into();
     }
     let destination = d.native_download_dir(&feature, "candle").unwrap();
@@ -437,7 +455,7 @@ fn native_install_requires_licence_and_rehashes_existing_files() {
         !destination.exists(),
         "declining a licence must leave the disk untouched"
     );
-    for model in &feature.locals[0].native[0].models {
+    for model in &candle(&feature).models {
         write(
             &destination,
             &model.filename,

@@ -91,10 +91,13 @@ impl ToolDesk {
         self.enable_recipe(feature, recipe, endpoint)
     }
 
-    /// One recipe becomes one connection offering its model. The first recipe keeps the plain
-    /// `local-<feature>` connection id, so a choice saved by an earlier build still points at it.
-    /// Every other recipe gets `local-<feature>-recipe-<workflow>`: built-in runtimes already use
-    /// `local-<feature>-<provider>`, and a recipe named like one (`candle`) must never replace it.
+    /// One recipe becomes one connection offering its model. The plain `local-<feature>` id goes
+    /// to the recipe that already holds it in the store, or, when no connection has it yet, to the
+    /// first recipe. So a choice saved by an earlier build, when another recipe came first (SAM 3
+    /// before SAM 2.1), still points at its model, and that recipe keeps updating the same
+    /// connection. Every other recipe gets `local-<feature>-recipe-<workflow>`: built-in runtimes
+    /// already use `local-<feature>-<provider>`, and a recipe named like one (`candle`) must never
+    /// replace it.
     fn enable_recipe(
         &self,
         feature: &Feature,
@@ -105,12 +108,20 @@ impl ToolDesk {
             .role()
             .ok_or_else(|| AiError::invalid("the tool id is not valid"))?;
         let address = local_address(endpoint)?;
-        let primary = feature
-            .locals
-            .first()
-            .is_some_and(|first| first.workflow == recipe.workflow);
+        let plain = format!("local-{}", feature.id);
+        let store = self.shared.load()?;
+        let primary = match store.connections.iter().find(|c| c.id.as_str() == plain) {
+            Some(held) => {
+                held.provider == "comfyui"
+                    && held.models.iter().any(|m| m.id.as_str() == recipe.workflow)
+            }
+            None => feature
+                .locals
+                .first()
+                .is_some_and(|first| first.workflow == recipe.workflow),
+        };
         let id = if primary {
-            ConnectionId::new(format!("local-{}", feature.id))
+            ConnectionId::new(plain)
         } else {
             ConnectionId::new(format!("local-{}-recipe-{}", feature.id, recipe.workflow))
         }

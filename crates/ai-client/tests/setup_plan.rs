@@ -4,7 +4,7 @@ use craft_ai_client::{AiClient, EngineRegistry, ProviderFactory};
 use craft_ai_core::AppId;
 use craft_ai_engine::testing::FakeRunner;
 use craft_ai_native::{secrets::MemoryStore, shared::SharedStore};
-use native_setup_support::{feature, world};
+use native_setup_support::{candle, feature, world};
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// An app client whose factory has a fake `candle` engine registered.
@@ -28,7 +28,7 @@ fn the_download_size_counts_only_files_in_the_reviewed_destination() {
     let elsewhere = dir.path().join("existing");
     std::fs::create_dir(&elsewhere).unwrap();
     let feature = feature();
-    let files = &feature.locals[0].native[0].models;
+    let files = &candle(&feature).models;
     std::fs::write(elsewhere.join(&files[0].filename), b"x").unwrap();
     desk.add(&elsewhere, None).unwrap();
     let plan = desk
@@ -46,7 +46,7 @@ fn the_download_size_counts_only_files_in_the_reviewed_destination() {
 fn a_reviewed_existing_model_is_hashed_without_writing_a_binding() {
     let (dir, desk, models) = world();
     let feature = feature();
-    for (i, file) in feature.locals[0].native[0].models.iter().enumerate() {
+    for (i, file) in candle(&feature).models.iter().enumerate() {
         std::fs::write(models.join(&file.filename), vec![b'x'; i + 1]).unwrap();
     }
     let plan = desk
@@ -75,9 +75,9 @@ fn a_reviewed_existing_model_is_hashed_without_writing_a_binding() {
 fn a_prepared_download_keeps_the_destination_the_person_reviewed() {
     let (dir, desk, models) = world();
     let feature = feature();
-    let destination = models.join(&feature.locals[0].native[0].models[0].folder);
+    let destination = models.join(&candle(&feature).models[0].folder);
     std::fs::create_dir(&destination).unwrap();
-    for (i, file) in feature.locals[0].native[0].models.iter().enumerate() {
+    for (i, file) in candle(&feature).models.iter().enumerate() {
         std::fs::write(destination.join(&file.filename), vec![b'x'; i + 1]).unwrap();
     }
     let plan = desk

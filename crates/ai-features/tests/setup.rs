@@ -61,7 +61,12 @@ fn a_native_offer_is_for_the_selected_provider_not_any_built_in_engine() {
 fn a_native_offer_skips_an_unusable_first_recipe() {
     let profile = pc(Os::Windows, vec![]);
     let mut feature = select_subject();
-    let real = feature.locals[0].clone();
+    let real = feature
+        .locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap()
+        .clone();
     let mut parked = real.clone();
     parked.usable = false;
     parked.native.clear();
@@ -70,19 +75,31 @@ fn a_native_offer_skips_an_unusable_first_recipe() {
     assert_eq!(kinds(&candle), [StepKind::Model; 3]);
 }
 
+/// The plain built-in offer (no engine named) is for the first recipe that can run: with SAM 2.1
+/// unable to run, it is SAM 3's first engine with files, Candle, and its three files.
+#[test]
+fn a_plain_built_in_offer_skips_an_unusable_first_recipe() {
+    let mut feature = select_subject();
+    assert_eq!(feature.locals[0].workflow, "sam21-segment");
+    feature.locals[0].usable = false;
+    let profile = pc(Os::Windows, vec![]);
+    let o = setup_offer(&feature, &profile, &empty(), SetupRoute::BuiltIn).unwrap();
+    assert_eq!(kinds(&o), [StepKind::Model; 3]);
+    assert_eq!(o.download_bytes, 3_441_325_459);
+}
+
+/// The ComfyUI offer is for the first recipe, SAM 2.1: ComfyUI, the add-ons, one step per model
+/// file (the checkpoint and the ten detector files), then Finish.
 #[test]
 fn a_windows_pc_with_nothing_gets_the_whole_list_in_order() {
     let p = pc(Os::Windows, vec![card(GpuVendor::Nvidia, "RTX 3090")]);
     let o = offer(&p, &empty(), SetupRoute::ComfyUi).unwrap();
-    assert_eq!(
-        kinds(&o),
-        [
-            StepKind::ComfyUi,
-            StepKind::Tools,
-            StepKind::Model,
-            StepKind::Finish
-        ]
-    );
+    let recipe = select_subject().locals[0].clone();
+    assert_eq!(recipe.workflow, "sam21-segment");
+    let mut expected = vec![StepKind::ComfyUi, StepKind::Tools];
+    expected.extend(recipe.models.iter().map(|_| StepKind::Model));
+    expected.push(StepKind::Finish);
+    assert_eq!(kinds(&o), expected);
     assert!(o.can_install(), "{:?}", o.blockers);
     assert_eq!(
         o.portable.as_ref().unwrap().asset,
@@ -90,14 +107,16 @@ fn a_windows_pc_with_nothing_gets_the_whole_list_in_order() {
     );
     let sum: u64 = o.steps.iter().map(|s| s.download_bytes).sum();
     assert_eq!(o.download_bytes, sum);
-    assert!(o.download_bytes > 5_000_000_000, "{}", o.download_bytes);
+    let build = o.portable.as_ref().unwrap().size_bytes;
+    assert_eq!(o.download_bytes, build + recipe.total_bytes());
     assert_eq!(o.agreement, agreement());
-    assert!(
-        !o.licences.is_empty(),
-        "the model's licence is part of the click"
-    );
+    // SAM 2.1 (Apache 2.0) and Florence-2 (MIT) ask no one to accept a licence first; the
+    // agreement still says the files come with their own terms.
+    assert!(o.licences.is_empty(), "{:?}", o.licences);
 }
 
+/// The portable ComfyUI build follows the graphics card, with NVIDIA first, and an older NVIDIA
+/// card gets the older build.
 #[test]
 fn the_build_follows_the_card_nvidia_first_and_older_cards_get_the_older_build() {
     let asset = |gpus: Vec<Gpu>| portable_for(&pc(Os::Windows, gpus)).unwrap().asset;
@@ -136,6 +155,8 @@ fn the_build_follows_the_card_nvidia_first_and_older_cards_get_the_older_build()
     );
 }
 
+/// For every kind of graphics card, the portable ComfyUI download names the pinned release, a
+/// lowercase SHA-256 and a size over a gigabyte.
 #[test]
 fn the_download_is_pinned_and_checkable() {
     for gpus in [
@@ -163,6 +184,8 @@ fn the_download_is_pinned_and_checkable() {
     }
 }
 
+/// Linux, macOS and other systems get no ComfyUI build: plain steps pointing at comfy.org and
+/// no Install button.
 #[test]
 fn other_systems_get_plain_steps_and_no_install_button() {
     for os in [Os::Linux, Os::MacOs, Os::Other] {
@@ -175,24 +198,25 @@ fn other_systems_get_plain_steps_and_no_install_button() {
     }
 }
 
-/// The built-in route needs only the runtime's own three files: no ComfyUI, no node packs, and the
-/// one licence to accept, on any system.
+/// The plain built-in route is the first recipe's first engine with files, SAM 2.1 on rten: its
+/// two own files, no ComfyUI, no node packs and no licence to accept, on any system.
 #[test]
 fn the_built_in_route_needs_only_the_model() {
     let p = pc(Os::Windows, vec![card(GpuVendor::Nvidia, "RTX 3090")]);
     let o = offer(&p, &empty(), SetupRoute::BuiltIn).unwrap();
-    assert_eq!(kinds(&o), [StepKind::Model; 3]);
-    assert_eq!(o.download_bytes, 3_441_325_459);
-    assert_eq!(o.licences.len(), 1);
-    assert_eq!(o.licences[0].name, "Meta SAM License");
+    assert_eq!(kinds(&o), [StepKind::Model; 2]);
+    assert_eq!(o.download_bytes, 109_473_919 + 20_655_795);
+    assert!(o.licences.is_empty(), "{:?}", o.licences);
     assert!(o.portable.is_none() && o.manual_steps.is_empty());
     assert!(o.can_install());
     // Even on a system with no ComfyUI build at all.
     let o = offer(&pc(Os::Linux, vec![]), &empty(), SetupRoute::BuiltIn).unwrap();
-    assert_eq!(kinds(&o), [StepKind::Model; 3]);
+    assert_eq!(kinds(&o), [StepKind::Model; 2]);
     assert!(o.can_install());
 }
 
+/// Files and add-ons the first recipe already has are not offered again: with everything there
+/// no offer, without the add-ons only Tools, without the files only their Model steps.
 #[test]
 fn what_is_already_there_is_not_offered_again() {
     let f = select_subject();
@@ -230,7 +254,7 @@ fn what_is_already_there_is_not_offered_again() {
         ..have_model
     };
     let o = setup_offer(&f, &p, &no_model, SetupRoute::ComfyUi).unwrap();
-    assert_eq!(kinds(&o), [StepKind::Model]);
+    assert_eq!(kinds(&o), vec![StepKind::Model; recipe.models.len()]);
 }
 
 #[test]

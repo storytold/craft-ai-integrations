@@ -1,5 +1,5 @@
 use craft_ai_comfy_env::{ComfyInstall, parse_extra_paths, scan};
-use craft_ai_features::{State, builtin, plan};
+use craft_ai_features::{Feature, Inventory, Plan, State, builtin, plan, plans};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -76,6 +76,8 @@ fn the_scan_lists_model_files_small_bundle_files_and_node_packs() {
     assert_eq!(inv.node_folders, ["comfyui-sam3"]);
 }
 
+/// The desktop config gives the base folder, and its extra model-paths file adds the shared
+/// folders.
 #[test]
 fn desktop_config_gives_the_base_folder_and_extra_model_paths() {
     let dir = tree();
@@ -112,6 +114,7 @@ fn desktop_config_gives_the_base_folder_and_extra_model_paths() {
     assert!(inv.files.iter().any(|f| f.folder == "sam3"));
 }
 
+/// A missing, unreadable, dangling or mistyped desktop config gives no install.
 #[test]
 fn a_missing_or_broken_desktop_config_finds_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -128,6 +131,8 @@ fn a_missing_or_broken_desktop_config_finds_nothing() {
     assert!(ComfyInstall::discover_in(dir.path()).is_none());
 }
 
+/// The model-paths file is read in any key order; missing folders and folders that escape the base
+/// are dropped; empty and malformed text give nothing.
 #[test]
 fn the_yaml_subset_is_read_in_any_order_and_unsafe_paths_are_dropped() {
     let dir = tempfile::tempdir().unwrap();
@@ -154,6 +159,8 @@ fn the_yaml_subset_is_read_in_any_order_and_unsafe_paths_are_dropped() {
     assert!(parse_extra_paths("::::\n  : :\n\t\n").is_empty());
 }
 
+/// A model folder name maps to the folder that exists or a new one under `models`, and a name that
+/// could leave `models` gives none.
 #[test]
 fn new_files_go_to_the_known_folder_or_a_new_one_and_never_outside() {
     let dir = tree();
@@ -176,6 +183,8 @@ fn new_files_go_to_the_known_folder_or_a_new_one_and_never_outside() {
     }
 }
 
+/// A sparse file of SAM 3's exact size in the right folder, with its node pack, turns its plan
+/// from NeedsInstall into Ready.
 #[test]
 fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
     let dir = tempfile::tempdir().unwrap();
@@ -184,11 +193,21 @@ fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    let model = select.locals[0].models[0].clone();
+    // SAM 3's one checkpoint, found by its workflow (SAM 2.1 is listed first).
+    let model = select
+        .locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap()
+        .models[0]
+        .clone();
     fs::create_dir_all(base.join("models")).unwrap();
     fs::create_dir_all(base.join("custom_nodes/comfyui-sam3")).unwrap();
     let install = ComfyInstall::at(&base).unwrap();
-    assert_eq!(plan(&select, &scan(&install)).state, State::NeedsInstall);
+    assert_eq!(
+        sam3_plan(&select, &scan(&install)).state,
+        State::NeedsInstall
+    );
     // A sparse file of exactly the right size stands in for the 3.4 GB model.
     let path = base.join("models/sam3").join(&model.filename);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -197,7 +216,15 @@ fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
         .set_len(model.size_bytes)
         .unwrap();
     let install = ComfyInstall::at(&base).unwrap();
-    assert_eq!(plan(&select, &scan(&install)).state, State::Ready);
+    assert_eq!(sam3_plan(&select, &scan(&install)).state, State::Ready);
+}
+
+/// The plan for the SAM 3 recipe of `select` on `inventory`, picked from [`plans`] by name.
+fn sam3_plan(select: &Feature, inventory: &Inventory) -> Plan {
+    plans(select, inventory)
+        .into_iter()
+        .find(|p| p.recipe == "sam3-segment")
+        .unwrap()
 }
 
 /// Reads the real ComfyUI Desktop install of the person running the test. Run explicitly:
