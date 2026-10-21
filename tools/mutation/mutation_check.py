@@ -193,6 +193,8 @@ U3 = [
     ('bundle-parent-link-followed', DOWNLOAD, 'if !actual.starts_with(&root) {', 'if false {', E, 'download', 'links_outside_the_destination'),
     ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
     ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
+    ('model-paths-file-size-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {', 'if !meta.is_file() {', E, 'detect', 'a_model_paths_file_that_cannot_be_used_adds_nothing'),
+    ('model-paths-file-cap-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if self.model_dirs.len() < MAX_EXTRA_DIRS && !self.model_dirs.contains(&entry) {', 'if !self.model_dirs.contains(&entry) {', E, 'detect', 'the_folder_cap_counts'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {

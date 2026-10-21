@@ -177,6 +177,104 @@ fn new_files_go_to_the_known_folder_or_a_new_one_and_never_outside() {
 }
 
 #[test]
+fn a_model_paths_file_given_by_path_adds_its_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("Comfy");
+    fs::create_dir_all(base.join("models/sam3")).unwrap();
+    fs::create_dir_all(base.join("custom_nodes")).unwrap();
+    // The file lives outside the base folder, as it does for `--extra-model-paths-config`.
+    let shared = dir.path().join("Shared");
+    touch(&shared.join("ckpt/sdxl.safetensors"), 4);
+    let file = dir.path().join("paths/extra.yaml");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(
+        &file,
+        format!(
+            "shared:\n  base_path: {}\n  checkpoints: ckpt\n",
+            shared.display()
+        ),
+    )
+    .unwrap();
+
+    let plain = ComfyInstall::at(&base).unwrap();
+    assert_eq!(
+        plain.models_dir_for("checkpoints").unwrap(),
+        base.join("models").join("checkpoints"),
+        "without the file the folder can only be guessed"
+    );
+
+    let install = plain.with_extra_paths_file(&file);
+    assert_eq!(
+        install.models_dir_for("checkpoints").unwrap(),
+        shared.join("ckpt")
+    );
+    let inv = scan(&install);
+    assert!(
+        inv.files
+            .iter()
+            .any(|f| f.folder == "checkpoints" && f.filename == "sdxl.safetensors")
+    );
+}
+
+#[test]
+fn a_model_paths_file_that_cannot_be_used_adds_nothing() {
+    let dir = tree();
+    let base = dir.path().join("Comfy");
+    let plain = ComfyInstall::at(&base).unwrap();
+    let shared = dir.path().join("Shared");
+    fs::create_dir_all(&shared).unwrap();
+    let section = format!("shared:\n  checkpoints: {}\n", shared.display());
+
+    let junk = dir.path().join("junk.yaml");
+    fs::write(&junk, "::::\n  : :\n\t\n").unwrap();
+    // One byte over the size the detector reads, with a valid section at the top.
+    let big = dir.path().join("big.yaml");
+    let mut oversized = section;
+    oversized.push_str(&"#".repeat(256 * 1024));
+    fs::write(&big, oversized).unwrap();
+
+    let missing = dir.path().join("missing.yaml");
+    for (why, file) in [
+        ("missing", &missing),
+        ("malformed", &junk),
+        ("oversized", &big),
+    ] {
+        let install = ComfyInstall::at(&base).unwrap().with_extra_paths_file(file);
+        assert_eq!(install, plain, "{why}");
+    }
+}
+
+#[test]
+fn the_folder_cap_counts_the_base_file_and_the_given_file_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("Comfy");
+    fs::create_dir_all(base.join("models/checkpoints")).unwrap();
+    fs::create_dir_all(base.join("custom_nodes")).unwrap();
+    // The base file alone fills the cap.
+    let mut listed = String::new();
+    for i in 0..400 {
+        let folder = dir.path().join(format!("base-{i}"));
+        fs::create_dir_all(&folder).unwrap();
+        listed.push_str(&format!("s{i}:\n  f{i}: {}\n", folder.display()));
+    }
+    fs::write(base.join("extra_model_paths.yaml"), listed).unwrap();
+
+    let shared = dir.path().join("Shared");
+    fs::create_dir_all(&shared).unwrap();
+    let given = dir.path().join("given.yaml");
+    fs::write(&given, format!("s:\n  checkpoints: {}\n", shared.display())).unwrap();
+
+    let install = ComfyInstall::at(&base)
+        .unwrap()
+        .with_extra_paths_file(&given);
+    assert_eq!(install.model_dirs.len(), 400);
+    assert!(
+        !install.model_dirs.iter().any(|(_, p)| p == &shared),
+        "the given file added a folder past the cap"
+    );
+}
+
+#[test]
 fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("Comfy");
