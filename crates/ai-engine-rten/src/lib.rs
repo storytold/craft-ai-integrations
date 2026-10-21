@@ -1,11 +1,22 @@
-//! The rten engine for Craft AI, first part: the picture handling a selection model needs, with no
-//! model in it yet. A later change adds the SAM 2.1 runner on top (`image.segment`).
+//! SAM 2.1 on the rten engine for Craft AI: the built-in runner behind the `image.segment`
+//! capability, reading the published ONNX files as they are, for every app that asks for it.
 //!
-//! - [`picture`]: a PNG or JPEG becomes RGB bytes (EXIF turn applied, size and memory bounded), and
-//!   a mask goes back as a grayscale PNG at the size of the upright source.
-//! - [`resample`]: the arithmetic from a picture to the model's input square and from the model's
-//!   mask back to the source size.
+//! An app does not use this crate directly. It puts [`runners`] in an
+//! [`EngineRegistry`](craft_ai_engine::EngineRegistry), or turns on the `rten` feature of
+//! `craft-ai-client`, and asks the client for a capability. See `docs/ADD-AN-ENGINE.md`.
 //!
+//! - **Clicks**: positive and negative clicks select one object.
+//! - **No conversion**: rten reads the `.onnx` files directly, so the files are the ones the model's
+//!   publisher released. Any export with the same inputs and outputs (the larger SAM 2.1 sizes are
+//!   drop-in swaps) runs without a code change.
+//! - **Every system**: pure Rust on the processor, with SIMD on x86-64 and Arm. No graphics card
+//!   is needed or used; a graphics-card engine is a separate entry in the engine list.
+//!
+//! The expensive part, the image encoder, runs once per picture and the runner keeps its result,
+//! so a second click on the same picture is quick.
+//!
+//! The weights are not part of this repository. The catalogue (`craft-ai-features`) names the
+//! exact files, sizes and SHA-256.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -18,3 +29,8 @@
 
 pub mod picture;
 pub mod resample;
+mod runner;
+mod sam21;
+
+pub use runner::{ENGINE, MODEL, Sam21Runner, runners};
+pub use sam21::{DECODER_FILE, ENCODER_FILE};

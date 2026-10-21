@@ -9,7 +9,7 @@ bad mutant (fix the mutant). Cargo runs serially, targeted with `-p`, with `-j 8
 |---|---|
 | `mutation_check.py` | `u1 u3 u4 p4 p10 v1 v2 v3 sd vx lc lr nr ct u2 wf` (connections, model sources, node packs, media, client flows, declarative adapter, workflow library). Cases for `u2` are in `mutation_u2.py`. |
 | `mutation_check.py seg` | Shared selection contract: points, box, description and checked result metadata. |
-| `mutation_check.py rt` | rten engine picture handling: bounded PNG and JPEG decoding, mask encoding, resampling. |
+| `mutation_check.py rt` | rten model runner, bounded picture decoding, resampling and prompt assembly. |
 | `mutation_check.py s21` | SAM 2.1 selection (`sam21_session.rs`, `detector.rs`): the Florence-2-large preflight, the detector name and the choice check. |
 | `mutation_check.py ca` | Upstream contract alignment: model-test address provenance, required inputs, and app-facing refusal before key access. Cases in `mutation_contract.py`. |
 | `mutation_check.py ps` | Node pack status report (`pack/status.rs`): links, hidden folders, names, the install record. |

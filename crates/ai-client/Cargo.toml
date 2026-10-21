@@ -12,6 +12,7 @@ publish = false
 # Built-in engines. Off by default so an app that does not run models itself stays light. Turning
 # one on is the whole of adopting it: `ProviderFactory::standard()` then knows the engine.
 candle = ["dep:craft-ai-engine-candle"]
+rten = ["dep:craft-ai-engine-rten"]
 
 [dependencies]
 craft-ai-core.workspace = true
@@ -31,6 +32,7 @@ craft-ai-engine = { path = "../ai-engine", package = "craft-ai-engine" }
 craft-ai-engine-candle = { path = "../ai-engine-candle", package = "craft-ai-engine-candle", optional = true }
 # The picker-preset "Released …" date goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
+craft-ai-engine-rten = { path = "../ai-engine-rten", package = "craft-ai-engine-rten", optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

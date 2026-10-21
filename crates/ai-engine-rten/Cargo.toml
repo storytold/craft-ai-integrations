@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-engine-rten"
-description = "The rten engine for Craft AI, picture handling part: PNG and JPEG in, mask PNG out, and the resampling a selection model needs. Native only."
+description = "SAM 2.1 on the rten engine for Craft AI: a built-in runner for image.segment that reads the published ONNX files as they are. Native only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,11 @@ publish = false
 
 [dependencies]
 craft-ai-core.workspace = true
+craft-ai-engine = { path = "../ai-engine", package = "craft-ai-engine" }
+serde_json.workspace = true
+# Pure Rust, no C or C++. ONNX only: the contrib operators this model does not use stay out.
+rten = { version = "=0.27.0", default-features = false, features = ["onnx_format"] }
+rten-tensor = "=0.27.0"
 png = "0.18"
 # JPEG only: the decoder (zune-jpeg) and the EXIF turn come through this crate.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
