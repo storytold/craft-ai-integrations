@@ -161,6 +161,7 @@ mod tests {
         assert!(e.message.contains("could not be read"));
     }
 
+    /// A mask written as a PNG reads back at the same size, with coverage clamped to 0..1.
     #[test]
     fn a_mask_round_trips_at_the_size_of_the_source() {
         let png = encode_mask(&[0.0, 1.0, 0.5, 2.0], 2, 2).unwrap();

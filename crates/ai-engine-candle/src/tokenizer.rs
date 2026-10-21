@@ -57,6 +57,7 @@ impl Tokenizer {
         Ok(Self::new(vocab, &merges))
     }
 
+    /// From an already loaded vocabulary and the text of a `merges.txt`.
     pub fn new(vocab: HashMap<String, u32>, merges: &str) -> Self {
         let ranks = merges
             .lines()
@@ -101,6 +102,7 @@ impl Tokenizer {
         (ids, valid)
     }
 
+    /// Byte-pair merges for one mapped word, lowest rank first, ending with the `</w>` marker.
     fn bpe(&self, word: &str) -> Vec<String> {
         let mut syms: Vec<String> = word.chars().map(String::from).collect();
         if let Some(last) = syms.last_mut() {
@@ -230,6 +232,7 @@ mod tests {
         );
     }
 
+    /// Pairs merge in rank order, and the end marker belongs to the last piece.
     #[test]
     fn merges_by_rank() {
         let vocab: HashMap<String, u32> =
