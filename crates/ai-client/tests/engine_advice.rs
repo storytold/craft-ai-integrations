@@ -52,11 +52,14 @@ impl World {
 /// A client of an app that has not enabled any built-in engine, whatever cargo features are on.
 fn without_engines() -> ProviderFactory {
     let mut factory = ProviderFactory::standard();
+    factory.unregister("rten");
     factory.unregister("candle");
     factory.unregister("burn");
     factory
 }
 
+/// An app with no built-in engine is advised ComfyUI, and every engine some usable recipe lists
+/// (rten for SAM 2.1, Candle and Burn for SAM 3) is listed, neither usable nor recommended.
 #[test]
 fn an_app_that_only_has_comfyui_is_advised_comfyui_and_the_built_in_ones_are_listed_unusable() {
     let w = World::new();
@@ -64,7 +67,7 @@ fn an_app_that_only_has_comfyui_is_advised_comfyui_and_the_built_in_ones_are_lis
         .client()
         .engine_advice(&select_subject(), &windows_nvidia());
     let providers: Vec<&str> = advice.iter().map(|a| a.provider.as_str()).collect();
-    assert_eq!(providers, ["comfyui", "candle", "burn"]);
+    assert_eq!(providers, ["comfyui", "candle", "burn", "rten"]);
     assert!(advice[0].recommended && advice[0].usable);
     assert!(advice[1..].iter().all(|a| !a.usable && !a.recommended));
 }

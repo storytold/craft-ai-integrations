@@ -322,18 +322,18 @@ fn local_connection(
     }
 }
 
-/// An absolute path to an existing `.safetensors` file, as text.
+/// An absolute path to an existing `.safetensors` or `.onnx` file, as text.
 fn weights_file(path: &Path) -> Result<String, AiError> {
     let text = path
         .to_str()
         .filter(|t| !t.contains('\0'))
         .ok_or_else(|| AiError::invalid("the weights path is not valid text"))?;
-    let safetensors = path
+    let known = path
         .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("safetensors"));
-    if !path.is_absolute() || !safetensors || !path.is_file() {
+        .is_some_and(|e| e.eq_ignore_ascii_case("safetensors") || e.eq_ignore_ascii_case("onnx"));
+    if !path.is_absolute() || !known || !path.is_file() {
         return Err(AiError::invalid(
-            "the weights must be an existing .safetensors file, given by its full path",
+            "the weights must be an existing .safetensors or .onnx file, given by its full path",
         ));
     }
     Ok(text.to_owned())

@@ -442,9 +442,9 @@ LR = [
 
 # nr: the built-in runtime route reads one weights file (ai-client/tests/local_native.rs)
 NR = [
-    ('relative-path-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!safetensors || !path.is_file()', CL, 'local_native', 'relative_path'),
-    ('any-extension-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!path.is_absolute() || !path.is_file()', CL, 'local_native', 'cannot_be_the_weights'),
-    ('missing-file-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!path.is_absolute() || !safetensors', CL, 'local_native', 'cannot_be_the_weights'),
+    ('relative-path-accepted', LOCAL_RS, '!path.is_absolute() || !known || !path.is_file()', '!known || !path.is_file()', CL, 'local_native', 'relative_path'),
+    ('any-extension-accepted', LOCAL_RS, '!path.is_absolute() || !known || !path.is_file()', '!path.is_absolute() || !path.is_file()', CL, 'local_native', 'cannot_be_the_weights'),
+    ('missing-file-accepted', LOCAL_RS, '!path.is_absolute() || !known || !path.is_file()', '!path.is_absolute() || !known', CL, 'local_native', 'cannot_be_the_weights'),
     ('unusable-recipe-accepted', LOCAL_RS, '.engine_recipe(provider)\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', '.locals\n            .first()\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', CL, 'local_recipes', 'built_in_runtime_comes_from'),
     ('file-not-given-to-apps', LOCAL_RS, 'file: resolved.model.local_file.clone(),', 'file: None,', CL, 'local_native', 'registered_bound'),
     ('file-not-stored', LOCAL_RS, 'model.local_file = Some(file);', 'model.local_file = None;', CL, 'local_native', 'registered_bound'),

@@ -24,4 +24,7 @@ NF = [
     ('native-options-before-later-locals', F + 'options.rs', 'locals.extend(natives);', 'locals.splice(0..0, natives);', FE, 'native_setup', 'follow_every_local'),
     ('built-in-offer-uses-the-comfyui-terms', F + 'setup.rs', 'agreement: agreement_for(route),', 'agreement: agreement(),', FE, 'setup', 'agrees_to_its_own'),
     ('native-option-loses-its-model-id', F + 'options.rs', 'model: native.model.clone(),', 'model: String::new(),', FE, 'native_setup', 'candle_with_its_own_size'),
+    ('onnx-is-not-weights', F + 'recipe.rs', '            name.ends_with(".safetensors") || name.ends_with(".onnx")', '            name.ends_with(".safetensors")', FE, 'native_onnx', 'an_onnx_file'),
+    ('onnx-name-is-case-sensitive', F + 'recipe.rs', 'let name = m.filename.to_ascii_lowercase();', 'let name = m.filename.clone();', FE, 'native_onnx', 'an_onnx_file'),
+    ('onnx-path-refused-when-binding', 'crates/ai-client/src/local.rs', '.is_some_and(|e| e.eq_ignore_ascii_case("safetensors") || e.eq_ignore_ascii_case("onnx"));', '.is_some_and(|e| e.eq_ignore_ascii_case("safetensors"));', 'craft-ai-client', 'local_native', 'the_native_route_is_registered'),
 ]

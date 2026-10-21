@@ -27,7 +27,7 @@ fn the_builtin_model_only_offers_setup_when_this_app_has_the_engine() {
     let native = view
         .groups
         .iter()
-        .find(|g| g.title.contains("built in"))
+        .find(|g| g.title.starts_with("SAM 3, built in"))
         .unwrap();
     if cfg!(feature = "candle") {
         assert_eq!(native.state, GroupState::NotSetUp);
@@ -68,7 +68,7 @@ fn a_built_in_model_whose_file_is_gone_can_be_set_up_again() {
         Arc::new(MemoryStore::new()),
     );
     ToolDesk::new(launcher, shared, None)
-        .enable_native(feature, &weights)
+        .enable_native_with(feature, "candle", &weights)
         .unwrap();
     let options = craft_ai_features::setup_options(&features);
     let native = |client: &AiClient| {
@@ -77,7 +77,7 @@ fn a_built_in_model_whose_file_is_gone_can_be_set_up_again() {
             .unwrap()
             .groups
             .into_iter()
-            .filter(|g| g.title.contains("built in") && g.state == GroupState::NotSetUp)
+            .filter(|g| g.title.starts_with("SAM 3, built in") && g.state == GroupState::NotSetUp)
             .collect::<Vec<_>>()
     };
     assert!(
@@ -120,7 +120,7 @@ fn a_built_in_connection_for_another_model_does_not_hide_this_one() {
         Arc::new(MemoryStore::new()),
     );
     ToolDesk::new(launcher, shared.clone(), None)
-        .enable_native(feature, &weights)
+        .enable_native_with(feature, "candle", &weights)
         .unwrap();
     // The file is there, but the connection now belongs to some other model.
     let mut store = shared.load().unwrap();
@@ -129,9 +129,11 @@ fn a_built_in_connection_for_another_model_does_not_hide_this_one() {
     let options = craft_ai_features::setup_options(&features);
     let view = client.picker(&role, &options).unwrap();
     assert!(
-        view.groups.iter().any(|g| g.title.contains("built in")
-            && g.state == GroupState::NotSetUp
-            && matches!(&g.setup, Some(SetupLink::New { option })
+        view.groups
+            .iter()
+            .any(|g| g.title.starts_with("SAM 3, built in")
+                && g.state == GroupState::NotSetUp
+                && matches!(&g.setup, Some(SetupLink::New { option })
                 if option == "native:select-subject:candle")),
         "this model still has a way in"
     );
@@ -165,7 +167,7 @@ fn an_older_model_on_the_same_connection_does_not_hide_the_current_one() {
         Arc::new(MemoryStore::new()),
     );
     ToolDesk::new(launcher, shared.clone(), None)
-        .enable_native(feature, &weights)
+        .enable_native_with(feature, "candle", &weights)
         .unwrap();
     let mut store = shared.load().unwrap();
     store.connections[0].models[0].id = ModelId::new("sam3-older").unwrap();
@@ -173,9 +175,11 @@ fn an_older_model_on_the_same_connection_does_not_hide_the_current_one() {
     let options = craft_ai_features::setup_options(&features);
     let view = client.picker(&role, &options).unwrap();
     assert!(
-        view.groups.iter().any(|g| g.title.contains("built in")
-            && g.state == GroupState::NotSetUp
-            && g.setup.is_some()),
+        view.groups
+            .iter()
+            .any(|g| g.title.starts_with("SAM 3, built in")
+                && g.state == GroupState::NotSetUp
+                && g.setup.is_some()),
         "the current model still has a way in"
     );
 }

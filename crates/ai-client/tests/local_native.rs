@@ -52,6 +52,8 @@ impl World {
     }
 }
 
+/// Registering the Candle route binds the tool and an app reads the exact weights file back, with
+/// no address.
 #[test]
 fn the_native_route_is_registered_bound_and_carries_the_file() {
     let w = World::new();
@@ -73,6 +75,29 @@ fn the_native_route_is_registered_bound_and_carries_the_file() {
     assert_eq!(route.file.as_deref(), file.to_str());
 }
 
+/// SAM 2.1 on rten reads published `.onnx` files: the encoder file is accepted as the weights,
+/// registered under the rten connection and bound, and an app reads that exact file back.
+#[test]
+fn the_native_route_is_registered_for_an_onnx_file() {
+    let w = World::new();
+    let file = w.weights("encoder.onnx");
+    let done = w
+        .desk("launcher")
+        .enable_native_with(&feature("select-subject"), "rten", &file)
+        .unwrap();
+    assert!(done.bound);
+    assert_eq!(done.connection.as_str(), "local-select-subject-rten");
+    assert_eq!(done.model.as_str(), "sam21");
+    let route = w
+        .client("lightcraft")
+        .local_route_for(&role())
+        .unwrap()
+        .unwrap();
+    assert_eq!(route.provider, "rten");
+    assert_eq!(route.file.as_deref(), file.to_str());
+}
+
+/// Two apps that share the store read the same registered weights file.
 #[test]
 fn two_apps_read_the_same_file() {
     let w = World::new();
@@ -89,6 +114,8 @@ fn two_apps_read_the_same_file() {
     }
 }
 
+/// A ComfyUI choice records no weights file, and a built-in runtime lookup on it is refused in
+/// plain words.
 #[test]
 fn the_comfyui_route_has_no_file_and_is_not_a_native_one() {
     let w = World::new();
@@ -107,6 +134,8 @@ fn the_comfyui_route_has_no_file_and_is_not_a_native_one() {
     );
 }
 
+/// An app that is bound to a built-in runtime gets the plain "can not run the model yet" refusal
+/// when it asks for a ComfyUI address.
 #[test]
 fn a_native_route_is_not_offered_as_a_comfyui_address() {
     let w = World::new();
@@ -122,6 +151,7 @@ fn a_native_route_is_not_offered_as_a_comfyui_address() {
     );
 }
 
+/// An app asking for a built-in runtime file when nothing is bound gets none, not an error.
 #[test]
 fn nothing_bound_is_not_an_error() {
     let w = World::new();
@@ -133,6 +163,8 @@ fn nothing_bound_is_not_an_error() {
     );
 }
 
+/// Enabling the built-in runtime after a ComfyUI choice leaves that choice bound and registers both
+/// connections.
 #[test]
 fn a_choice_already_made_is_left_alone_and_both_routes_are_registered() {
     let w = World::new();
@@ -156,6 +188,8 @@ fn a_choice_already_made_is_left_alone_and_both_routes_are_registered() {
     assert_eq!(store.connections.len(), 2);
 }
 
+/// Registering Candle again with another file updates the one connection to the new file and
+/// leaves the binding as it was.
 #[test]
 fn registering_again_moves_the_file_and_keeps_one_connection() {
     let w = World::new();
@@ -177,6 +211,7 @@ fn registering_again_moves_the_file_and_keeps_one_connection() {
     );
 }
 
+/// A missing file, a folder and a wrong extension are each refused and nothing is registered.
 #[test]
 fn a_file_that_cannot_be_the_weights_is_refused_and_nothing_is_written() {
     let w = World::new();
@@ -197,6 +232,7 @@ fn a_file_that_cannot_be_the_weights_is_refused_and_nothing_is_written() {
     assert!(w.shared.load().unwrap().connections.is_empty());
 }
 
+/// A relative weights path is refused even when a file is there, and nothing is registered.
 #[test]
 fn a_relative_path_is_refused_even_when_it_points_at_a_real_file() {
     let w = World::new();
@@ -211,18 +247,20 @@ fn a_relative_path_is_refused_even_when_it_points_at_a_real_file() {
     assert!(w.shared.load().unwrap().connections.is_empty());
 }
 
+/// With no recipe able to run, or none with a built-in route, the runtime is refused and nothing is
+/// written.
 #[test]
 fn a_runtime_that_is_not_ready_to_use_is_refused() {
     let w = World::new();
     let mut f = feature("select-subject");
-    f.locals[0].usable = false;
+    f.locals.iter_mut().for_each(|r| r.usable = false);
     assert!(
         w.desk("launcher")
             .enable_native(&f, &w.weights("sam3.safetensors"))
             .is_err()
     );
     let mut f = feature("select-subject");
-    f.locals[0].native.clear();
+    f.locals.iter_mut().for_each(|r| r.native.clear());
     assert!(
         w.desk("launcher")
             .enable_native(&f, &w.weights("sam3.safetensors"))
@@ -231,6 +269,7 @@ fn a_runtime_that_is_not_ready_to_use_is_refused() {
     assert!(w.shared.load().unwrap().connections.is_empty());
 }
 
+/// Every other tool refuses a built-in runtime and writes nothing.
 #[test]
 fn a_tool_without_a_built_in_runtime_is_refused() {
     let w = World::new();
@@ -248,6 +287,7 @@ fn a_tool_without_a_built_in_runtime_is_refused() {
     assert!(w.shared.load().unwrap().connections.is_empty());
 }
 
+/// A Candle weights file that has gone is an error naming that, not an unbound tool.
 #[test]
 fn a_file_that_vanished_is_an_error_not_unbound() {
     let w = World::new();
@@ -267,6 +307,8 @@ fn a_file_that_vanished_is_an_error_not_unbound() {
     );
 }
 
+/// With the ComfyUI model and the built-in runtime both registered, the picker lists two groups
+/// with different titles, one of them saying "built in".
 #[test]
 fn the_picker_offers_the_two_runtimes_of_one_model_side_by_side() {
     let w = World::new();
@@ -286,6 +328,8 @@ fn the_picker_offers_the_two_runtimes_of_one_model_side_by_side() {
     assert!(titles.iter().any(|t| t.contains("built in")), "{titles:?}");
 }
 
+/// A model saved before `local_file` existed loads with none, and the field is not written out when
+/// it is absent.
 #[test]
 fn old_stores_without_the_field_load_and_it_is_not_written_when_absent() {
     let json = r#"{"id":"sam3","label":"SAM 3"}"#;

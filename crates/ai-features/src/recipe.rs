@@ -103,18 +103,20 @@ pub struct NativeRoute {
     pub label: String,
     /// The files this runtime reads, when they are not the recipe's own. A runtime ported from
     /// another framework usually wants that framework's file layout, which is a different file
-    /// from the ComfyUI one. The first `.safetensors` file here is the weights file recorded on
-    /// the connection; the rest sit beside it. Empty means the recipe's own files.
+    /// from the ComfyUI one. The first `.safetensors` or `.onnx` file here is the weights file
+    /// recorded on the connection; the rest sit beside it. Empty means the recipe's own files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelFile>,
 }
 
 impl NativeRoute {
-    /// The weights file this runtime is given: the first `.safetensors` file of its own files.
+    /// The weights file this runtime is given: the first `.safetensors` or `.onnx` file of its
+    /// own files.
     pub fn weights(&self) -> Option<&ModelFile> {
-        self.models
-            .iter()
-            .find(|m| m.filename.to_ascii_lowercase().ends_with(".safetensors"))
+        self.models.iter().find(|m| {
+            let name = m.filename.to_ascii_lowercase();
+            name.ends_with(".safetensors") || name.ends_with(".onnx")
+        })
     }
 
     /// Bytes to download for this runtime's own files.

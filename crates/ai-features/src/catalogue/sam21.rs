@@ -1,7 +1,48 @@
 //! Meta's SAM 2.1, run through ComfyUI with Florence-2-large finding the words of a prompt.
 
 use super::florence2::florence2_large_files;
-use crate::recipe::{Component, Licence, LocalRecipe, ModelFile, NodePack, Source};
+use crate::recipe::{Component, Licence, LocalRecipe, ModelFile, NativeRoute, NodePack, Source};
+
+/// The published ONNX export of SAM 2.1 (small size) at a pinned revision. The built-in rten
+/// engine reads these two files as they are: no conversion, nothing hosted by us. Both sit in
+/// one folder, `encoder.onnx` first (the weights file the connection records).
+fn sam21_onnx_files() -> Vec<ModelFile> {
+    const REVISION: &str = "12bdf0f712731bd0b52ccbff807683ce49b726b9";
+    let file = |name: &str, size_bytes: u64, sha256: &str| {
+        ModelFile {
+        folder: "sam21_onnx".to_owned(),
+        filename: name.to_owned(),
+        size_bytes,
+        sha256: sha256.to_owned(),
+        source: Source::HuggingFace {
+            repo: "cstr/sam2.1-hiera-tiny-ONNX".to_owned(),
+            file: name.to_owned(),
+            revision: Some(REVISION.to_owned()),
+        },
+        licence: Licence {
+            name: "Apache-2.0, ONNX conversion".to_owned(),
+            url: Some("https://huggingface.co/cstr/sam2.1-hiera-tiny-ONNX".to_owned()),
+            accept_required: false,
+            note: Some(
+                "This file is a format conversion of Meta's SAM 2.1 weights, which Meta releases under Apache 2.0. The publisher of the conversion declares the same licence."
+                    .to_owned(),
+            ),
+        },
+    }
+    };
+    vec![
+        file(
+            "encoder.onnx",
+            109_473_919,
+            "4fda6e68561e27808cedffa8689749a622bba5f11ba66f4ca4e3a8a9f6360db5",
+        ),
+        file(
+            "decoder.onnx",
+            20_655_795,
+            "0ae944e08e55814c19afa4d143ef07b1a3dbad2decd77c15ec3ab220b9f57247",
+        ),
+    ]
+}
 
 /// SAM 2.1 for Select subject: the large checkpoint in the layout the
 /// `ComfyUI-segment-anything-2` node pack reads, at a pinned revision of a community conversion,
@@ -48,7 +89,14 @@ pub(super) fn sam21() -> LocalRecipe {
             },
         ],
         min_vram_mb: None,
-        native: Vec::new(),
+        // Built-in engines that run SAM 2.1. It selects by clicking; a description needs the
+        // ComfyUI route above (Florence-2 finds the words).
+        native: vec![NativeRoute {
+            provider: "rten".to_owned(),
+            model: "sam21".to_owned(),
+            label: "SAM 2.1, built in (the processor, on any system)".to_owned(),
+            models: sam21_onnx_files(),
+        }],
         components: components(),
     }
 }

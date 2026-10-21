@@ -215,9 +215,9 @@ fn the_picker_then_lists_sam_3_as_ready_not_as_something_to_install() {
         .unwrap();
     let options = craft_ai_features::setup_options(&craft_ai_features::builtin());
     let view = w.client("photocraft").picker(&role(), &options).unwrap();
-    // SAM 3 is ready; SAM 2.1 is not installed, so it keeps its way in; the built-in engine is a
-    // separate option and this app has no adapter for it.
-    assert_eq!(view.groups.len(), 3);
+    // SAM 3 is ready; SAM 2.1 is not installed, so it keeps its way in; the two built-in engines
+    // (Candle for SAM 3, rten for SAM 2.1) are separate options.
+    assert_eq!(view.groups.len(), 4);
     let comfy = |state| {
         view.groups
             .iter()
@@ -235,7 +235,7 @@ fn the_picker_then_lists_sam_3_as_ready_not_as_something_to_install() {
     let native = view
         .groups
         .iter()
-        .find(|g| g.title.contains("built in"))
+        .find(|g| g.title.starts_with("SAM 3, built in"))
         .unwrap();
     if cfg!(feature = "candle") {
         assert_eq!(native.state, GroupState::NotSetUp);
