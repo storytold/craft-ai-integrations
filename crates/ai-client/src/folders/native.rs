@@ -203,7 +203,7 @@ pub(super) fn install_into(
     Ok(())
 }
 
-/// The route of the first usable recipe ([`Feature::first_usable_recipe`]) for `provider` that
+/// The route for `provider` in that engine's recipe ([`Feature::engine_recipe`]), when it
 /// names files of its own. Refused when there is none, or when a file name is not a plain name
 /// (empty, dotted, or holding a slash or colon).
 pub(super) fn native_route<'a>(
@@ -211,7 +211,7 @@ pub(super) fn native_route<'a>(
     provider: &str,
 ) -> Result<&'a NativeRoute, AiError> {
     let route = feature
-        .first_usable_recipe()
+        .engine_recipe(provider)
         .and_then(|recipe| {
             recipe
                 .native

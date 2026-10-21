@@ -57,11 +57,37 @@ impl Feature {
         })
     }
 
-    /// The recipe every built-in runtime path acts on: the first one apps can run. Planning,
-    /// setup options, the Install offer, file setup, registration and engine advice all use it, so
-    /// an option the picker shows is never one that setup then refuses.
+    /// The first recipe apps can run. The ComfyUI route, a plain built-in Install offer and
+    /// engine advice's hardware limits use it.
     pub fn first_usable_recipe(&self) -> Option<&LocalRecipe> {
         self.locals.iter().find(|r| r.usable)
+    }
+
+    /// The recipe the built-in engine `provider` acts on: the first one apps can run that lists
+    /// that engine. Planning, setup options, the Install offer for that engine, file setup and
+    /// registration all use it, so an option the picker shows is never one that setup then
+    /// refuses. Each engine follows its own recipe, so a first recipe without Candle does not hide
+    /// a later one with it.
+    pub fn engine_recipe(&self, provider: &str) -> Option<&LocalRecipe> {
+        self.locals
+            .iter()
+            .find(|r| r.usable && r.native.iter().any(|n| n.provider == provider))
+    }
+
+    /// Every built-in engine some usable recipe lists, once each, in catalogue order.
+    pub fn engines(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for route in self
+            .locals
+            .iter()
+            .filter(|r| r.usable)
+            .flat_map(|r| &r.native)
+        {
+            if !out.contains(&route.provider.as_str()) {
+                out.push(&route.provider);
+            }
+        }
+        out
     }
 
     /// Apps where the tool exists today.

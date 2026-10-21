@@ -145,11 +145,11 @@ fn plan_recipe(feature: &Feature, recipe: &LocalRecipe, inventory: &Inventory) -
 
 /// Compares the files of the built-in runtime `provider` for `feature` with `inventory`. Unlike
 /// [`plan`], it needs neither ComfyUI nor its node packs: the runtime reads its own files, which
-/// are a different layout from the ComfyUI checkpoint. The route comes from the first usable recipe
-/// ([`Feature::first_usable_recipe`]). A feature with no usable recipe, or no
-/// route with files of its own for `provider`, gets [`State::NoLocalRoute`].
+/// are a different layout from the ComfyUI checkpoint. The route comes from that engine's recipe
+/// ([`Feature::engine_recipe`]). A feature with no usable recipe for `provider`, or whose route
+/// names no files of its own, gets [`State::NoLocalRoute`].
 pub fn plan_native(feature: &Feature, provider: &str, inventory: &Inventory) -> Plan {
-    let recipe = feature.first_usable_recipe();
+    let recipe = feature.engine_recipe(provider);
     let mut out = empty(
         feature,
         recipe.map(|r| r.workflow.clone()).unwrap_or_default(),

@@ -268,7 +268,10 @@ fn offer_for(
     selected_provider: Option<&str>,
 ) -> Option<SetupOffer> {
     let recipe = if route == SetupRoute::BuiltIn {
-        feature.first_usable_recipe()?
+        match selected_provider {
+            Some(provider) => feature.engine_recipe(provider)?,
+            None => feature.first_usable_recipe()?,
+        }
     } else {
         feature.locals.first().filter(|r| r.usable)?
     };

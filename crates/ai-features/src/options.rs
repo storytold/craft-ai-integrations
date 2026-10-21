@@ -69,24 +69,29 @@ pub fn setup_options(features: &[Feature]) -> Vec<SetupOption> {
                 size_bytes: Some(recipe.total_bytes()),
             });
         }
-        // A built-in runtime is set up from the first recipe apps can run, the one planning and
-        // file setup use, so each runtime gets one option and following it cannot fail.
-        if let Some(recipe) = feature.first_usable_recipe() {
-            for native in recipe.native.iter().filter(|n| !n.models.is_empty()) {
-                natives.push(SetupOption {
-                    id: format!("native:{}:{}", feature.id, native.provider),
-                    title: native.label.clone(),
-                    note: String::new(),
-                    route: Route::Native {
-                        feature: feature.id.clone(),
-                        provider: native.provider.clone(),
-                        model: native.model.clone(),
-                    },
-                    unlocks: vec![feature.id.clone()],
-                    usable: true,
-                    size_bytes: Some(native.total_bytes()),
-                });
-            }
+        // Each built-in runtime is set up from its own recipe (`Feature::engine_recipe`), the one
+        // planning and file setup use, so each runtime gets one option and following it cannot fail.
+        for provider in feature.engines() {
+            let Some(native) = feature
+                .engine_recipe(provider)
+                .and_then(|r| r.native.iter().find(|n| n.provider == provider))
+                .filter(|n| !n.models.is_empty())
+            else {
+                continue;
+            };
+            natives.push(SetupOption {
+                id: format!("native:{}:{}", feature.id, native.provider),
+                title: native.label.clone(),
+                note: String::new(),
+                route: Route::Native {
+                    feature: feature.id.clone(),
+                    provider: native.provider.clone(),
+                    model: native.model.clone(),
+                },
+                unlocks: vec![feature.id.clone()],
+                usable: true,
+                size_bytes: Some(native.total_bytes()),
+            });
         }
         for option in &feature.cloud {
             let Some(preset) = PRESETS.iter().find(|p| p.key == option.preset) else {

@@ -10,13 +10,15 @@ use crate::picker::{GroupState, PickerView};
 impl AiClient {
     /// The local engines `feature` can run on, best first, judged for `profile` (see
     /// `craft_ai_comfy_env::system::detect`). An engine this app has no adapter for is listed but
-    /// never suggested. Advice is for the first recipe that can run, the one
-    /// [`ToolDesk::enable_local`](crate::ToolDesk::enable_local) registers; a tool with none has no advice.
+    /// never suggested. Every built-in engine some usable recipe lists is offered (each runs its own
+    /// recipe, [`Feature::engine_recipe`]), then ComfyUI; the memory limit is the first usable
+    /// recipe's, the one [`ToolDesk::enable_local`](crate::ToolDesk::enable_local) registers. A tool
+    /// with no usable recipe has no advice.
     pub fn engine_advice(&self, feature: &Feature, profile: &SystemProfile) -> Vec<EngineAdvice> {
-        let Some(recipe) = feature.locals.iter().find(|r| r.usable) else {
+        let Some(recipe) = feature.first_usable_recipe() else {
             return Vec::new();
         };
-        let mut providers: Vec<&str> = recipe.native.iter().map(|n| n.provider.as_str()).collect();
+        let mut providers: Vec<&str> = feature.engines();
         providers.push("comfyui");
         let offers: Vec<EngineOffer> = providers
             .into_iter()
