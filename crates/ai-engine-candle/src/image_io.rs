@@ -9,6 +9,10 @@ use png::{BitDepth, ColorType, Transformations};
 /// Pictures larger than this are refused before any pixel is read.
 pub(crate) const MAX_PIXELS: u64 = 100_000_000;
 
+/// What the PNG decoder may allocate for its own row buffers. The crate's default of 64 MiB
+/// refuses a very wide picture that is still inside [`MAX_PIXELS`]; this matches the JPEG route.
+const MAX_DECODER_BYTES: usize = 900 * 1024 * 1024;
+
 /// What a person is told when a picture cannot be read at all.
 pub(crate) const READ_FAILED: &str = "The picture could not be read. Use a PNG or a JPEG.";
 
@@ -41,7 +45,12 @@ pub(crate) struct Rgb {
 /// Decodes a PNG of any colour type to RGB. Transparency is dropped.
 pub(crate) fn decode_png(data: &[u8]) -> Result<Rgb, AiError> {
     let bad = |_| AiError::invalid(READ_FAILED);
-    let mut decoder = png::Decoder::new(Cursor::new(data));
+    let mut decoder = png::Decoder::new_with_limits(
+        Cursor::new(data),
+        png::Limits {
+            bytes: MAX_DECODER_BYTES,
+        },
+    );
     decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(bad)?;
     let info = reader.info();
@@ -161,5 +170,23 @@ mod tests {
             back.bytes.iter().step_by(3).copied().collect::<Vec<_>>(),
             vec![0, 255, 128, 255]
         );
+    }
+
+    /// A one-row picture inside the pixel limit but with a row wider than the PNG decoder's default
+    /// 64 MiB allowance for its own buffers must still decode, as the JPEG route does.
+    #[test]
+    fn a_very_wide_picture_inside_the_pixel_limit_still_decodes() {
+        let width: u32 = 24_000_000;
+        let mut out = Vec::new();
+        let mut e = png::Encoder::new(&mut out, width, 1);
+        e.set_color(ColorType::Rgb);
+        e.set_depth(BitDepth::Eight);
+        e.set_compression(png::Compression::Fast);
+        let mut w = e.write_header().unwrap();
+        w.write_image_data(&vec![7u8; width as usize * 3]).unwrap();
+        w.finish().unwrap();
+        let rgb = decode_png(&out).unwrap();
+        assert_eq!((rgb.width, rgb.height), (width as usize, 1));
+        assert!(rgb.bytes.iter().all(|b| *b == 7));
     }
 }

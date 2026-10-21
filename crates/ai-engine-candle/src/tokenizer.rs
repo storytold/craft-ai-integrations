@@ -13,6 +13,10 @@ use crate::{Error, Result};
 pub const CONTEXT: usize = 32;
 const BOS: u32 = 49406;
 const EOS: u32 = 49407;
+/// Text past this many characters cannot reach the 32-token context, so it is never tokenized.
+const MAX_TEXT_CHARS: usize = CONTEXT * 32;
+/// A single word is cut to this many characters before the merge loop, which grows with its square.
+const MAX_WORD_CHARS: usize = CONTEXT * 8;
 
 pub struct Tokenizer {
     vocab: HashMap<String, u32>,
@@ -72,15 +76,15 @@ impl Tokenizer {
     }
 
     /// Token ids (start, words, end, padding) and which positions are real tokens.
+    ///
+    /// The work is bounded first: the text, each word, and the number of ids all stop at what
+    /// the context can hold, so a long prompt costs no more than a short one.
     pub fn encode(&self, text: &str) -> (Vec<u32>, Vec<bool>) {
         let mut ids = vec![BOS];
-        for word in pre_tokenize(
-            &text
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase(),
-        ) {
+        for word in bounded_words(text) {
+            if ids.len() >= CONTEXT - 1 {
+                break;
+            }
             let mapped: String = word
                 .bytes()
                 .map(|b| self.byte_char.get(usize::from(b)).copied().unwrap_or('?'))
@@ -135,6 +139,21 @@ impl Tokenizer {
         }
         syms
     }
+}
+
+/// The words of `text` that can matter: at most [`MAX_TEXT_CHARS`] characters of it, lower-cased,
+/// split like CLIP, with each word cut to [`MAX_WORD_CHARS`] characters.
+fn bounded_words(text: &str) -> Vec<String> {
+    let clipped: String = text.chars().take(MAX_TEXT_CHARS).collect();
+    let normal = clipped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    pre_tokenize(&normal)
+        .into_iter()
+        .map(|word| word.chars().take(MAX_WORD_CHARS).collect())
+        .collect()
 }
 
 /// CLIP's pre-tokenizer: contractions, letter runs, single digits, and runs of other
@@ -223,5 +242,33 @@ mod tests {
         assert_eq!(&ids[..3], &[BOS, 5, EOS]);
         assert_eq!(ids.len(), CONTEXT);
         assert_eq!(valid.iter().filter(|v| **v).count(), 3);
+    }
+
+    /// However long the prompt, only a bounded amount of text reaches the pre-tokenizer, and no
+    /// single word is longer than the cap, so the merge loop cannot be made to run for long.
+    #[test]
+    fn a_long_prompt_is_bounded_before_the_expensive_work() {
+        let many = bounded_words(&"a ".repeat(100_000));
+        assert!(many.len() <= MAX_TEXT_CHARS, "{} words", many.len());
+        let long_word = bounded_words(&"b".repeat(1_000_000));
+        assert_eq!(long_word.len(), 1);
+        assert_eq!(long_word[0].chars().count(), MAX_WORD_CHARS);
+    }
+
+    /// Bounding must not change an ordinary prompt, or what a long one is cut to: the ids are the
+    /// same as for just the words that fit in the context.
+    #[test]
+    fn a_prompt_longer_than_the_context_encodes_as_its_first_words() {
+        let vocab: HashMap<String, u32> = [("a</w>", 1), ("b</w>", 2)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let t = Tokenizer::new(vocab, "");
+        let fit = vec!["a"; CONTEXT - 1].join(" ");
+        let long = format!("{fit} b {}", "b ".repeat(50_000));
+        assert_eq!(t.encode(&long), t.encode(&fit));
+        let (ids, valid) = t.encode(&fit);
+        assert_eq!(ids[CONTEXT - 1], EOS);
+        assert!(valid.iter().all(|v| *v));
     }
 }
