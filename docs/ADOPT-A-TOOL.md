@@ -1,5 +1,7 @@
 # Add a service or a tool, and use it from an app
 
+**The full guides are in [docs/adopting](adopting/README.md):** use a tool in an app, declare a new tool, bring a service or model, a checklist and troubleshooting. This page is the short version.
+
 For someone building on this layer: you ship a service, a kind of tool, or an app that uses them.
 You should not need to edit this repository or anyone else's app. This page is the path; the
 runnable version of every step is `crates/ai-client/tests/third_party_adoption.rs`, which CI runs,
