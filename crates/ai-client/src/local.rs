@@ -333,18 +333,21 @@ fn local_connection(
     }
 }
 
-/// An absolute path to an existing `.safetensors` or `.onnx` file, as text.
+/// An absolute path to an existing `.safetensors`, `.onnx` or `.bpk` file, as text. The last is the
+/// saved copy the Burn engine reads, made once on this computer from the published `.onnx` files.
 fn weights_file(path: &Path) -> Result<String, AiError> {
     let text = path
         .to_str()
         .filter(|t| !t.contains('\0'))
         .ok_or_else(|| AiError::invalid("the weights path is not valid text"))?;
-    let known = path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("safetensors") || e.eq_ignore_ascii_case("onnx"));
+    let known = path.extension().is_some_and(|e| {
+        ["safetensors", "onnx", "bpk"]
+            .iter()
+            .any(|known| e.eq_ignore_ascii_case(known))
+    });
     if !path.is_absolute() || !known || !path.is_file() {
         return Err(AiError::invalid(
-            "the weights must be an existing .safetensors or .onnx file, given by its full path",
+            "the weights must be an existing .safetensors, .onnx or .bpk file, given by its full path",
         ));
     }
     Ok(text.to_owned())

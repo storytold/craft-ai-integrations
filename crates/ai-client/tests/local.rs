@@ -223,9 +223,9 @@ fn the_picker_then_lists_sam_2_1_as_ready_not_as_something_to_install() {
         .unwrap();
     let options = craft_ai_features::setup_options(&craft_ai_features::builtin());
     let view = w.client("photocraft").picker(&role(), &options).unwrap();
-    // SAM 2.1 is ready; SAM 3 is not installed, so it keeps its way in; the two built-in engines
-    // (rten for SAM 2.1, Candle for SAM 3) are separate options.
-    assert_eq!(view.groups.len(), 4);
+    // SAM 2.1 is ready; SAM 3 is not installed, so it keeps its way in; the three built-in engines
+    // (rten and Burn for SAM 2.1, Candle for SAM 3) are separate options.
+    assert_eq!(view.groups.len(), 5);
     let comfy = |state| {
         view.groups
             .iter()
@@ -242,7 +242,11 @@ fn the_picker_then_lists_sam_2_1_as_ready_not_as_something_to_install() {
     );
     // With an engine's adapter built in it can be set up; without it, it is only listed.
     for (title, built) in [
-        ("SAM 2.1, built in", cfg!(feature = "rten")),
+        ("SAM 2.1, built in (the processor", cfg!(feature = "rten")),
+        (
+            "SAM 2.1, built in (any graphics card",
+            cfg!(feature = "burn"),
+        ),
         ("SAM 3, built in", cfg!(feature = "candle")),
     ] {
         let native = view

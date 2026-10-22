@@ -40,17 +40,22 @@ fn offer(profile: &SystemProfile, inventory: &Inventory, route: SetupRoute) -> O
     setup_offer(&select_subject(), profile, inventory, route)
 }
 
+/// The kinds of the steps in an offer, in order.
 fn kinds(o: &SetupOffer) -> Vec<StepKind> {
     o.steps.iter().map(|s| s.kind).collect()
 }
 
-/// A native offer is for the runtime that was asked for: Burn names no files so it gets none, and
-/// Candle gets its three own files.
+/// A native offer is for the runtime that was asked for: Burn gets SAM 2.1's two published files
+/// (the same download as rten, converted later on this computer), Candle gets its three own SAM 3
+/// files, and a runtime no recipe lists gets nothing.
 #[test]
 fn a_native_offer_is_for_the_selected_provider_not_any_built_in_engine() {
     let profile = pc(Os::Windows, vec![]);
     let feature = select_subject();
-    assert!(setup_offer_native(&feature, "burn", &profile, &empty()).is_none());
+    assert!(setup_offer_native(&feature, "unknown-engine", &profile, &empty()).is_none());
+    let burn = setup_offer_native(&feature, "burn", &profile, &empty()).unwrap();
+    assert_eq!(kinds(&burn), [StepKind::Model; 2]);
+    assert_eq!(burn.download_bytes, 130_129_714);
     let candle = setup_offer_native(&feature, "candle", &profile, &empty()).unwrap();
     assert_eq!(kinds(&candle), [StepKind::Model; 3]);
     assert_eq!(candle.download_bytes, 3_441_325_459);

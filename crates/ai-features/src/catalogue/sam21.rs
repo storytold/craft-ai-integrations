@@ -4,7 +4,8 @@ use super::florence2::florence2_large_files;
 use crate::recipe::{Component, Licence, LocalRecipe, ModelFile, NativeRoute, NodePack, Source};
 
 /// The published ONNX export of SAM 2.1 (tiny size) at a pinned revision. The built-in rten
-/// engine reads these two files as they are: no conversion, nothing hosted by us. Both sit in
+/// engine reads these two files as they are: no conversion, nothing hosted by us. The Burn
+/// engine converts the same two once on the person's computer, so it lists them too. Both sit in
 /// one folder, `encoder.onnx` first (the weights file the connection records).
 fn sam21_onnx_files() -> Vec<ModelFile> {
     const REVISION: &str = "12bdf0f712731bd0b52ccbff807683ce49b726b9";
@@ -91,12 +92,25 @@ pub(super) fn sam21() -> LocalRecipe {
         min_vram_mb: None,
         // Built-in engines that run SAM 2.1. It selects by clicking; a description needs the
         // ComfyUI route above (Florence-2 finds the words).
-        native: vec![NativeRoute {
-            provider: "rten".to_owned(),
-            model: "sam21".to_owned(),
-            label: "SAM 2.1, built in (the processor, on any system)".to_owned(),
-            models: sam21_onnx_files(),
-        }],
+        native: vec![
+            NativeRoute {
+                provider: "rten".to_owned(),
+                model: "sam21".to_owned(),
+                label: "SAM 2.1, built in (the processor, on any system)".to_owned(),
+                models: sam21_onnx_files(),
+            },
+            // The same published files, converted once on this computer to the saved copy this
+            // engine reads (`craft-ai-burn-setup`). Nothing converted is hosted, so the download is
+            // the same two files and shares the folder with the route above. rten stays the first
+            // and default route; this one is a choice.
+            NativeRoute {
+                provider: "burn".to_owned(),
+                model: "sam21".to_owned(),
+                label: "SAM 2.1, built in (any graphics card, set up once on this computer)"
+                    .to_owned(),
+                models: sam21_onnx_files(),
+            },
+        ],
         components: components(),
     }
 }

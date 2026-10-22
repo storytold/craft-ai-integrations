@@ -70,23 +70,22 @@ fn missing_native_files_count_against_free_space() {
     assert_eq!(plan.blockers.len(), 1);
 }
 
-/// A runtime with no files of its own (Burn today) or an unknown engine gets no plan and no download.
+/// An unknown engine gets no plan and no download.
 #[test]
 fn unfinished_or_unknown_engines_offer_no_download() {
     let feature = builtin()
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    for engine in ["burn", "not-an-engine"] {
-        let plan = plan_native(&feature, engine, &Inventory::default());
-        assert_eq!(plan.state, State::NoLocalRoute);
-        assert!(plan.missing_files.is_empty());
-    }
+    let plan = plan_native(&feature, "not-an-engine", &Inventory::default());
+    assert_eq!(plan.state, State::NoLocalRoute);
+    assert!(plan.missing_files.is_empty());
 }
 
-/// The setup options list Candle with its own size, and leave out a runtime that names no files.
+/// The setup options list Candle with its own size, and Burn with the size of SAM 2.1's two
+/// published files (its SAM 3 slot names none, so it never offers that download).
 #[test]
-fn setup_options_offer_candle_with_its_own_size_but_not_unbuilt_burn() {
+fn setup_options_offer_candle_with_its_own_size_and_burn_with_sam_2_1s() {
     let options = setup_options(&builtin());
     let candle = options
         .iter()
@@ -98,7 +97,13 @@ fn setup_options_offer_candle_with_its_own_size_but_not_unbuilt_burn() {
     );
     assert_eq!(candle.size_bytes, Some(3_441_325_459));
     assert!(candle.usable);
-    assert!(options.iter().all(|o| o.id != "native:select-subject:burn"));
+    let burn = options
+        .iter()
+        .find(|o| o.id == "native:select-subject:burn")
+        .unwrap();
+    assert!(matches!(&burn.route, Route::Native { provider, model, .. }
+        if provider == "burn" && model == "sam21"));
+    assert_eq!(burn.size_bytes, Some(130_129_714));
 }
 
 /// A recipe apps cannot run yet offers no native plan, even though its runtime names files.
@@ -214,7 +219,8 @@ fn each_engine_plans_from_the_first_usable_recipe_that_lists_it() {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    assert_eq!(feature.engines(), ["rten", "candle", "burn"]);
+    // Burn is listed on SAM 2.1 after rten, so it comes before Candle, which only SAM 3 lists.
+    assert_eq!(feature.engines(), ["rten", "burn", "candle"]);
     let none = Inventory::default();
     let rten = plan_native(&feature, "rten", &none);
     assert_eq!(rten.recipe, "sam21-segment");
@@ -227,6 +233,10 @@ fn each_engine_plans_from_the_first_usable_recipe_that_lists_it() {
     let candle = plan_native(&feature, "candle", &none);
     assert_eq!(candle.recipe, "sam3-segment");
     assert_eq!(candle.download_bytes, 3_441_325_459);
+    // Burn also plans from SAM 2.1 (its route is listed there), with the same two files.
+    let burn = plan_native(&feature, "burn", &none);
+    assert_eq!(burn.recipe, "sam21-segment");
+    assert_eq!(burn.missing_files, rten.missing_files);
     let options = setup_options(std::slice::from_ref(&feature));
     let native: Vec<_> = options
         .iter()
@@ -235,6 +245,10 @@ fn each_engine_plans_from_the_first_usable_recipe_that_lists_it() {
         .collect();
     assert_eq!(
         native,
-        ["native:select-subject:rten", "native:select-subject:candle"]
+        [
+            "native:select-subject:rten",
+            "native:select-subject:burn",
+            "native:select-subject:candle"
+        ]
     );
 }

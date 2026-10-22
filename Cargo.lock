@@ -2010,6 +2010,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-declarative",
  "craft-ai-engine",
+ "craft-ai-engine-burn",
  "craft-ai-engine-candle",
  "craft-ai-engine-rten",
  "craft-ai-features",

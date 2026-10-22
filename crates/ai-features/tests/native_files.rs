@@ -56,12 +56,35 @@ fn a_route_without_files_of_its_own_has_no_weights() {
     assert_eq!(route.total_bytes(), 0);
 }
 
-/// The Burn slot names no files, so it has no weights and nothing to download.
+/// SAM 3's Burn slot still names no files, because no SAM 3 code exists for that engine and a
+/// route that cannot run must not offer a 3.4 GB download.
 #[test]
 fn a_runtime_with_no_code_yet_offers_no_download() {
     let feature = select_subject();
-    let recipe = feature.engine_recipe("burn").unwrap();
-    let burn = recipe.native.iter().find(|r| r.provider == "burn").unwrap();
+    let sam3 = feature
+        .locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap();
+    let burn = sam3.native.iter().find(|r| r.provider == "burn").unwrap();
     assert!(burn.models.is_empty() && burn.weights().is_none());
     assert_eq!(burn.total_bytes(), 0);
+}
+
+/// SAM 2.1's Burn route reads the same two published files as rten, listed after it: one download
+/// serves both, the encoder is the weights file, and Burn is never first. The files are not hosted
+/// converted copies; the engine prepares its own on the computer.
+#[test]
+fn burns_sam_2_1_route_shares_the_published_files_and_comes_after_rten() {
+    let feature = select_subject();
+    let recipe = feature.engine_recipe("burn").unwrap();
+    assert_eq!(recipe.workflow, "sam21-segment");
+    let providers: Vec<_> = recipe.native.iter().map(|r| r.provider.as_str()).collect();
+    assert_eq!(providers, ["rten", "burn"]);
+    let (rten, burn) = (&recipe.native[0], &recipe.native[1]);
+    assert_eq!(burn.model, "sam21");
+    assert_eq!(burn.models, rten.models);
+    assert_eq!(burn.weights().unwrap().filename, "encoder.onnx");
+    assert_eq!(burn.total_bytes(), 130_129_714);
+    assert!(burn.models.iter().all(|f| f.filename.ends_with(".onnx")));
 }

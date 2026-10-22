@@ -101,6 +101,36 @@ fn the_native_route_is_registered_for_an_onnx_file() {
     assert_eq!(route.file.as_deref(), file.to_str());
 }
 
+/// The Burn engine reads the saved copy made once on this computer: its encoder `.bpk` file is
+/// accepted as the weights, registered under the Burn connection and bound, and an app reads that
+/// exact file back. A file of any other kind is still refused.
+#[test]
+fn the_burn_route_is_registered_for_a_prepared_bpk_file() {
+    let w = World::new();
+    let file = w.weights("encoder.bpk");
+    let done = w
+        .desk("launcher")
+        .enable_native_with(&feature("select-subject"), "burn", &file)
+        .unwrap();
+    assert_eq!(done.connection.as_str(), "local-select-subject-burn");
+    assert_eq!(done.model.as_str(), "sam21");
+    let route = w
+        .client("lightcraft")
+        .local_route_for(&role())
+        .unwrap()
+        .unwrap();
+    assert_eq!(route.provider, "burn");
+    assert_eq!(route.file.as_deref(), file.to_str());
+    for other in ["encoder.bin", "encoder.pt", "encoder"] {
+        let refused = w.desk("launcher").enable_native_with(
+            &feature("select-subject"),
+            "burn",
+            &w.weights(other),
+        );
+        assert!(refused.is_err(), "{other} is not a weights file");
+    }
+}
+
 /// Two apps that share the store read the same registered weights file.
 #[test]
 fn two_apps_read_the_same_file() {

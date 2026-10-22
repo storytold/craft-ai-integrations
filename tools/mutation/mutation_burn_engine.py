@@ -1,6 +1,6 @@
 """be: the Burn engine's own rules (saved-weights loading, the panic guard, the answer checks, the
-file names it accepts) and the shared revision. The catalogue route and the binding's `.bpk`
-rule live with the client change and are checked there.
+file names it accepts), the catalogue route it is listed by, the binding's `.bpk` rule and the
+shared revision.
 
 Not reached here, because they need the real model, a graphics card or a graph the converter
 panics on (the ignored live tests in `crates/ai-engine-burn/tests/live.rs` and
@@ -55,4 +55,14 @@ BE = [
      'onnx-0.22.0-v1";', 'onnx-0.22.0-v2";', PKG, 'revision', 'the_architecture_and_the_saved'),
     ('burn-revision-bumped-in-the-cache-key', 'crates/ai-burn-setup/src/sam21.rs',
      'onnx-0.22.0-v1";', 'onnx-0.22.0-v2";', PKG, 'revision', 'the_architecture_and_the_saved'),
+    ('burn-route-lists-no-files', 'crates/ai-features/src/catalogue/sam21.rs',
+     '                models: sam21_onnx_files(),\n            },\n        ],',
+     '                models: Vec::new(),\n            },\n        ],',
+     'craft-ai-features', 'native_files', 'burns_sam_2_1_route'),
+    ('burn-route-named-rten', 'crates/ai-features/src/catalogue/sam21.rs',
+     'provider: "burn".to_owned(),', 'provider: "rten".to_owned(),',
+     'craft-ai-features', 'native_files', 'burns_sam_2_1_route'),
+    ('burn-bpk-refused-when-binding', 'crates/ai-client/src/local.rs',
+     '["safetensors", "onnx", "bpk"]', '["safetensors", "onnx"]',
+     'craft-ai-client', 'local_native', 'burn_route_is_registered'),
 ]

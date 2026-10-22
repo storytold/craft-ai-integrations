@@ -34,8 +34,13 @@ impl World {
         Self { dir, shared }
     }
 
+    /// An app client over this world's shared store whose only engines are the ones registered here.
     fn client(&self, app: &str, registry: EngineRegistry) -> AiClient {
         let mut factory = ProviderFactory::standard();
+        // Only the engines a test registers exist, whatever cargo features are on.
+        for built_in in ["rten", "candle", "burn"] {
+            factory.unregister(built_in);
+        }
         factory.register_engines(registry);
         AiClient::new(
             AppId::new(app).unwrap(),

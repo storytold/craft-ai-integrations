@@ -13,6 +13,7 @@ publish = false
 # one on is the whole of adopting it: `ProviderFactory::standard()` then knows the engine.
 candle = ["dep:craft-ai-engine-candle"]
 rten = ["dep:craft-ai-engine-rten"]
+burn = ["dep:craft-ai-engine-burn"]
 
 [dependencies]
 craft-ai-core.workspace = true
@@ -33,6 +34,7 @@ craft-ai-engine-candle = { path = "../ai-engine-candle", package = "craft-ai-eng
 # The picker-preset "Released …" date goes through chrono (no hand-rolled calendar code).
 chrono = { workspace = true }
 craft-ai-engine-rten = { path = "../ai-engine-rten", package = "craft-ai-engine-rten", optional = true }
+craft-ai-engine-burn = { path = "../ai-engine-burn", package = "craft-ai-engine-burn", optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true

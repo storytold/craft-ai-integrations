@@ -1,10 +1,11 @@
-//! Burn is a third local backend for the same tool, beside ComfyUI and Candle. This is the slot:
-//! the route is registered, bound, read and refused exactly as the other two are. No inference runs
-//! here, and no Burn runtime exists yet, so every app reports "no adapter" for it until one does.
+//! Burn is a third local backend for the same tool, beside ComfyUI and Candle. These tests are for
+//! an app that was built without it: the route is registered, bound, read and refused exactly as
+//! the others are, and the app says plainly that it cannot use it (the `burn_engine` tests cover
+//! an app that has the engine).
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use craft_ai_client::{AiClient, GroupState, RoleStatus, ToolDesk};
+use craft_ai_client::{AiClient, GroupState, ProviderFactory, RoleStatus, ToolDesk};
 use craft_ai_core::{AppId, Role, StoreFile};
 use craft_ai_features::Feature;
 use craft_ai_native::secrets::MemoryStore;
@@ -44,11 +45,17 @@ impl World {
     }
     /// An `AiClient` for the app `app` over the shared store of the test world.
     fn client(&self, app: &str) -> AiClient {
+        // An app with no built-in engine, whatever cargo features are on.
+        let mut factory = ProviderFactory::standard();
+        for built_in in ["rten", "candle", "burn"] {
+            factory.unregister(built_in);
+        }
         AiClient::new(
             AppId::new(app).unwrap(),
             self.shared.clone(),
             Arc::new(MemoryStore::new()),
         )
+        .with_factory(factory)
     }
     /// Writes a stand-in weights file in the world's folder and returns its path.
     fn weights(&self) -> PathBuf {

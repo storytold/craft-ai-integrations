@@ -83,5 +83,7 @@ pub(crate) fn built_in() -> EngineRegistry {
     registry.extend(craft_ai_engine_candle::runners());
     #[cfg(feature = "rten")]
     registry.extend(craft_ai_engine_rten::runners());
+    #[cfg(feature = "burn")]
+    registry.extend(craft_ai_engine_burn::runners());
     registry
 }
