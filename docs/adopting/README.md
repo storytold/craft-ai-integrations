@@ -59,6 +59,7 @@ third one that cannot run the service, is one test:
 ```sh
 cargo test -p craft-ai-client --test third_party_adoption -j 8
 cargo test -p craft-ai-client --doc -j 8
+cargo test -p craft-ai-client --test adopting_app_guide --test adopting_tool_guides --test adopting_drift -j 8
 cargo run  -p craft-ai-client --example custom_tool -j 8
 ```
 

@@ -39,7 +39,7 @@ tool it cannot serve. Do not work around them by sending less than the tool need
 | Symptom | Cause | Fix |
 |---|---|---|
 | Events seem to vanish | Each poll returns only new events. | Collect them in every loop. Do not poll just to read the state. |
-| `the job took too long` | `Job::wait` hit its timeout. It cancelled the job. | Use your own polling and a longer limit, or a different model. |
+| `the job took too long` | `Job::wait` hit its timeout. It tried to cancel the job, which may not work (see "Cancel does nothing"). | Use your own polling and a longer limit, or a different model. |
 | The interface freezes on Start | `start` ran on the interface thread. | Move `start` and `poll` to a worker. |
 | Cancel does nothing | Targeted cancel is off by default for some ComfyUI servers, because an older server may treat it as a global interrupt. | Expect the job to finish, and discard its result. |
 | The result is empty but the job succeeded | The tool has a fixed result shape (selection does) and no match is a valid answer. | Read it with the contract: `segment::read_found` says whether anything matched. |

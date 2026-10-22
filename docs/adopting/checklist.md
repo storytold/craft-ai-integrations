@@ -22,8 +22,10 @@ Use the section that matches what you built. Tick a box only when you ran the th
 - [ ] The consent prompt shows `plan.disclosure()` and offers `ConsentTerm::ALL`.
 - [ ] "This time" leaves nothing on disk. Longer terms are saved only when `term.remembers()`.
 - [ ] `start` and `poll` run off the interface thread.
-- [ ] Progress is shown. Cancel works while the job is queued and while it runs, and the app waits
-      for `Cancelled` before releasing the input.
+- [ ] Progress is shown. Cancel is offered while the job is queued and while it runs. If `cancel`
+      returns an error (`Unsupported` when targeted cancel is off for a ComfyUI server), the job
+      keeps running: the app waits for any end state, not only `Cancelled`, discards the result,
+      and releases the input once the job has ended.
 - [ ] Every `ErrorKind` has a path on screen (see the table in the app guide). `Cancelled` shows nothing.
 - [ ] The result is applied through the app's own undo, and survives save and reopen.
 

@@ -203,7 +203,8 @@ use craft_ai_core::{AppId, Provider};
 let mut factory = ProviderFactory::standard();
 factory.register("acme", |connection, key| {
     // `key` is already read from the key store. The adapter never touches a keychain.
-    assert!(key.is_none()); // this connection has no key
+    // A real adapter sends `key` with each request. This stand-in has nowhere to send it.
+    let _ = key;
     let script = Script {
         running_polls: 1,
         text_chunks: vec![],
