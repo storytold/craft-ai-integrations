@@ -199,6 +199,43 @@ fn leftovers_of_a_killed_run_are_swept_for_this_key_only() {
     );
 }
 
+/// A manifest that exists but cannot be opened (another program holds it exclusively) makes the
+/// copy unusable, so it gets the damaged-copy answer, not a "try again" that cannot help.
+#[cfg(windows)]
+#[test]
+fn a_manifest_that_cannot_be_opened_is_a_damaged_copy() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let r = Rig::new();
+    let fake = Fake::default();
+    let first = r.prepare(&fake).unwrap();
+    let manifest = first.encoder.parent().unwrap().join("manifest.json");
+    let _held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&manifest)
+        .unwrap();
+    assert_eq!(r.prepare(&fake).unwrap_err().message, DAMAGED_COPY);
+    assert_eq!(fake.0.get(), 1);
+}
+
+/// The same on Unix: a manifest nobody may read. The test ends quietly where the permission is not
+/// enforced (a run as the superuser).
+#[cfg(unix)]
+#[test]
+fn a_manifest_that_cannot_be_opened_is_a_damaged_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = Rig::new();
+    let fake = Fake::default();
+    let first = r.prepare(&fake).unwrap();
+    let manifest = first.encoder.parent().unwrap().join("manifest.json");
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0)).unwrap();
+    if File::open(&manifest).is_ok() {
+        return;
+    }
+    assert_eq!(r.prepare(&fake).unwrap_err().message, DAMAGED_COPY);
+    assert_eq!(fake.0.get(), 1);
+}
+
 #[path = "boundaries.rs"]
 mod boundaries;
 #[path = "safety.rs"]

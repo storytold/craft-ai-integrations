@@ -201,10 +201,10 @@ pub(crate) fn prepare(
         }
         let mut bytes = Vec::new();
         File::open(path)
-            .map_err(file_error)?
+            .map_err(damaged)?
             .take(4097)
             .read_to_end(&mut bytes)
-            .map_err(file_error)?;
+            .map_err(damaged)?;
         if bytes.len() > 4096 {
             return Err(damaged("oversized manifest"));
         }
