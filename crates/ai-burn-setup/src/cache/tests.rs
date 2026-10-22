@@ -228,7 +228,7 @@ fn a_manifest_that_cannot_be_opened_is_a_damaged_copy() {
     let fake = Fake::default();
     let first = r.prepare(&fake).unwrap();
     let manifest = first.encoder.parent().unwrap().join("manifest.json");
-    fs::set_permissions(&manifest, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o000)).unwrap();
     if File::open(&manifest).is_ok() {
         return;
     }
