@@ -52,7 +52,7 @@ choose a new global folder policy or migrate existing data.
   revision whenever the architecture, tensor mapping, or converter changes.
 - A cross-process file lock prevents two apps preparing the same copy together.
 - Only two nonempty, bounded weight files and a bounded manifest are published. Temporary source,
-  generated code and failed conversions are cleaned up. A final directory appears only after both
+  generated code and failed conversions are cleaned up. If the app is killed in the middle, the next preparation of the same files removes the scratch folders it left (they carry the cache key in their name), and never touches another key's. A final directory appears only after both
   files and the manifest are complete and flushed.
 - Reuse checks both saved file hashes. These checks detect changed files, not hostile replacement
   of both a manifest and weights by another process with the same account permissions.

@@ -212,9 +212,16 @@ pub(crate) fn prepare(
         }
         return Err(file_error("different conversion"));
     }
-    let work = tempfile::tempdir_in(cache).map_err(file_error)?;
-    let conversion = tempfile::tempdir_in(cache).map_err(file_error)?;
-    let output = tempfile::tempdir_in(cache).map_err(file_error)?;
+    sweep_stale(cache, &key);
+    let scratch = |role: &str| {
+        tempfile::Builder::new()
+            .prefix(&format!("{key}.{role}."))
+            .tempdir_in(cache)
+            .map_err(file_error)
+    };
+    let work = scratch("work")?;
+    let conversion = scratch("conv")?;
+    let output = scratch("out")?;
     for file in &bundle.files {
         let snapshot = work.path().join(&file.name);
         let input = File::open(source.join(&file.name)).map_err(file_error)?;
@@ -262,6 +269,25 @@ pub(crate) fn prepare(
     check_cancelled(cancelled)?;
     fs::rename(output.path(), &final_dir).map_err(file_error)?;
     Ok(prepared(&final_dir, Preparation::Converted))
+}
+
+/// Removes the scratch folders a killed run left for this cache key. The caller holds this key's
+/// lock, so no live run owns them. Only plain folders whose name starts with the full key and a dot
+/// are removed: other keys' folders, the lock file and any link are left alone.
+fn sweep_stale(cache: &Path, key: &str) {
+    let prefix = format!("{key}.");
+    let Ok(entries) = fs::read_dir(cache) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let ours = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(&prefix) && !n.ends_with(".lock"));
+        if ours && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]

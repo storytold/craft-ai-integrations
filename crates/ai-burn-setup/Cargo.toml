@@ -13,12 +13,14 @@ conversion = ["dep:burn-onnx"]
 
 [dependencies]
 craft-ai-core.workspace = true
-craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
 tempfile = "3"
 burn-onnx = { version = "=0.22.0", optional = true }
+
+[dev-dependencies]
+craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 
 [lints]
 workspace = true

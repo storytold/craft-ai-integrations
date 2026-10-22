@@ -12,8 +12,8 @@ The pieces, and which crate owns each:
 | The model run on Burn, weight loading, the panic guard | `craft-ai-engine-burn` |
 | The compiled architecture (generated) | `crates/ai-engine-burn/src/model/` |
 | One-time local conversion of the published ONNX files to saved weights | `craft-ai-burn-setup` (`docs/LOCAL-BURN-PREPARATION.md`) |
-| The catalogue route | `crates/ai-features/src/catalogue/sam21.rs` (a `burn` route after `rten`, same two published files) |
-| The cargo feature | `craft-ai-client` feature `burn` |
+| The catalogue route (planned, the next change) | `crates/ai-features/src/catalogue/sam21.rs`: a `burn` route after `rten`, same two published files |
+| The cargo feature (planned, the next change) | `craft-ai-client` feature `burn` |
 
 Nothing converted is hosted. The saved weights (`encoder.bpk`, `decoder.bpk`) are made on the
 person's computer, once, and shared by every app. Given the downloaded `encoder.onnx` (with
@@ -69,8 +69,6 @@ cargo run -p craft-ai-burn-setup --features conversion --example prepare_sam21 -
 CRAFT_TEST_SAM21_ONNX_DIR=<onnx dir> CRAFT_TEST_SAM21_BURN_DIR=<folder printed above> \
 CRAFT_TEST_SAM21_IMAGE=<512 square sample> \
   cargo test --release -p craft-ai-engine-burn --test live -j 8 -- --ignored --nocapture
-# Through the client, two apps
-cargo test -p craft-ai-client --features burn --test burn_engine -j 8 -- --ignored
 python tools/mutation/mutation_check.py be
 ```
 

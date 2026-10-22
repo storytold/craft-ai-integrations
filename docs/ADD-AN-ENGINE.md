@@ -110,7 +110,7 @@ pub fn runners() -> Vec<std::sync::Arc<dyn craft_ai_engine::ModelRunner>> {
 ```
 
 An engine that ships with this repository also gets a cargo feature on `craft-ai-client`
-(`candle`, `rten` and `burn` today). An app turns the feature on and `ProviderFactory::standard()` knows the engine:
+(`candle` and `rten` today). An app turns the feature on and `ProviderFactory::standard()` knows the engine:
 nothing else. For any other engine, the app (or the launcher) puts the runners in a registry and
 gives the client the registry:
 

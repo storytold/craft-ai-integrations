@@ -175,8 +175,10 @@ fn a_truncated_real_weights_file_is_an_error() {
 
 /// Loading from the downloaded files prepares the saved copy beside the model folder, once: the
 /// first load converts, the second only checks hashes, and the copy the runner reads is the one in
-/// `burn-prepared`.
+/// `burn-prepared`. Needs the converter (`prepare`) and a release build, so it is ignored by default.
+#[cfg(feature = "prepare")]
 #[test]
+#[ignore = "needs the real SAM 2.1 files; see the module docs"]
 fn loading_the_downloaded_files_prepares_once_beside_the_model_folder() {
     let Some(onnx) = std::env::var_os("CRAFT_TEST_SAM21_ONNX_DIR").map(PathBuf::from) else {
         return;

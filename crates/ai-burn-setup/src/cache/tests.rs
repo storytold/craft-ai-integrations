@@ -126,6 +126,29 @@ fn choosing_burn_again_reuses_the_local_weights() {
     assert_eq!(fs::read(r.source.join("decoder.onnx")).unwrap(), b"decoder");
 }
 
+/// A run that was killed leaves its scratch folders behind. The next preparation of the same files
+/// removes them, and leaves the scratch folders of any other cache key alone.
+#[test]
+fn leftovers_of_a_killed_run_are_swept_for_this_key_only() {
+    let r = Rig::new();
+    let key = cache_key(&r.bundle);
+    fs::create_dir_all(&r.cache).unwrap();
+    let mine = r.cache.join(format!("{key}.work.killed"));
+    let other = r
+        .cache
+        .join(format!("{}.work.killed", "f".repeat(key.len())));
+    for dir in [&mine, &other] {
+        fs::create_dir(dir).unwrap();
+        fs::write(dir.join("encoder.onnx"), b"leftover").unwrap();
+    }
+    r.prepare(&Fake::default()).unwrap();
+    assert!(!mine.exists(), "this key's leftovers are removed");
+    assert!(
+        other.exists(),
+        "another key's leftovers are not ours to remove"
+    );
+}
+
 #[path = "boundaries.rs"]
 mod boundaries;
 #[path = "safety.rs"]

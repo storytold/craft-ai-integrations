@@ -3,8 +3,8 @@
 //! engine for this model stays rten (`craft-ai-engine-rten`); this one is a choice.
 //!
 //! An app does not use this crate directly. It puts [`runners`] in an
-//! [`EngineRegistry`](craft_ai_engine::EngineRegistry), or turns on the `burn` feature of
-//! `craft-ai-client`, and asks the client for a capability. See `docs/ADD-AN-ENGINE.md`.
+//! [`EngineRegistry`](craft_ai_engine::EngineRegistry) and asks the client for a capability. See
+//! `docs/ADD-AN-ENGINE.md`.
 //!
 //! - **Same contract as rten**: clicks and a box in, a mask at the picture's size and a `Found`
 //!   result out. The request handling is shared with rten, not copied; this crate adds only the

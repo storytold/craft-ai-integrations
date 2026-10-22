@@ -267,14 +267,25 @@ def build(folder):
     return files
 
 
+USAGE = 'usage: generate_sam21.py <folder with encoder.onnx and decoder.onnx> [--check]'
+
+
+def parse_args(argv):
+    """Returns (folder, check). Anything starting with `--` other than `--check` is refused, so a
+    mistyped read-only run (`--chek`) can never fall through to the run that rewrites the tree."""
+    flags = [a for a in argv if a.startswith('--')]
+    folders = [a for a in argv if not a.startswith('--')]
+    if len(folders) != 1 or any(f != '--check' for f in flags):
+        fail(USAGE)
+    return folders[0], '--check' in flags
+
+
 def main():
     """Generates and writes, or with --check compares with the tree."""
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    if len(args) != 1:
-        fail('usage: generate_sam21.py <folder with encoder.onnx and decoder.onnx> [--check]')
-    files = build(Path(args[0]))
+    folder, check = parse_args(sys.argv[1:])
+    files = build(Path(folder))
     biggest = max(b.count('\n') for b in files.values())
-    if '--check' in sys.argv:
+    if check:
         have = ({p.relative_to(OUT).as_posix(): read_raw(p) for p in OUT.rglob('*.rs')}
                 if OUT.exists() else {})
         if have != files:

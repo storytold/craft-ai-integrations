@@ -140,16 +140,20 @@ fn the_runner_is_the_burn_sam21_the_catalogue_names() {
 #[cfg(feature = "prepare")]
 #[test]
 fn an_onnx_file_that_is_not_the_supported_export_is_refused_plainly() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("encoder.onnx"), b"x").unwrap();
-    std::fs::write(dir.path().join("decoder.onnx"), b"x").unwrap();
+    // The saved copy goes beside the model folder, so the folder is one level inside the test's own
+    // temp folder and nothing lands in the shared system temp folder.
+    let root = tempfile::tempdir().unwrap();
+    let models = root.path().join("models");
+    std::fs::create_dir(&models).unwrap();
+    std::fs::write(models.join("encoder.onnx"), b"x").unwrap();
+    std::fs::write(models.join("decoder.onnx"), b"x").unwrap();
     let error = Sam21Runner
-        .load(&dir.path().join("encoder.onnx"))
+        .load(&models.join("encoder.onnx"))
         .err()
         .unwrap();
     assert_eq!(error.kind, ErrorKind::Unsupported);
     assert!(
-        !error.message.contains(dir.path().to_str().unwrap()),
+        !error.message.contains(root.path().to_str().unwrap()),
         "{}",
         error.message
     );
@@ -164,9 +168,8 @@ fn an_onnx_file_that_is_not_the_supported_export_is_refused_plainly() {
     );
     // Nothing was written beside the folder.
     assert!(
-        !dir.path()
-            .parent()
-            .unwrap()
+        !root
+            .path()
             .join("burn-prepared")
             .join("encoder.bpk")
             .exists()

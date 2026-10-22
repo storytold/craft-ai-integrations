@@ -44,4 +44,10 @@ BP = [
     case('burn-second-conversion-not-locked',
          'lock.try_lock().map_err(|_| {',
          'Ok::<(), std::io::Error>(()).map_err(|_| {', 'another_apps_conversion_lock'),
+    case('burn-killed-run-leftovers-kept',
+         '    sweep_stale(cache, &key);\n',
+         '', 'leftovers_of_a_killed_run'),
+    case('burn-sweep-takes-other-keys',
+         '.is_some_and(|n| n.starts_with(&prefix) && !n.ends_with(".lock"));',
+         '.is_some_and(|n| !n.ends_with(".lock"));', 'leftovers_of_a_killed_run'),
 ]

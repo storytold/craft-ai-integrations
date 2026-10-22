@@ -12,7 +12,7 @@ bad mutant (fix the mutant). Cargo runs serially, targeted with `-p`, with `-j 8
 | `mutation_check.py rt` | rten model runner, bounded picture decoding, resampling and prompt assembly. |
 | `mutation_check.py rt` | rten engine picture handling: bounded PNG and JPEG decoding, mask encoding, resampling. |
 | `mutation_check.py bp` | Local Burn weight preparation (`ai-burn-setup`): source hashes, cache key, damaged saved weights, cancel. |
-| `mutation_check.py be` | Burn engine: saved-weights loading, the panic guard, answer checks, file names, its catalogue route, the `.bpk` binding rule and the shared architecture revision. |
+| `mutation_check.py be` | Burn engine: saved-weights loading, the panic guard, answer checks, file names and the shared architecture revision. |
 | `mutation_check.py gs` | Generic selection: scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gs` | Generic selection workflows: the scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gu` | Generic selection uploads: one upload per picture, the bounded memory, the resend after a cleared scratch area or a failed job. |
