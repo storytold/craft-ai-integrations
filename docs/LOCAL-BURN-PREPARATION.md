@@ -60,8 +60,9 @@ choose a new global folder policy or migrate existing data.
   explicit removal/rebuild of that derived copy. Originals are never removed or repaired.
 - Cancel before starting writes nothing. Cancel during a synchronous converter call takes effect
   when that component finishes, and its late result is discarded. Do not promise immediate Cancel.
-- Preparation is not inference, readiness in an app, or permission to bind. Host UI and the generic
-  engine registration remain separate work.
+- Preparation is not inference, readiness in an app, or permission to bind. The engine that reads the saved
+  weights is `craft-ai-engine-burn` (`docs/BURN-ENGINE.md`); the host's approval and progress screens
+  remain separate work.
 
 ## Exercise it
 
