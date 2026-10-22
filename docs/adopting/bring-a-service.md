@@ -32,7 +32,7 @@ A `Provider` has five methods:
 | `estimate(model, request)` | Optional. A price estimate when you can give one. |
 | `submit(model, request)` | Check the request against the model's spec and refuse **before sending anything** with `Unsupported` or `InvalidRequest`. Then start the job and return its id. |
 | `poll(job)` | Return the state and only the events that are new since the last poll. A finished state must stay the same. |
-| `cancel(job)` | Stop the job. Calling it twice, or on a finished job, is not an error. An unknown job is. |
+| `cancel(job)` | Stop the job. If you cannot stop an unfinished job, return `Unsupported`. Calling it twice, or on a finished job, is not an error. An unknown job is. |
 
 The trait is synchronous on purpose. Do the slow work on your own thread and let `poll` read the
 state. Here is a complete one, small enough to read in a minute. It "shouts" a prompt back:
@@ -177,8 +177,8 @@ Rules your provider must keep (the checks above test most of them):
 
 - **Refuse before sending.** A request the model cannot take is rejected in `submit`, with nothing
   on the wire.
-- **Keep time moving forward.** A job goes `Queued`, `Running`, then ends. Progress never goes
-  down. A finished job stays finished.
+- **Keep time moving forward.** A job starts `Queued` and may become `Running` before it ends. It
+  may also end straight from `Queued`. Progress never goes down. A finished job stays finished.
 - **Deliver events once.** Each result appears in exactly one poll.
 - **Never put a key in an error, a log line or an event.** Use `AiError::redacted(kind, message,
   &[&secret])` when a reply might echo the key back.

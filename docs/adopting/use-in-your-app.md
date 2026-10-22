@@ -233,8 +233,11 @@ assert_eq!(final_state, JobState::Succeeded);
   `Failed { error }` or `Cancelled`. A finished state never changes.
 - **Events** arrive once. Each poll returns only what is new since the last poll, so collect them
   as you go. Results are `Event::Output`.
-- **Cancel** with `job.cancel()`. It can be called twice and on a finished job. Then wait for the
-  `Cancelled` state before you let go of any picture the job was reading.
+- **Cancel** with `job.cancel()`. It can be called twice and on a finished job. A connection that
+  cannot stop an unfinished job returns `Unsupported`: ComfyUI does so unless the app turned on
+  `with_targeted_interrupt(true)`, because an older server may treat the interrupt as global. When
+  cancel succeeds, wait for the `Cancelled` state before you let go of any picture the job was
+  reading. When it does not, wait for any end state and discard the result.
 - **Apply the result yourself.** The layer returns bytes or text. Writing it into a document,
   with undo, is your app's job.
 
