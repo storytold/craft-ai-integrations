@@ -101,12 +101,18 @@ fn damaged_saved_weights_are_refused_without_overwriting_them() {
 /// One way of damaging a saved copy, given the path of its manifest.
 type Damage = fn(&Path);
 
-/// Whatever is wrong with a saved copy (unreadable manifest, another conversion's manifest, a
-/// manifest padded past its limit), the answer says the copy is damaged and what to do, not the
+/// Whatever is wrong with a saved copy (a missing weight file, an unreadable manifest, another
+/// conversion's manifest, a manifest padded past its limit), the answer says the copy is damaged and what to do, not the
 /// "try again" that can never succeed. The copy is left exactly as it was.
 #[test]
 fn every_kind_of_damaged_saved_copy_gets_the_same_plain_answer() {
-    let corrupt: [(&str, Damage); 3] = [
+    let corrupt: [(&str, Damage); 5] = [
+        ("missing encoder", |m| {
+            fs::remove_file(m.parent().unwrap().join("encoder.bpk")).unwrap()
+        }),
+        ("missing decoder", |m| {
+            fs::remove_file(m.parent().unwrap().join("decoder.bpk")).unwrap()
+        }),
         ("not json", |m| fs::write(m, b"not json").unwrap()),
         ("another key", |m| {
             let text = fs::read_to_string(m).unwrap();

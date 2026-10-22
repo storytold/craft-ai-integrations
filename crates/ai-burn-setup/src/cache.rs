@@ -81,7 +81,7 @@ fn file_error(_: impl std::fmt::Display) -> AiError {
 pub const DAMAGED_COPY: &str = "The saved copy of this model on this computer is damaged, so it was left as it is. Remove that saved copy, then prepare the model again.";
 
 /// The answer for a saved copy that exists but cannot be used (wrong kind of entry, unreadable or
-/// oversized manifest, another conversion's manifest, changed weights). Nothing is deleted or
+/// oversized manifest, another conversion's manifest, a missing or changed weight file). Nothing is deleted or
 /// repaired for the person: a derived copy is still theirs to remove.
 fn damaged(_: impl std::fmt::Display) -> AiError {
     AiError::unsupported(DAMAGED_COPY)
@@ -214,7 +214,7 @@ pub(crate) fn prepare(
                 .into_iter()
                 .zip(&manifest.hashes)
             {
-                if hash_file(&final_dir.join(name))? != *expected {
+                if hash_file(&final_dir.join(name)).map_err(damaged)? != *expected {
                     return Err(damaged("damaged saved weights"));
                 }
             }
