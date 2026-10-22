@@ -176,6 +176,30 @@ fn an_onnx_file_that_is_not_the_supported_export_is_refused_plainly() {
     );
 }
 
+/// A damaged saved copy is explained with where it lives and what to do, since trying again cannot
+/// help; any other failure passes through unchanged.
+#[cfg(feature = "prepare")]
+#[test]
+fn a_damaged_saved_copy_is_explained_with_where_it_lives() {
+    let damaged = prepare::explain(craft_ai_core::AiError::unsupported(
+        craft_ai_burn_setup::DAMAGED_COPY,
+    ));
+    assert_eq!(damaged.kind, ErrorKind::Unsupported);
+    assert!(
+        damaged.message.contains("burn-prepared"),
+        "{}",
+        damaged.message
+    );
+    assert!(damaged.message.contains("Delete"), "{}", damaged.message);
+    assert!(
+        !damaged.message.contains("try again."),
+        "{}",
+        damaged.message
+    );
+    let other = craft_ai_core::AiError::unsupported("Another app is preparing this model.");
+    assert_eq!(prepare::explain(other.clone()).message, other.message);
+}
+
 /// With the converter left out of the build, a downloaded file is answered with where to go.
 #[cfg(not(feature = "prepare"))]
 #[test]

@@ -13,6 +13,6 @@ mod cache;
 mod sam21;
 
 #[cfg(any(test, feature = "conversion"))]
-pub use cache::{Preparation, PreparedWeights};
+pub use cache::{DAMAGED_COPY, Preparation, PreparedWeights};
 #[cfg(feature = "conversion")]
 pub use sam21::prepare_sam21;

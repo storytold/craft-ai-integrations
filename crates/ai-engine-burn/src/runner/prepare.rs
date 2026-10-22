@@ -47,12 +47,25 @@ pub(super) fn prepared_folder(encoder: &Path) -> Result<PathBuf, AiError> {
         AiError::unsupported(
             "SAM 2.1 could not be prepared from these files. Open Set up AI to download them again.",
         )
-    })??;
+    })?
+    .map_err(explain)?;
     prepared
         .encoder
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| AiError::unsupported(OPEN_SETUP))
+}
+
+/// Says where a damaged saved copy lives. Trying again cannot help (the copy is refused, not
+/// repaired), so the person is told to delete the folder; any other failure passes through.
+#[cfg(feature = "prepare")]
+pub(super) fn explain(error: AiError) -> AiError {
+    if error.message == craft_ai_burn_setup::DAMAGED_COPY {
+        return AiError::unsupported(format!(
+            "The saved copy of SAM 2.1 is damaged, so it was left as it is. Delete the {PREPARED_DIR} folder beside the model folder, then open this option again."
+        ));
+    }
+    error
 }
 
 /// Without the converter built in, a downloaded file is answered with what to do.

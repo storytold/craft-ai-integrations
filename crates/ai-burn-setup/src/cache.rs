@@ -76,6 +76,17 @@ fn file_error(_: impl std::fmt::Display) -> AiError {
     )
 }
 
+/// What a damaged saved copy is answered with. It is public so a host can recognise it and say where
+/// the copy lives; retrying cannot help, so this never says "try again".
+pub const DAMAGED_COPY: &str = "The saved copy of this model on this computer is damaged, so it was left as it is. Remove that saved copy, then prepare the model again.";
+
+/// The answer for a saved copy that exists but cannot be used (wrong kind of entry, unreadable or
+/// oversized manifest, another conversion's manifest, changed weights). Nothing is deleted or
+/// repaired for the person: a derived copy is still theirs to remove.
+fn damaged(_: impl std::fmt::Display) -> AiError {
+    AiError::unsupported(DAMAGED_COPY)
+}
+
 /// Hashes a file with bounded working memory.
 fn hash_file(path: &Path) -> Result<String, AiError> {
     let metadata = fs::symlink_metadata(path).map_err(file_error)?;
@@ -178,15 +189,15 @@ pub(crate) fn prepare(
     })?;
     if let Ok(metadata) = fs::symlink_metadata(&final_dir) {
         if !metadata.file_type().is_dir() {
-            return Err(file_error("saved copy is not a plain directory"));
+            return Err(damaged("saved copy is not a plain directory"));
         }
         let path = final_dir.join("manifest.json");
         if !fs::symlink_metadata(&path)
-            .map_err(file_error)?
+            .map_err(damaged)?
             .file_type()
             .is_file()
         {
-            return Err(file_error("manifest is not a plain file"));
+            return Err(damaged("manifest is not a plain file"));
         }
         let mut bytes = Vec::new();
         File::open(path)
@@ -195,22 +206,22 @@ pub(crate) fn prepare(
             .read_to_end(&mut bytes)
             .map_err(file_error)?;
         if bytes.len() > 4096 {
-            return Err(file_error("oversized manifest"));
+            return Err(damaged("oversized manifest"));
         }
-        let manifest: Manifest = serde_json::from_slice(&bytes).map_err(file_error)?;
+        let manifest: Manifest = serde_json::from_slice(&bytes).map_err(damaged)?;
         if manifest.key == key {
             for (name, expected) in ["encoder.bpk", "decoder.bpk"]
                 .into_iter()
                 .zip(&manifest.hashes)
             {
                 if hash_file(&final_dir.join(name))? != *expected {
-                    return Err(file_error("damaged saved weights"));
+                    return Err(damaged("damaged saved weights"));
                 }
             }
             check_cancelled(cancelled)?;
             return Ok(prepared(&final_dir, Preparation::Reused));
         }
-        return Err(file_error("different conversion"));
+        return Err(damaged("different conversion"));
     }
     sweep_stale(cache, &key);
     let scratch = |role: &str| {

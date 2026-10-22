@@ -56,7 +56,7 @@ choose a new global folder policy or migrate existing data.
   files and the manifest are complete and flushed.
 - Reuse checks both saved file hashes. These checks detect changed files, not hostile replacement
   of both a manifest and weights by another process with the same account permissions.
-- Damaged saved files are refused, not overwritten or silently repaired. The host can offer an
+- Damaged saved files are refused, not overwritten or silently repaired. The answer says the saved copy is damaged and to remove it (a retry can never succeed), and the Burn engine adds where it lives (`burn-prepared` beside the model folder). The host can offer an
   explicit removal/rebuild of that derived copy. Originals are never removed or repaired.
 - Cancel before starting writes nothing. Cancel during a synchronous converter call takes effect
   when that component finishes, and its late result is discarded. Do not promise immediate Cancel.
