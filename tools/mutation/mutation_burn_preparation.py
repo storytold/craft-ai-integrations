@@ -48,6 +48,9 @@ BP = [
          '    sweep_stale(cache, &key);\n',
          '', 'leftovers_of_a_killed_run'),
     case('burn-sweep-takes-other-keys',
-         '.is_some_and(|n| n.starts_with(&prefix) && !n.ends_with(".lock"));',
-         '.is_some_and(|n| !n.ends_with(".lock"));', 'leftovers_of_a_killed_run'),
+         '.is_some_and(|n| prefixes.iter().any(|p| n.starts_with(p.as_str())));',
+         '.is_some_and(|n| n.contains(".work."));', 'leftovers_of_a_killed_run'),
+    case('burn-sweep-takes-a-renamed-copy',
+         'SCRATCH_ROLES.map(|role| format!("{key}.{role}."));',
+         'SCRATCH_ROLES.map(|_| format!("{key}."));', 'leftovers_of_a_killed_run'),
 ]

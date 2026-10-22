@@ -219,9 +219,10 @@ pub(crate) fn prepare(
             .tempdir_in(cache)
             .map_err(file_error)
     };
-    let work = scratch("work")?;
-    let conversion = scratch("conv")?;
-    let output = scratch("out")?;
+    let [work_role, conversion_role, output_role] = SCRATCH_ROLES;
+    let work = scratch(work_role)?;
+    let conversion = scratch(conversion_role)?;
+    let output = scratch(output_role)?;
     for file in &bundle.files {
         let snapshot = work.path().join(&file.name);
         let input = File::open(source.join(&file.name)).map_err(file_error)?;
@@ -271,11 +272,16 @@ pub(crate) fn prepare(
     Ok(prepared(&final_dir, Preparation::Converted))
 }
 
+/// The roles of the scratch folders one preparation makes: the copy of the originals, the
+/// converter's output and the folder that becomes the published copy.
+const SCRATCH_ROLES: [&str; 3] = ["work", "conv", "out"];
+
 /// Removes the scratch folders a killed run left for this cache key. The caller holds this key's
-/// lock, so no live run owns them. Only plain folders whose name starts with the full key and a dot
-/// are removed: other keys' folders, the lock file and any link are left alone.
+/// lock, so no live run owns them. Only plain folders named `<key>.<role>.` followed by anything,
+/// for the roles above, are removed: another key's folders, a damaged copy renamed to `<key>.backup`,
+/// the lock file and any link are left alone.
 fn sweep_stale(cache: &Path, key: &str) {
-    let prefix = format!("{key}.");
+    let prefixes = SCRATCH_ROLES.map(|role| format!("{key}.{role}."));
     let Ok(entries) = fs::read_dir(cache) else {
         return;
     };
@@ -283,7 +289,7 @@ fn sweep_stale(cache: &Path, key: &str) {
         let ours = entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.starts_with(&prefix) && !n.ends_with(".lock"));
+            .is_some_and(|n| prefixes.iter().any(|p| n.starts_with(p.as_str())));
         if ours && entry.file_type().is_ok_and(|t| t.is_dir()) {
             let _ = fs::remove_dir_all(entry.path());
         }

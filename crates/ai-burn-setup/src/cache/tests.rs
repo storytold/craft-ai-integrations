@@ -127,7 +127,8 @@ fn choosing_burn_again_reuses_the_local_weights() {
 }
 
 /// A run that was killed leaves its scratch folders behind. The next preparation of the same files
-/// removes them, and leaves the scratch folders of any other cache key alone.
+/// removes them, and leaves alone the scratch folders of any other cache key and any other folder
+/// that merely starts with this key (a damaged copy a person renamed to `<key>.backup`).
 #[test]
 fn leftovers_of_a_killed_run_are_swept_for_this_key_only() {
     let r = Rig::new();
@@ -141,8 +142,12 @@ fn leftovers_of_a_killed_run_are_swept_for_this_key_only() {
         fs::create_dir(dir).unwrap();
         fs::write(dir.join("encoder.onnx"), b"leftover").unwrap();
     }
+    let backup = r.cache.join(format!("{key}.backup"));
+    fs::create_dir(&backup).unwrap();
+    fs::write(backup.join("encoder.bpk"), b"kept").unwrap();
     r.prepare(&Fake::default()).unwrap();
     assert!(!mine.exists(), "this key's leftovers are removed");
+    assert!(backup.exists(), "a renamed copy is not scratch");
     assert!(
         other.exists(),
         "another key's leftovers are not ours to remove"

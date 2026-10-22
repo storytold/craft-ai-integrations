@@ -18,14 +18,18 @@ class ParseArgsTests(unittest.TestCase):
     def test_a_mistyped_option_is_refused_instead_of_falling_back_to_writing(self):
         """`--chek` used to be dropped, which selected the run that deletes and rewrites the tree."""
         for bad in (['models', '--chek'], ['models', '--check', '--force'], ['--chek', 'models']):
-            with self.subTest(bad=bad), self.assertRaises(SystemExit):
-                parse_args(bad)
+            with self.subTest(bad=bad):
+                with self.assertRaises(SystemExit) as raised:
+                    parse_args(bad)
+                self.assertEqual(raised.exception.code, 1)
 
     def test_exactly_one_folder_is_required(self):
         """No folder, or two, is a usage error."""
         for bad in ([], ['--check'], ['a', 'b']):
-            with self.subTest(bad=bad), self.assertRaises(SystemExit):
-                parse_args(bad)
+            with self.subTest(bad=bad):
+                with self.assertRaises(SystemExit) as raised:
+                    parse_args(bad)
+                self.assertEqual(raised.exception.code, 1)
 
 
 if __name__ == '__main__':
