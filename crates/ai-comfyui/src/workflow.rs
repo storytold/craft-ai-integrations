@@ -7,6 +7,8 @@ use craft_ai_core::{AiError, ErrorKind, ModelId, Request};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod video;
+
 const MAX_GRAPH_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -332,7 +334,9 @@ impl Workflow {
                 .accepting(InputRole::Mask, 1)
                 .requiring(InputRole::Mask);
         }
-        if self.capability.as_str() == "image.segment" {
+        if self.capability.as_str() == "image.segment"
+            || (self.capability.as_str() == "video.generate" && self.source.is_some())
+        {
             spec = spec
                 .accepting(InputRole::Source, 1)
                 .requiring(InputRole::Source);
@@ -413,9 +417,10 @@ impl Workflow {
         self.render_mapped(request, &[])
     }
 
-    /// Substitute the server-returned filename of the uploaded source image (segment workflows).
+    /// Substitute the server-returned filename of the uploaded source image (segment workflows and
+    /// video workflows with a start image).
     pub fn render_with_source(&self, request: &Request, source: &str) -> Result<Value, AiError> {
-        if self.capability.as_str() != "image.segment" {
+        if !matches!(self.capability.as_str(), "image.segment" | "video.generate") {
             return Err(AiError::unsupported(
                 "this workflow has no source-only mapping",
             ));
