@@ -261,6 +261,15 @@ UPLOAD_ORDER_NEW = """let source = self.read_role(request, InputRole::Source)?;
 MASK_JPEG_OLD = """|| (role == InputRole::Source
                                 && h.media_type.as_str() == "image/jpeg") => {}"""
 MASK_JPEG_NEW = """|| h.media_type.as_str() == "image/jpeg" => {}"""
+START_IMAGE_OLD = """let source = self.read_role(request, InputRole::Source)?;
+            let source = self.upload(InputRole::Source, &source)?;"""
+# A video workflow's start image read straight from the request: no byte check, no size limit.
+START_IMAGE_NEW = """let source = match &request.inputs.iter().find(|i| i.role == InputRole::Source).ok_or_else(|| AiError::invalid("missing source input"))?.payload {
+                craft_ai_core::Payload::Inline { media_type, data } => crate::input::Image { media_type: media_type.as_str().to_owned(), data: data.clone() },
+                craft_ai_core::Payload::Handle(h) => crate::input::Image { media_type: h.media_type.as_str().to_owned(), data: std::fs::read(url::Url::parse(&h.uri).map_err(|_| AiError::invalid("bad address"))?.to_file_path().map_err(|_| AiError::invalid("bad address"))?).map_err(|_| AiError::invalid("unreadable"))? },
+                _ => return Err(AiError::invalid("an image is needed")),
+            };
+            let source = self.upload(InputRole::Source, &source)?;"""
 # p4: media going to and coming from ComfyUI is judged by its bytes (crates/ai-comfyui).
 P4 = [
     ('output-not-checked', CF_OUT, 'if sniff::media_type(head).map(|(media, _)| media) == Some(expected) {', 'if true {', CF, 'media_checks', 'an_output_that_is'),
@@ -281,6 +290,7 @@ P4 = [
     ('input-file-read-unbounded', CF_IN, 'reader.take(max.saturating_add(1))', 'reader.take(u64::MAX)', CF, 'lib', 'a_reader_is_read_no_further'),
     ('input-sent-before-all-checked', CF_PROV, UPLOAD_ORDER_OLD, UPLOAD_ORDER_NEW, CF, 'media_checks', 'never_uploaded'),
     ('input-jpeg-mask-accepted', CF_FLOW, MASK_JPEG_OLD, MASK_JPEG_NEW, CF, 'media_checks', 'mask_must_be_a_png'),
+    ('start-image-sent-unchecked', CF_PROV, START_IMAGE_OLD, START_IMAGE_NEW, CF, 'video_start_image', 'never_uploaded'),
 ]
 
 MEDIA = C + 'ai-media/src/store.rs'

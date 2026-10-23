@@ -57,8 +57,8 @@ pub struct WorkflowSpec {
     /// When absent, the only node with a plain string `text` input is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<Binding>,
-    /// Required for image.inpaint and image.segment; maps the uploaded source filename to a
-    /// LoadImage node.
+    /// Required for image.inpaint and image.segment, optional for video.generate (its start image);
+    /// maps the uploaded source filename to a LoadImage node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Binding>,
     /// Required for image.inpaint; maps the uploaded PNG filename to a LoadImageMask node.
@@ -76,6 +76,11 @@ fn default_capability() -> String {
 impl WorkflowSpec {
     /// Validates everything and builds the checked [`Workflow`].
     pub fn to_workflow(&self) -> Result<Workflow, AiError> {
+        let id = if self.id.trim().is_empty() {
+            "workflow"
+        } else {
+            self.id.trim()
+        };
         let binding = match &self.prompt {
             Some(p) => p.clone(),
             None => infer_binding(&self.graph)?,
@@ -86,11 +91,7 @@ impl WorkflowSpec {
         };
         if self.capability == "image.inpaint" {
             return Workflow::import_inpaint(
-                if self.id.trim().is_empty() {
-                    "workflow"
-                } else {
-                    self.id.trim()
-                },
+                id,
                 self.graph.clone(),
                 binding,
                 &output,
@@ -107,11 +108,7 @@ impl WorkflowSpec {
                 return Err(AiError::invalid("a selection workflow has no mask binding"));
             }
             return Workflow::import_segment(
-                if self.id.trim().is_empty() {
-                    "workflow"
-                } else {
-                    self.id.trim()
-                },
+                id,
                 self.graph.clone(),
                 binding,
                 &output,
@@ -120,22 +117,24 @@ impl WorkflowSpec {
                     .ok_or_else(|| AiError::invalid("selecting needs a source binding"))?,
             );
         }
+        if self.capability == "video.generate"
+            && self.mask.is_none()
+            && let Some(source) = &self.source
+        {
+            return Workflow::import_video_from_image(
+                id,
+                self.graph.clone(),
+                binding,
+                &output,
+                source.clone(),
+            );
+        }
         if self.source.is_some() || self.mask.is_some() {
             return Err(AiError::invalid(
-                "source and mask bindings need image.inpaint, and a source binding image.segment",
+                "source and mask bindings need image.inpaint; a source binding alone needs image.segment or video.generate",
             ));
         }
-        Workflow::import(
-            if self.id.trim().is_empty() {
-                "workflow"
-            } else {
-                self.id.trim()
-            },
-            &self.capability,
-            self.graph.clone(),
-            binding,
-            &output,
-        )
+        Workflow::import(id, &self.capability, self.graph.clone(), binding, &output)
     }
 
     /// Parses a stored file. `id` overrides the spec's `id` when the file has none
