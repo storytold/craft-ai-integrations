@@ -21,6 +21,7 @@ craft-ai-native = { path = "../ai-native", package = "craft-ai-native" }
 craft-ai-openai = { path = "../ai-openai", package = "craft-ai-openai" }
 craft-ai-artcraft = { path = "../ai-artcraft", package = "craft-ai-artcraft" }
 craft-ai-bfl = { path = "../ai-bfl", package = "craft-ai-bfl" }
+craft-ai-fantastico = { path = "../ai-fantastico", package = "craft-ai-fantastico" }
 craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 craft-ai-media = { path = "../ai-media", package = "craft-ai-media" }
 craft-ai-comfyui = { path = "../ai-comfyui", package = "craft-ai-comfyui" }

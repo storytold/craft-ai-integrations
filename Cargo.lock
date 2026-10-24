@@ -2013,6 +2013,7 @@ dependencies = [
  "craft-ai-engine-burn",
  "craft-ai-engine-candle",
  "craft-ai-engine-rten",
+ "craft-ai-fantastico",
  "craft-ai-features",
  "craft-ai-media",
  "craft-ai-native",
@@ -2156,6 +2157,17 @@ dependencies = [
  "rten-tensor",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "craft-ai-fantastico"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-core",
+ "craft-ai-http",
+ "fantastico-sdk",
+ "serde_json",
+ "ureq 3.4.2",
 ]
 
 [[package]]
@@ -3740,6 +3752,15 @@ name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fantastico-sdk"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "435f7391450c352a563bec3b930d10aae267136e95e8ee81c8d8b9f6fe02c142"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "fastbloom"
