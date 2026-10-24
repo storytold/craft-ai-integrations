@@ -41,9 +41,10 @@ impl SourceKind {
                 download: &["huggingface.co", ".huggingface.co", ".hf.co"],
                 token_host: Some("huggingface.co"),
             },
-            // Release assets of public repositories only: no token is ever sent to GitHub.
+            // The resolver reads release metadata and licences from the API before downloading
+            // public assets from the web/content hosts. No token is ever sent to GitHub.
             Self::GitHubRelease => HostRules {
-                download: &["github.com", ".githubusercontent.com"],
+                download: &["api.github.com", "github.com", ".githubusercontent.com"],
                 token_host: None,
             },
             Self::Civitai => HostRules {
