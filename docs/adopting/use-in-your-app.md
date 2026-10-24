@@ -338,6 +338,15 @@ picker, consent prompt, progress, connection panel and history widgets. Hosts wi
 look should draw their own views over the same data. The data and the rules are shared. The
 look is yours.
 
+An app adopting the widgets repeats the complete `[patch.crates-io]` recipe in its own root:
+`storytold/egui` at `6d518fc799681571963842f95b55a6b68431b15a` and `storytold/winit` at
+`a517b3846ee8457d84ee4975110bfda6797c44dc`. Patches do not propagate from this repository. The
+library does not force bundled fonts; enable eframe's `default_fonts` or supply your own provider.
+Use only this workspace's `craft-ai-core` package, not the separate `craft-libs` copy. The small
+[consumer smoke](../../consumer-smoke/README.md) workspace in this checkout checks that recipe and
+type identity; its locked check and one draw test pass headlessly. Native focus, IME, clipboard and
+rendering still need your own platform test.
+
 ## 13. Test your integration with no network
 
 Build a world with no network: a temporary store, an in-memory key store, the launcher's choice

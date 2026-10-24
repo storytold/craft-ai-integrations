@@ -3,7 +3,8 @@
 Each case breaks one safety rule in the source, runs the one test that should notice, and puts the
 source back. A case is **caught** only if the mutated code compiled and the test run failed. A mutant
 that does not compile counts as not caught, so every survivor is either a test gap (fix the test) or a
-bad mutant (fix the mutant). Cargo runs serially, targeted with `-p`, with `-j 8`.
+bad mutant (fix the mutant). Cargo runs serially, targeted with `-p` and `--locked`,
+honouring `CARGO_BUILD_JOBS` from the build resource.
 
 | Script | Groups |
 |---|---|
@@ -23,6 +24,7 @@ bad mutant (fix the mutant). Cargo runs serially, targeted with `-p`, with `-j 8
 | `mutation_check.py ps` | Node pack status report (`pack/status.rs`): links, hidden folders, names, the install record. |
 | `mutation_check.py vx` | Vertex express adapter (`ai-vertex/src/lib.rs`): the API key travels in the `x-goog-api-key` header, never in the request URL. |
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |
+| `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh

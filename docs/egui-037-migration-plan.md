@@ -1,13 +1,34 @@
 # egui 0.37 migration plan for craft-ai-integrations
 
-Status: planning only. This is a source audit of the exact checkout at `1a02afd6bed425bcd516d8de2f3dc3b29614b23d` on
-`codex/egui-037-plan-20261022`. No production code, manifest, lockfile, test, benchmark, VM, or evidence file was changed to
-produce it, and no build or test was run. No push, pull request, comment, release, or other publication is authorized. Each
-future publication needs fresh explicit human approval after the exact content and validation are shown.
+Status: implementation and headless qualification are complete for the current follow-up;
+**not acceptance-complete**. The source audit at
+`1a02afd6bed425bcd516d8de2f3dc3b29614b23d` is retained below as historical evidence. The current
+checkout is `7c80bbc52cb5a84cebeb67529a18d670a15c511b` plus local AI-5 follow-up changes (the
+deterministic snapshot suite, the separate consumer-smoke root, the panel mutation group and these
+docs). The follow-up passed 108 tests, strict all-target clippy and fmt on Linux; its five candidate
+snapshots, lifecycle mutants and locked consumer smoke are checked, and an independent test-packet
+review passed. Native GUI/IME, physical-GPU and performance qualification remain open. No push, pull
+request, comment, release, merge or other publication is authorised; each future publication and the
+final merge still need fresh explicit human approval after the exact content and validation are shown.
 
 The repository is `storytold/craft-ai-integrations`. Its only egui consumer is `crates/ai-egui` (package `craft-ai-egui`).
 This plan covers that crate, its examples, tests, workspace dependency graph, and the contracts it must keep for any app that
 may adopt it.
+
+### Current implemented state (2026-10-24)
+
+| Item | Actual state |
+| --- | --- |
+| Source | `7c80bbc52cb5a84cebeb67529a18d670a15c511b`, plus the inherited pin-only root `Cargo.toml`/`Cargo.lock` updates and the local follow-up files listed in the change review. |
+| Production egui family | Reviewed storytold `storytold/egui` at `6d518fc799681571963842f95b55a6b68431b15a`; one family source in the root lock. |
+| Production winit | Reviewed storytold `storytold/winit` at `a517b3846ee8457d84ee4975110bfda6797c44dc`. |
+| Root lock | `Cargo.lock` SHA-256 `7505336b3831762c90b73610723161c163852edfee43daea350630e93dd4d799`; retained unchanged by this documentation, snapshot and smoke-root work. |
+| Consumer recipe | `consumer-smoke/` is a separate workspace that repeats the complete `[patch.crates-io]` recipe, path-depends on this repository's `ai-egui` and `ai-core`, and asserts the public widget values are that `craft_ai_core` identity. Its locked check and one draw test passed with one `craft-ai-core` identity and the pinned egui family; the rendererless root leaves the winit patches unused. |
+| Font policy | The library keeps `egui` at `default-features = false`. Tests/examples opt into bundled `default_fonts`; the snapshot suite installs `FontDefinitions::default()` explicitly and keeps kittest's missing-glyph panic. A host supplies fonts or gets them through eframe; production does not force them. |
+| Test-only features | `egui_kittest` uses `snapshot` + `wgpu` only as a dev dependency. `eframe` stays a dev dependency with `default_fonts`, `glow`, `x11`, `wayland`. No new public feature flag. |
+| Duplicate core policy | This workspace and the smoke root use one path `craft-ai-core`. Do not combine it with `craft-libs/crates/ai-core`; replacing the local copy remains separate `CORE-SYNC` work. |
+| Final headless qualification | Under managed job `egui037-ai-regression-mutation-20261024-2205`, **108 tests passed** with strict `clippy --all-targets` and `cargo fmt --all --check` green on Linux, then again after restoration. Five committed kittest snapshots are hash-stable. The `eg` group caught both compiled lifecycle mutants; changing the background from RGB(27,27,27) to RGB(30,30,30) failed the expected snapshot with 75,486 changed pixels. The locked consumer smoke passed one draw test with one `craft-ai-core` identity and the pinned egui family. An independent test-packet review passed. This is not evidence for native GUI, IME/clipboard, physical-GPU or performance acceptance. |
+| Still open | Native Linux X11/Wayland and Windows widget workflows (focus, keyboard, clipboard/IME, screenshots); macOS IME/Metal/termination remains an explicit blocker; physical-GPU and performance qualification; any app adoption; human review of this documentation and fresh explicit approval for publication. The non-widget mutation groups were not rerun in the final headless job. |
 
 ## 1. Baseline and provenance
 
@@ -534,6 +555,11 @@ do not catch changed styling, clipping, contrast, theme colors, or a visually br
   form. Use kittest’s per-pixel threshold and a very small `max_failed_pixels`; do not raise tolerance to hide a real shift.
 - Baseline is captured at 0.36.2 before production edits. Candidate differences from 0.37 style changes are reviewed
   individually and recorded as intended. Never bulk-refresh goldens to make a failing suite green.
+- **Actual implementation note:** this checkout did not capture the 0.36.2 baseline images. The new
+  `crates/ai-egui/tests/visual_snapshots.rs` suite renders the 0.37 candidate only; its five
+  committed PNGs are candidate baselines, not before/after migration attribution. The final run
+  kept all five hashes unchanged, and a pure-background RGB(27,27,27) to RGB(30,30,30) negative
+  control failed as expected with 75,486 changed pixels.
 - Include a negative control: deliberately shift a row/button or remove an accessible name in a temporary mutation and
   confirm the visual or semantic test fails; restore source afterward.
 - Keep pixel tests separate from native screenshots. An offscreen kittest image does not prove native focus, IME, clipboard,
@@ -584,6 +610,10 @@ Add a focused `panel`/`eg` group:
 
 A mutant that does not compile is not “caught.” Fix the mutant or the test; do not ignore a survivor. Run the group
 exclusively, restore source, and rerun the focused tests clean.
+
+Final qualification run: the `eg` group caught both compiled lifecycle mutants
+(`save-frame-dedup-removed` and `answer-generation-ignored`), restored `panel.rs`, and the clean
+package tests passed again. The other mutation groups listed above were not rerun in that job.
 
 ## 7. Performance protocol
 
@@ -661,7 +691,8 @@ These are external reports, not reproduced here.
   screenshots. macOS IME/Metal/termination is an explicit unresolved blocker, not a silent pass. Record exact commands,
   fixtures, screenshot paths and actual selected test counts. If the library intentionally defers native evidence, state that
   migration is not acceptance-complete for native use.
-- A fresh independent adversarial review of this plan and later of each implementation is complete.
+- A fresh independent read-only review of the final test packet is complete. Native/platform and publication review remain
+  open.
 - Explicit human publication approval is obtained for each push/new PR.
 
 ### 8.2 Unresolved questions
@@ -683,13 +714,14 @@ These are external reports, not reproduced here.
 
 ### 8.3 Known limitations of this plan
 
-- No compile or test was run. API impact is inferred from 0.37.0 source/changelog; the `LayoutJob`/atom path and kittest
-  accessibility need fresh compiler/test evidence.
+- The original source audit ran no compile or test; API impact there was inferred from 0.37.0 source/changelog. The final
+  headless follow-up qualification covers 108 tests, five candidate snapshots, the `eg` lifecycle mutants and the locked
+  consumer smoke; it does not cover native workflows, physical GPUs, performance or the other mutation groups.
 - The consumer table reflects the exact planning checkouts; re-inventory before final integration.
 - The fork/winit candidates are not accepted storytold revisions; E1–E21, W15P, E4/P2b and E21b/P7b are not revalidated here.
   Upstream #8731, #8736, #8512, #8763, #8764 and #8748 are external reports.
-- No native screenshot, IME, clipboard, PRIMARY, accessibility-tree, GPU or performance result is claimed. `docs/LAYOUT.md`’s
-  PhotoCraft/launcher-by-path statement was not reproduced; correct it in AI-5.
+- No native screenshot, IME, clipboard, PRIMARY, accessibility-tree, GPU or performance result is claimed. `docs/LAYOUT.md`
+  no longer claims PhotoCraft or launcher path dependencies; the planning checkouts did not reproduce one.
 
 ## 9. Publication and review
 
@@ -710,16 +742,29 @@ craft-ai-native is now a normal ai-egui dependency. Preserve the one-button setu
 
 The complete static delta review and exact old/new object identities are retained in the task evidence: `canonical-diffs-refresh-20261023.json` and `overnight-consumer-review-20261023.md`. This amendment claims no new build, native GUI or performance acceptance.
 
-### Current dependency state: deliberate temporary stock control
+### Current dependency state: reviewed storytold pins, not acceptance
 
-The implementation checkpoint in the owned checkout currently resolves the registry `egui 0.37.0`
-and `winit 0.30.13` graph, not the approved storytold fork, and the workspace has no
-`[patch.crates-io]`. That is deliberate: it is a stock-compatible control used to port the source,
-tests and examples before the parent supplies the reviewed local patch/revision configuration.
+The checkout now resolves the reviewed storytold egui family at
+`6d518fc799681571963842f95b55a6b68431b15a` and winit at
+`a517b3846ee8457d84ee4975110bfda6797c44dc`. The root `[patch.crates-io]` supplies the family and
+native event bridge, and `consumer-smoke/` repeats that recipe because patches do not propagate to
+a consumer root. The root lockfile SHA-256 is recorded above.
 
-This checkpoint does not satisfy §3.1 or the AI-2 fork-pin acceptance criterion, and it must not be
-merged, released or described as the migration production graph. No storytold egui or winit commit
-SHA is invented here. Before publication the parent must replace this registry control with the
-approved immutable revisions, repeat the required patches at every consumer root, regenerate the
-lock under the managed task workflow, and record per-root feature resolution and `cargo tree`
-evidence. Until then the stock pin above is a temporary control, not a hidden production defect.
+This dependency state satisfies the pin half of AI-2. The follow-up source and headless tests are
+now qualified as recorded above: 108 tests, five candidate snapshots, the `eg` lifecycle mutant group
+and the locked consumer smoke. Native/platform and performance evidence remain absent, the other
+mutation groups were not rerun, and the repository has no published app adoption. No
+acceptance-complete claim is made; publication still needs explicit human approval.
+
+## Human-review readiness summary — 2026-10-24
+
+The documentation now records only the qualification actually run for this follow-up: 108 passing
+tests, strict all-target clippy and fmt, five hash-stable candidate snapshots, both compiled
+connection-panel lifecycle mutants caught, the negative pixel control caught at 75,486 changed
+pixels, restored source and goldens, a passing locked consumer smoke with one core identity, and a
+passing independent test-packet review.
+
+Genuinely open AI gates: native Linux X11/Wayland and Windows focus/keyboard/clipboard/IME/rendering
+screenshots; macOS IME/Metal/termination; physical-GPU qualification; the performance protocol; any
+app adoption; the migration's other mutation groups; CORE-SYNC; and explicit human publication
+approval. This checkout remains a review draft, not a merge or release.

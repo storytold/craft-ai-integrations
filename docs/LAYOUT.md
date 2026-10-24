@@ -14,10 +14,10 @@ data, consent and jobs. It does not own any app's interface. Each app decides ho
 | HTTP | `ai-http` | The one TLS setting every adapter and downloader uses (the platform's certificate check), and a test that fails if any crate builds an agent without it. |
 | Engines | `ai-engine`, `ai-engine-candle`, `ai-engine-rten`, `ai-engine-burn`, `ai-burn-setup` | Models run on this computer: the runner contract, registry and shared provider (`ai-engine`), and one crate per engine that registers its models (`ai-engine-candle`, `ai-engine-rten` and `ai-engine-burn`, behind `ai-client`'s `candle`, `rten` and `burn` features). `ai-burn-setup` prepares the saved weights Burn reads, once on this computer. A new model or engine never touches an app. |
 | Local runtime | `ai-comfy-env`, `ai-media` | Finding an existing ComfyUI, model sources and checksummed downloads, node packs, and durable media transfer. |
-| Widgets | `ai-egui` | Theme-neutral egui widgets (status, consent, progress, connection panel, history, model picker) for apps that have no chrome of their own. |
+| Widgets | `ai-egui` | Theme-neutral egui 0.37 widgets (status, consent, progress, connection panel, history, model picker) for apps that have no chrome of their own. See the consumer recipe below. |
 
-Crates keep the flat `crates/` folder on purpose. PhotoCraft and the launcher reach into it by
-path today, so moving a crate breaks their builds.
+Crates keep the flat `crates/` folder on purpose. The exact planning checkouts reproduced no app
+dependency on `craft-ai-egui`; recheck any current path consumer before moving a crate.
 
 `docs/design/` holds design notes. `docs/STATUS.md` says what is tested and what is open. The deliberate-bug
 scripts are in `tools/mutation/`; everything a script saves goes through `tools/mutation/scrub.py`.
@@ -44,6 +44,17 @@ list. If a change here needs to name an app's behaviour, it belongs in the app.
    work only and must go before an app PR.
 4. A person's choice made for the whole suite is `ToolDesk::choose` (the default every app reads).
    `AiClient::bind` is that one app's own override.
+
+## Using the shared egui widgets
+
+`craft-ai-egui` is optional and has no app adopter in this repository. An egui app repeats the
+complete `[patch.crates-io]` recipe in its own root; this repository's patch is not inherited.
+The reviewed graph is `storytold/egui` at `6d518fc799681571963842f95b55a6b68431b15a` and
+`storytold/winit` at `a517b3846ee8457d84ee4975110bfda6797c44dc`. Keep the library at
+`default-features = false` for fonts and let the app choose its font provider (or eframe's
+bundled fonts). Do not combine this workspace's `craft-ai-core` with the separate copy in
+`craft-libs`; the [consumer smoke](../consumer-smoke/README.md) shows the one-identity check and
+passes its locked check and one draw test. That headless result is not native GUI acceptance.
 
 ## Branches
 

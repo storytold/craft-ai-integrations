@@ -400,6 +400,57 @@ mod tests {
         );
     }
 
+    /// `poll` consumes a queued Save before egui's forced second pass redraws the same click.
+    /// The second draw must not enqueue the save again just because the queue is now empty.
+    #[test]
+    fn a_save_consumed_by_poll_is_still_deduplicated_within_the_same_frame() {
+        let (_dir, mut panel) = panel();
+        panel.form.draft = craft_ai_core::ConnectionDraft::from_preset(
+            craft_ai_core::PRESETS
+                .iter()
+                .find(|preset| preset.key == "openai")
+                .expect("OpenAI preset"),
+        );
+        panel.form.draft.key = "sk-test".to_owned();
+
+        let _ = panel.handle_form_event(FormEvent::Save, 21);
+        let first = panel.poll(&Context::default());
+        assert!(
+            matches!(first, Some(PanelEvent::Saved(_))),
+            "the first Save is consumed by poll: {first:?}"
+        );
+        assert_eq!(
+            panel.manager.views().unwrap().len(),
+            1,
+            "poll wrote the first Save"
+        );
+
+        // The same click arrives again after poll drained the queue, still in frame 21.
+        let _ = panel.handle_form_event(FormEvent::Save, 21);
+        let second = panel.poll(&Context::default());
+        assert!(
+            second.is_none(),
+            "a Save already consumed in this frame must not be saved again: {second:?}"
+        );
+        assert!(
+            panel.pending.is_empty(),
+            "the same frame must not queue another store write"
+        );
+        assert_eq!(
+            panel.manager.views().unwrap().len(),
+            1,
+            "the same-frame redraw must not write a second connection"
+        );
+
+        // Frame numbers are monotonic; a genuinely new press in the next frame is allowed.
+        let _ = panel.handle_form_event(FormEvent::Save, 22);
+        let next = panel.poll(&Context::default());
+        assert!(
+            matches!(next, Some(PanelEvent::Saved(_))),
+            "a new frame may save again: {next:?}"
+        );
+    }
+
     /// The panel's own answer guard, exercised without starting a second `TestRunner`. A changed
     /// endpoint and a changed generation each make an answer stale on their own.
     #[test]

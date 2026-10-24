@@ -13,8 +13,8 @@ craft-ai-core.workspace = true
 craft-ai-client = { path = "../ai-client" }
 craft-ai-features = { path = "../ai-features" }
 craft-ai-native = { path = "../ai-native", package = "craft-ai-native" }
-# Temporary stock-compatible control for the 0.37 source port; the parent supplies the approved
-# fork/local patch graph. This registry pin must not be published as the migration dependency.
+# The workspace root's [patch.crates-io] resolves this to the reviewed storytold 0.37 family.
+# Bundled fonts stay off in the library; tests/examples opt in and hosts own their font policy.
 egui = { version = "0.37", default-features = false }
 
 [dev-dependencies]

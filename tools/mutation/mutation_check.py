@@ -4,7 +4,7 @@ after `sam3_mutation_check.py`.
 Each case breaks one safety rule in the source, runs the one test that should notice, and puts the
 source back. A case is CAUGHT only if the mutated code compiled and the test run failed; a case that
 does not compile counts as NOT CAUGHT (a bad mutant), so every survivor is either a test gap or a
-mutant to fix. Cargo runs serially, targeted with -p, with -j 8.
+mutant to fix. Cargo runs serially, targeted with -p, honouring CARGO_BUILD_JOBS.
 
 Usage: mutation_check.py <group> [name-substring]. The groups are the keys of `GROUPS` below and are
 described in README.md (for example `rt` for the rten engine and `seg` for the selection contract);
@@ -484,6 +484,7 @@ from mutation_native import NF  # noqa: E402
 from mutation_native_setup import NS  # noqa: E402
 from mutation_native_session import NQ  # noqa: E402
 from mutation_native_widget import NW  # noqa: E402
+from mutation_egui import EG_CASES  # noqa: E402
 from mutation_rten import RTEN_CASES  # noqa: E402
 from mutation_generic import GS_CASES  # noqa: E402
 from mutation_generic_mask import GM_CASES  # noqa: E402
@@ -553,7 +554,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'fr': FR, 'be': BE, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
+GROUPS = {'fr': FR, 'be': BE, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
@@ -601,7 +602,7 @@ def main():
             path.write_bytes(text.replace(old, new).replace('\n', newline).encode('utf-8'))
             # target 'lib' runs the crate's own unit tests instead of an integration test file.
             where = ['--lib'] if target == 'lib' else ['--test', target]
-            command = ['cargo', 'test', '-p', package, *where, test, '-j', '8', '--', '--nocapture']
+            command = ['cargo', 'test', '--locked', '-p', package, *where, test, '--', '--nocapture']
             proc = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             timed_out = False
             try:

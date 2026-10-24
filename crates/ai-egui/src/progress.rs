@@ -115,11 +115,16 @@ fn row<R>(
     right_to_left: bool,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> InnerResponse<R> {
-    if right_to_left {
-        ui.with_layout(Layout::right_to_left(Align::Center), add_contents)
+    // `with_layout` claims all remaining vertical space on a right-to-left host, so the row
+    // would be vertically centered in the whole panel. Allocate a one-line-tall row instead,
+    // matching `Ui::horizontal`, while keeping the host's horizontal direction.
+    let layout = if right_to_left {
+        Layout::right_to_left(Align::Center)
     } else {
-        ui.horizontal(add_contents)
-    }
+        Layout::left_to_right(Align::Center)
+    };
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, layout, add_contents)
 }
 
 /// The width a labelled button needs at this style, including its padding.
