@@ -1,5 +1,7 @@
 # Craft AI integrations
 
+<a href="https://sonarcloud.io/project/overview?id=storytold_craft-ai-integrations"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+
 One AI connection for every Craft app. A person sets up a tool and its model once, in the launcher or
 natively in any app, and every app that has that tool uses it with no further setup. The shared crates
 own connections, models, the tool to model binding, the model picker, consent and jobs. Each app keeps
