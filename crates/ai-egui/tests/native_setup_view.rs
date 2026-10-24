@@ -257,3 +257,40 @@ fn a_download_error_is_actionable_and_does_not_echo_a_sources_message() {
     );
     assert!(h.query_by_label("Use this model").is_none());
 }
+
+/// A route's one-line advice is shown before the person approves anything.
+#[test]
+fn the_routes_advice_is_shown_with_the_plan() {
+    let (dir, desk, _) = fixtures::world();
+    let mut factory = ProviderFactory::standard();
+    factory.register("candle", |_, _| {
+        Err(AiError::unsupported("setup does not run inference"))
+    });
+    let client = AiClient::new(
+        AppId::new("test-app").unwrap(),
+        SharedStore::new(dir.path().join("connections.json")),
+        Arc::new(MemoryStore::new()),
+    )
+    .with_factory(factory);
+    let mut feature = fixtures::feature();
+    fixtures::candle_mut(&mut feature).note =
+        Some("Selects by clicking on the picture, not by a description.".into());
+    let plan = desk
+        .prepare_native_setup(&feature, "candle", &client)
+        .unwrap();
+    let mut h = Harness::new_ui_state(
+        |ui, state: &mut State| {
+            if let Some(action) = native_model_setup(ui, &mut state.session) {
+                state.last = Some(action);
+            }
+        },
+        State {
+            _dir: dir,
+            session: craft_ai_client::SetupSession::new(plan),
+            last: None,
+        },
+    );
+    h.run();
+    h.get_by_label("Selects by clicking on the picture, not by a description.");
+    h.get_by_label("The model choice is shared with every app that supports this tool.");
+}

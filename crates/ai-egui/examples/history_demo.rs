@@ -8,6 +8,7 @@
 //! Nothing here deletes or writes the real log. Clear only empties what the window shows, and
 //! Export writes `history-export.csv` into the current directory.
 
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use craft_ai_core::history::{EndRecord, HISTORY_SCHEMA, StartRecord, merge};
@@ -165,6 +166,8 @@ struct Demo {
     log: HistoryLog,
     view: HistoryViewState,
     note: String,
+    /// Actions reported by the view; applied once in `logic`, not in the paint callback.
+    pending: VecDeque<HistoryAction>,
 }
 
 impl Demo {
@@ -177,9 +180,42 @@ impl Demo {
             _ => HistoryLog::default(),
         }
     }
+
+    /// Queues an action once. A host that draws twice in one frame reports the same press twice;
+    /// the second copy must not write the export again.
+    fn queue(&mut self, action: HistoryAction) {
+        if !self.pending.contains(&action) {
+            self.pending.push_back(action);
+        }
+    }
+
+    fn apply(&mut self, action: HistoryAction) {
+        match action {
+            HistoryAction::Refresh => {
+                self.log = Self::load(self.real);
+                self.note = "Refreshed.".into();
+            }
+            HistoryAction::Clear => {
+                self.log = HistoryLog::default();
+                self.note = "Cleared in this window only. The file on disk was not touched.".into();
+            }
+            HistoryAction::Export(csv) => {
+                self.note = match std::fs::write("history-export.csv", csv) {
+                    Ok(()) => "Wrote history-export.csv in the current folder.".into(),
+                    Err(e) => format!("Could not write the file: {e}"),
+                };
+            }
+        }
+    }
 }
 
 impl eframe::App for Demo {
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        while let Some(action) = self.pending.pop_front() {
+            self.apply(action);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading(if self.real {
@@ -188,23 +224,9 @@ impl eframe::App for Demo {
                 "AI history (sample data)"
             });
             ui.add_space(6.0);
-            match history_view(ui, &mut self.view, &self.log, now_ms()) {
-                Some(HistoryAction::Refresh) => {
-                    self.log = Self::load(self.real);
-                    self.note = "Refreshed.".into();
-                }
-                Some(HistoryAction::Clear) => {
-                    self.log = HistoryLog::default();
-                    self.note =
-                        "Cleared in this window only. The file on disk was not touched.".into();
-                }
-                Some(HistoryAction::Export(csv)) => {
-                    self.note = match std::fs::write("history-export.csv", csv) {
-                        Ok(()) => "Wrote history-export.csv in the current folder.".into(),
-                        Err(e) => format!("Could not write the file: {e}"),
-                    };
-                }
-                None => {}
+            if let Some(action) = history_view(ui, &mut self.view, &self.log, now_ms()) {
+                self.queue(action);
+                ui.ctx().request_repaint();
             }
             if !self.note.is_empty() {
                 ui.add_space(6.0);
@@ -229,6 +251,7 @@ fn main() -> eframe::Result {
                 log: Demo::load(real),
                 view: HistoryViewState::default().with_offset(OFFSET_MINUTES),
                 note: String::new(),
+                pending: VecDeque::new(),
             }))
         }),
     )

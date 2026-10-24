@@ -6,7 +6,7 @@ use craft_ai_core::{ErrorKind, HistoryLog, HistoryRecord, Locality, Outcome};
 use craft_ai_egui::history_text::entry_line;
 use craft_ai_egui::{
     CLEAR, CLEAR_NO, CLEAR_YES, EMPTY, EXPORT, HistoryAction, HistoryViewState, NOTHING_MATCHES,
-    REFRESH, Range, TAB_DAYS, TAB_MONTHS, Tab, history_view,
+    REFRESH, Range, TAB_DAYS, TAB_JOBS, TAB_MONTHS, Tab, history_view,
 };
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -285,4 +285,150 @@ fn a_long_log_draws_only_the_rows_in_view() {
     h.get_by_label(&newest);
     assert!(h.query_by_label(&oldest).is_none());
     h.get_by_label("3000 jobs: 3000 done.");
+}
+
+struct SizedState {
+    view: HistoryViewState,
+    log: HistoryLog,
+    now: u64,
+    action: Option<HistoryAction>,
+    row_height: f32,
+    spacing: f32,
+}
+
+fn large_font_harness() -> Harness<'static, SizedState> {
+    let jobs: Vec<Job> = (0..40u64)
+        .map(|i| {
+            let run: &'static str = Box::leak(format!("r{i}").into_boxed_str());
+            let model: &'static str = Box::leak(format!("m{i:02}").into_boxed_str());
+            Job {
+                run,
+                at: T0 + i * 60_000,
+                app: "photocraft",
+                model,
+                outcome: Some(Outcome::Done),
+                cost: None,
+            }
+        })
+        .collect();
+    let log = log(&jobs, 0);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(320.0, 700.0))
+        .build_ui_state(
+            |ui, state: &mut SizedState| {
+                ui.style_mut()
+                    .text_styles
+                    .insert(egui::TextStyle::Body, egui::FontId::proportional(26.0));
+                state.row_height = ui.text_style_height(&egui::TextStyle::Body);
+                state.spacing = ui.spacing().item_spacing.y;
+                if let Some(action) = history_view(ui, &mut state.view, &state.log, state.now) {
+                    state.action = Some(action);
+                }
+            },
+            SizedState {
+                view: HistoryViewState::default(),
+                log,
+                now: T0 + 40 * 60_000,
+                action: None,
+                row_height: 0.0,
+                spacing: 0.0,
+            },
+        );
+    h.run();
+    h
+}
+
+/// The visible job rows, in screen order, with the model index parsed from each line.
+fn visible_rows(h: &Harness<'_, SizedState>) -> Vec<(usize, egui::Rect)> {
+    let mut rows: Vec<(usize, egui::Rect)> = h
+        .query_all_by_label_contains("photocraft")
+        .filter_map(|node| {
+            // egui puts a Label's text in AccessKit's value; `By::label` handles this too.
+            let accessibility = node.accesskit_node();
+            let label = accessibility.value().or_else(|| accessibility.label())?;
+            let part = label.split("  \u{b7}  ").nth(3)?;
+            let model = part.split(' ').next()?;
+            let index = model.strip_prefix('m')?.parse().ok()?;
+            Some((index, node.rect()))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+    rows
+}
+
+fn scroll_rows(h: &mut Harness<'_, SizedState>, times: usize) {
+    for _ in 0..times {
+        let node = h
+            .query_all_by_label_contains("photocraft")
+            .last()
+            .expect("a visible row to scroll from");
+        node.scroll_down();
+        for _ in 0..12 {
+            h.step();
+        }
+    }
+}
+
+#[test]
+fn rows_use_one_text_height_without_double_spacing_at_a_larger_font() {
+    let mut h = large_font_harness();
+    let first = visible_rows(&h);
+    assert!(
+        first.len() > 1,
+        "the fixture has visible rows; labels: {:?}",
+        h.root()
+    );
+    // History is newest first: the fixture's model indices descend as we scroll.
+    assert_eq!(first.first().unwrap().0, 39);
+    assert!(first.last().unwrap().0 > 0);
+    let expected = h.state().row_height + h.state().spacing;
+    assert!(
+        expected > 20.0,
+        "the test uses a really larger font: {expected}"
+    );
+    for pair in first.windows(2) {
+        assert_eq!(
+            pair[0].0,
+            pair[1].0 + 1,
+            "adjacent jobs remain in history order"
+        );
+        let delta = pair[1].1.top() - pair[0].1.top();
+        assert!(
+            (delta - expected).abs() < 1.5,
+            "row spacing is {delta}, expected one text height plus item spacing ({expected})"
+        );
+    }
+
+    scroll_rows(&mut h, 4);
+    let middle = visible_rows(&h);
+    assert!(!middle.is_empty());
+    assert!(middle.first().unwrap().0 < 39, "the newest row is gone");
+    assert!(
+        middle.last().unwrap().0 > 0,
+        "the oldest row is not reached yet"
+    );
+
+    scroll_rows(&mut h, 40);
+    let end = visible_rows(&h);
+    assert_eq!(end.last().unwrap().0, 0);
+    assert!(end.first().unwrap().0 < 39);
+}
+
+#[test]
+fn each_filter_is_named_by_what_it_filters_not_by_its_current_value() {
+    let mut h = harness(HistoryViewState::default(), two_apps(), T0 + 5000);
+    h.run();
+    for name in ["Filter by app", "Filter by model", "Date range"] {
+        let node = h.get_by_label(name);
+        assert_eq!(
+            node.accesskit_node().role(),
+            egui::accesskit::Role::ComboBox
+        );
+    }
+    assert!(h.unnamed_widgets().is_empty());
+    h.get_by_label(TAB_DAYS).click();
+    h.run();
+    h.get_by_label(TAB_JOBS).click();
+    h.run();
+    assert_eq!(h.state().view.tab, Tab::Jobs);
 }

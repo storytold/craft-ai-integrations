@@ -9,6 +9,7 @@
 //! (through `ToolDesk::choose`), so the "in use" mark moves. Set up links only say what they would
 //! open.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use craft_ai_client::{AiClient, PickerView, SetupLink, ToolDesk};
@@ -134,6 +135,15 @@ fn build(sam3_installed: bool) -> Sample {
     }
 }
 
+/// What the window asked for. Every one of these is applied in `logic`, once, not in `ui`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DemoAction {
+    Rebuild,
+    Refresh,
+    Picker(PickerAction),
+    Popup(PopupAction),
+}
+
 struct Demo {
     sample: Sample,
     sam3_installed: bool,
@@ -142,6 +152,7 @@ struct Demo {
     dismissed: bool,
     view: PickerView,
     note: String,
+    pending: VecDeque<DemoAction>,
 }
 
 impl Demo {
@@ -165,6 +176,60 @@ impl Demo {
         let options = craft_ai_features::setup_options(&craft_ai_features::builtin());
         if let Ok(view) = self.client("demo").picker(&self.role(), &options) {
             self.view = view;
+        }
+    }
+
+    /// Queues an action once. A repeated UI pass for the same press must not choose twice or
+    /// download twice.
+    fn queue(&mut self, action: DemoAction) {
+        if !self.pending.contains(&action) {
+            self.pending.push_back(action);
+        }
+    }
+
+    fn choose(&mut self, connection: ConnectionId, model: ModelId, every_app: bool) {
+        let desk = ToolDesk::new(
+            self.client(if every_app { "photocraft" } else { "launcher" }),
+            self.sample.shared.clone(),
+            None,
+        );
+        let suffix = if every_app { " for every app" } else { "" };
+        self.note = match desk.choose(&self.role(), &connection, &model) {
+            Ok(()) => format!("Chose {model} on {connection}{suffix}."),
+            Err(e) => format!("Refused: {e}"),
+        };
+        self.refresh();
+    }
+
+    fn apply(&mut self, action: DemoAction) {
+        match action {
+            DemoAction::Rebuild => {
+                self.sample = build(self.sam3_installed);
+                self.refresh();
+            }
+            DemoAction::Refresh => self.refresh(),
+            DemoAction::Picker(PickerAction::Choose { connection, model }) => {
+                self.choose(connection, model, false);
+            }
+            DemoAction::Picker(PickerAction::SetUp(SetupLink::New { option })) => {
+                self.note = format!("Would open set up for {option}.");
+            }
+            DemoAction::Picker(PickerAction::SetUp(SetupLink::Fix { connection })) => {
+                self.note = format!("Would open the launcher to fix {connection}.");
+            }
+            DemoAction::Popup(PopupAction::Choose { connection, model }) => {
+                self.choose(connection, model, true);
+            }
+            DemoAction::Popup(PopupAction::SetUp(SetupLink::New { option })) => {
+                self.note = format!("Would open set up for {option}.");
+            }
+            DemoAction::Popup(PopupAction::SetUp(SetupLink::Fix { connection })) => {
+                self.note = format!("Would open the launcher to fix {connection}.");
+            }
+            DemoAction::Popup(PopupAction::NotNow) => self.dismissed = true,
+            DemoAction::Popup(PopupAction::InstallComfyUi(_)) => {
+                self.note = "This sample does not install software.".into();
+            }
         }
     }
 }
@@ -193,31 +258,20 @@ impl Demo {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| action = missing_model_popup(ui, &popup));
-        match action {
-            Some(PopupAction::Choose { connection, model }) => {
-                // Bound for every app, not just this one.
-                self.note = match desk.choose(&self.role(), &connection, &model) {
-                    Ok(()) => format!("Chose {model} on {connection} for every app."),
-                    Err(e) => format!("Refused: {e}"),
-                };
-                self.refresh();
-            }
-            Some(PopupAction::SetUp(SetupLink::New { option })) => {
-                self.note = format!("Would open set up for {option}.");
-            }
-            Some(PopupAction::SetUp(SetupLink::Fix { connection })) => {
-                self.note = format!("Would open the launcher to fix {connection}.");
-            }
-            Some(PopupAction::NotNow) => self.dismissed = true,
-            Some(PopupAction::InstallComfyUi(_)) => {
-                self.note = "This sample does not install software.".into();
-            }
-            None => {}
+        if let Some(action) = action {
+            self.queue(DemoAction::Popup(action));
+            ui.ctx().request_repaint();
         }
     }
 }
 
 impl eframe::App for Demo {
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        while let Some(action) = self.pending.pop_front() {
+            self.apply(action);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.label(
@@ -237,10 +291,11 @@ impl eframe::App for Demo {
                 }
             });
             if before.1 != self.sam3_installed {
-                self.sample = build(self.sam3_installed);
-            }
-            if before != (self.tool, self.sam3_installed) {
-                self.refresh();
+                self.queue(DemoAction::Rebuild);
+                ui.ctx().request_repaint();
+            } else if before.0 != self.tool {
+                self.queue(DemoAction::Refresh);
+                ui.ctx().request_repaint();
             }
             ui.separator();
             if self.as_popup {
@@ -251,23 +306,9 @@ impl eframe::App for Demo {
                 }
                 return;
             }
-            match model_picker(ui, &self.view) {
-                Some(PickerAction::Choose { connection, model }) => {
-                    let desk =
-                        ToolDesk::new(self.client("launcher"), self.sample.shared.clone(), None);
-                    self.note = match desk.choose(&self.role(), &connection, &model) {
-                        Ok(()) => format!("Chose {model} on {connection}."),
-                        Err(e) => format!("Refused: {e}"),
-                    };
-                    self.refresh();
-                }
-                Some(PickerAction::SetUp(SetupLink::New { option })) => {
-                    self.note = format!("Would open set up for {option}.");
-                }
-                Some(PickerAction::SetUp(SetupLink::Fix { connection })) => {
-                    self.note = format!("Would open the launcher to fix {connection}.");
-                }
-                None => {}
+            if let Some(action) = model_picker(ui, &self.view) {
+                self.queue(DemoAction::Picker(action));
+                ui.ctx().request_repaint();
             }
             if !self.note.is_empty() {
                 ui.separator();
@@ -300,6 +341,7 @@ fn main() -> eframe::Result {
                     groups: Vec::new(),
                 },
                 note: String::new(),
+                pending: VecDeque::new(),
             };
             demo.refresh();
             Ok(Box::new(demo))

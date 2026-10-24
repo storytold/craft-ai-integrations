@@ -113,7 +113,7 @@ fn draw_consent(
                 ui.radio_value(selected, duration, consent_term_label(duration));
             }
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button(ALLOW).clicked() {
                 choice = Some(ConsentChoice::Allow);
             }

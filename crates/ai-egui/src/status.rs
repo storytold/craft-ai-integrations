@@ -64,7 +64,7 @@ pub fn ai_status(ui: &mut Ui, view: &StatusView<'_>) -> Option<StatusAction> {
     let mut action = None;
     ui.vertical(|ui| {
         ui.label(text::status_line(view.label, view.status));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if matches!(view.status, RoleStatus::Unavailable { .. })
                 && ui.button(OPEN_LAUNCHER).clicked()
             {
@@ -100,7 +100,9 @@ pub fn ai_status(ui: &mut Ui, view: &StatusView<'_>) -> Option<StatusAction> {
                                 });
                             }
                         }
-                    });
+                    })
+                    .response
+                    .accessible_name(format!("Model for {}", view.label));
             }
             if view.has_override && ui.button(USE_DEFAULT).clicked() {
                 action = Some(StatusAction::UseDefault);

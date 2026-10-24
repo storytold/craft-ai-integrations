@@ -122,7 +122,7 @@ fn setup_label(group: &PickerGroup) -> Option<&'static str> {
 fn group_ui(ui: &mut Ui, group: &PickerGroup) -> Option<PickerAction> {
     let mut action = None;
     let ready = group.state == GroupState::Ready;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let title = RichText::new(&group.title).strong();
         ui.label(if ready { title } else { title.weak() });
         if let Some(locality) = group.locality {

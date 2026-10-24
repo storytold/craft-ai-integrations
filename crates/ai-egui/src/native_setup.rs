@@ -1,6 +1,6 @@
 //! A neutral setup surface. Hosts keep their own chrome and use the same SetupSession state.
 use craft_ai_client::{CheckedNative, SetupRequest, SetupSession, SetupTicket};
-use egui::Ui;
+use egui::{RichText, Ui};
 
 /// What the host should do after a frame. `Work` runs off the UI thread; the others are plain host actions.
 #[derive(Clone, Debug)]
@@ -32,6 +32,9 @@ pub fn native_model_setup(ui: &mut Ui, session: &mut SetupSession) -> Option<Nat
     let plan = session.plan().clone();
     ui.heading(format!("Set up {}", plan.feature().title));
     ui.label(&plan.feature().summary);
+    if let Some(note) = &plan.route().note {
+        ui.label(RichText::new(note).small().weak());
+    }
     ui.label("The model choice is shared with every app that supports this tool.");
     if let Some(checked) = session.checked() {
         ui.label("Files checked. This model has not been tried yet.");

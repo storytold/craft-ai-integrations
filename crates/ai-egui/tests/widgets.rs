@@ -7,12 +7,13 @@ use craft_ai_core::{
     InputRole, JobState, Locality, ModelId, PayloadKind,
 };
 use craft_ai_egui::{
-    ADD_CONNECTION, ALLOW, CANCEL, ConsentChoice, DENY, OPEN_LAUNCHER, ProgressAction,
-    StatusAction, StatusView, USE_DEFAULT, ai_status, consent_prompt, job_progress,
+    ADD_CONNECTION, ALLOW, CANCEL, ConsentChoice, ConsentPromptState, DENY, OPEN_LAUNCHER,
+    ProgressAction, StatusAction, StatusView, TimedConsentChoice, USE_DEFAULT, ai_status,
+    consent_prompt, consent_prompt_with_terms, consent_term_label, job_progress,
 };
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 fn disclosure(locality: Locality) -> Disclosure {
     Disclosure {
@@ -114,6 +115,24 @@ struct StatusState {
 
 fn status_harness(s: StatusState) -> Harness<'static, StatusState> {
     Harness::new_ui_state(
+        |ui, st: &mut StatusState| {
+            let view = StatusView {
+                label: "Generative Fill",
+                status: &st.status,
+                choices: &st.choices,
+                has_override: st.has_override,
+                can_add_here: st.can_add_here,
+            };
+            if let Some(a) = ai_status(ui, &view) {
+                st.last = Some(a);
+            }
+        },
+        s,
+    )
+}
+
+fn status_harness_sized(size: egui::Vec2, s: StatusState) -> Harness<'static, StatusState> {
+    Harness::builder().with_size(size).build_ui_state(
         |ui, st: &mut StatusState| {
             let view = StatusView {
                 label: "Generative Fill",
@@ -293,6 +312,47 @@ fn progress_harness(job: JobState, cost: Option<CostEstimate>) -> Harness<'stati
     )
 }
 
+fn progress_harness_sized(
+    size: egui::Vec2,
+    job: JobState,
+    cost: Option<CostEstimate>,
+) -> Harness<'static, ProgressState> {
+    Harness::builder().with_size(size).build_ui_state(
+        |ui, st: &mut ProgressState| {
+            if job_progress(ui, &st.job, st.cost.as_ref()) == Some(ProgressAction::Cancel) {
+                st.cancelled = true;
+            }
+        },
+        ProgressState {
+            job,
+            cost,
+            cancelled: false,
+        },
+    )
+}
+
+/// The same widget under a right-to-left host layout, at a narrow width.
+fn progress_harness_rtl_sized(
+    size: egui::Vec2,
+    job: JobState,
+    cost: Option<CostEstimate>,
+) -> Harness<'static, ProgressState> {
+    Harness::builder().with_size(size).build_ui_state(
+        |ui, st: &mut ProgressState| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                if job_progress(ui, &st.job, st.cost.as_ref()) == Some(ProgressAction::Cancel) {
+                    st.cancelled = true;
+                }
+            });
+        },
+        ProgressState {
+            job,
+            cost,
+            cancelled: false,
+        },
+    )
+}
+
 #[test]
 fn a_running_job_shows_percent_cost_and_can_be_cancelled() {
     let cost = CostEstimate {
@@ -336,4 +396,243 @@ fn finished_jobs_say_how_they_ended_and_cannot_be_cancelled() {
         h.get_by_label_contains(&text);
         assert!(h.query_by_label(CANCEL).is_none(), "{text}");
     }
+}
+
+#[test]
+fn timed_consent_radios_expose_their_selected_state_and_duration() {
+    struct State {
+        prompt: ConsentPromptState,
+        choice: Option<TimedConsentChoice>,
+    }
+    let d = disclosure(Locality::Remote);
+    let mut h = Harness::new_ui_state(
+        move |ui, state: &mut State| {
+            if let Some(choice) = consent_prompt_with_terms(ui, &d, "PhotoCraft", &mut state.prompt)
+            {
+                state.choice = Some(choice);
+            }
+        },
+        State {
+            prompt: ConsentPromptState::default(),
+            choice: None,
+        },
+    );
+    h.run();
+    let this_time = h.get_by_label(consent_term_label(craft_ai_core::ConsentTerm::ThisTime));
+    assert_eq!(this_time.accesskit_node().role(), Role::RadioButton);
+    assert_eq!(
+        this_time.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    let one_hour = h.get_by_label(consent_term_label(craft_ai_core::ConsentTerm::OneHour));
+    assert_eq!(
+        one_hour.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::False)
+    );
+    one_hour.click();
+    h.run();
+    assert_eq!(
+        h.get_by_label(consent_term_label(craft_ai_core::ConsentTerm::OneHour))
+            .accesskit_node()
+            .toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    h.get_by_label(ALLOW).click();
+    h.run();
+    assert_eq!(
+        h.state().choice,
+        Some(TimedConsentChoice::Allow(
+            craft_ai_core::ConsentTerm::OneHour
+        ))
+    );
+}
+
+#[test]
+fn the_status_model_picker_has_a_field_name_not_just_its_value() {
+    let mut h = status_harness(StatusState {
+        status: ready("local", "llama3", "Llama 3"),
+        choices: vec![
+            choice("local", "llama3", "Llama 3", Locality::Local),
+            choice("cloud", "gpt-4o", "GPT-4o", Locality::Remote),
+        ],
+        has_override: false,
+        can_add_here: false,
+        last: None,
+    });
+    h.run();
+    let combo = h.get_by_role(Role::ComboBox);
+    assert_eq!(
+        combo.accesskit_node().label().as_deref(),
+        Some("Model for Generative Fill")
+    );
+    assert!(h.unnamed_widgets().is_empty());
+}
+
+#[test]
+fn status_commands_stay_inside_a_narrow_header() {
+    let mut h = status_harness_sized(
+        egui::vec2(180.0, 360.0),
+        StatusState {
+            status: RoleStatus::Unavailable {
+                reason: "no connection".into(),
+            },
+            choices: vec![],
+            has_override: false,
+            can_add_here: true,
+            last: None,
+        },
+    );
+    h.run();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(180.0, 360.0));
+    for label in [OPEN_LAUNCHER, ADD_CONNECTION] {
+        let node = h.get_by_label(label);
+        assert!(
+            screen.contains_rect(node.rect()),
+            "{label} is outside {screen:?}: {:?}",
+            node.rect()
+        );
+    }
+    h.get_by_label(ADD_CONNECTION).click();
+    h.run();
+    assert_eq!(h.state().last, Some(StatusAction::AddConnection));
+}
+
+#[test]
+fn cancel_stays_visible_and_does_not_overlap_progress_at_320() {
+    let mut h = progress_harness_sized(
+        egui::vec2(320.0, 480.0),
+        JobState::Running { percent: Some(40) },
+        None,
+    );
+    h.run();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 480.0));
+    let bar = h.get_by_label_contains("Working, 40%");
+    let cancel = h.get_by_label(CANCEL);
+    assert!(screen.contains_rect(bar.rect()));
+    assert!(screen.contains_rect(cancel.rect()));
+    assert!(
+        !bar.rect().intersects(cancel.rect()),
+        "bar {:?} overlaps Cancel {:?}",
+        bar.rect(),
+        cancel.rect()
+    );
+    cancel.click();
+    h.run();
+    assert!(h.state().cancelled);
+}
+
+#[test]
+fn narrow_cancel_wraps_below_the_bar_and_stays_clickable() {
+    let mut h = progress_harness_sized(
+        egui::vec2(120.0, 480.0),
+        JobState::Running { percent: Some(40) },
+        None,
+    );
+    h.run();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(120.0, 480.0));
+    let bar = h.get_by_label_contains("Working, 40%");
+    let cancel = h.get_by_label(CANCEL);
+    assert!(screen.contains_rect(cancel.rect()), "Cancel is clipped");
+    assert!(
+        cancel.rect().top() >= bar.rect().bottom(),
+        "Cancel should wrap below the bar: bar {:?}, cancel {:?}",
+        bar.rect(),
+        cancel.rect()
+    );
+    cancel.click();
+    h.run();
+    assert!(h.state().cancelled);
+}
+
+#[test]
+fn narrow_spinner_job_also_keeps_cancel_reachable() {
+    let mut h = progress_harness_sized(
+        egui::vec2(120.0, 480.0),
+        JobState::Running { percent: None },
+        None,
+    );
+    h.step();
+    h.step();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(120.0, 480.0));
+    let cancel = h.get_by_label(CANCEL);
+    assert!(screen.contains_rect(cancel.rect()));
+    cancel.click();
+    // The spinner keeps requesting repaints, so one step is enough to see the click.
+    h.step();
+    assert!(h.state().cancelled);
+}
+
+#[test]
+fn rtl_narrow_progress_keeps_cancel_visible_and_apart_from_the_bar() {
+    let mut h = progress_harness_rtl_sized(
+        egui::vec2(320.0, 480.0),
+        JobState::Running { percent: Some(40) },
+        None,
+    );
+    h.run();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 480.0));
+    let bar = h.get_by_label_contains("Working, 40%");
+    let cancel = h.get_by_label(CANCEL);
+    assert!(screen.contains_rect(bar.rect()));
+    assert!(screen.contains_rect(cancel.rect()));
+    assert!(
+        !bar.rect().intersects(cancel.rect()),
+        "bar {:?} overlaps Cancel {:?}",
+        bar.rect(),
+        cancel.rect()
+    );
+    assert!(
+        cancel.rect().right() <= bar.rect().left() + 0.5,
+        "right-to-left order puts Cancel before the bar: bar {:?}, cancel {:?}",
+        bar.rect(),
+        cancel.rect()
+    );
+    cancel.click();
+    h.run();
+    assert!(h.state().cancelled);
+}
+
+#[test]
+fn rtl_narrow_spinner_job_keeps_cancel_visible_and_clickable() {
+    let mut h = progress_harness_rtl_sized(
+        egui::vec2(320.0, 480.0),
+        JobState::Running { percent: None },
+        None,
+    );
+    // The spinner keeps asking for repaints, so step instead of running to rest.
+    h.step();
+    h.step();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 480.0));
+    let label = h.get_by_label("Working");
+    let cancel = h.get_by_label(CANCEL);
+    assert!(screen.contains_rect(label.rect()));
+    assert!(screen.contains_rect(cancel.rect()));
+    assert!(
+        !label.rect().intersects(cancel.rect()),
+        "label {:?} overlaps Cancel {:?}",
+        label.rect(),
+        cancel.rect()
+    );
+    assert!(
+        cancel.rect().right() <= label.rect().left() + 0.5,
+        "right-to-left order puts Cancel before the label: label {:?}, cancel {:?}",
+        label.rect(),
+        cancel.rect()
+    );
+    cancel.click();
+    h.step();
+    assert!(h.state().cancelled);
+}
+
+#[test]
+fn the_fixed_fixture_glyphs_are_in_the_test_fonts() {
+    let mut h = Harness::new_ui_state(
+        |ui, _| {
+            ui.label("\u{2022} bullet \u{2026} ellipsis \u{2014} dash \u{00b7} middle dot");
+        },
+        (),
+    );
+    // The harness panics on a missing glyph, which is the assertion here.
+    h.run();
+    assert!(h.unnamed_widgets().is_empty());
 }
