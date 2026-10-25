@@ -269,6 +269,8 @@ fn refresh_is_reported_and_unreadable_lines_are_mentioned() {
     assert_eq!(h.state().action, Some(HistoryAction::Refresh));
 }
 
+/// With 3,000 jobs only rows in view exist: the newest is shown, the oldest is not, and the
+/// summary still reports all 3,000.
 #[test]
 fn a_long_log_draws_only_the_rows_in_view() {
     let jobs: Vec<Job> = (0..3000u64)
@@ -296,6 +298,8 @@ struct SizedState {
     spacing: f32,
 }
 
+/// Builds a 40-job harness at 320×700 with 26pt body text and records the text height and item
+/// spacing.
 fn large_font_harness() -> Harness<'static, SizedState> {
     let jobs: Vec<Job> = (0..40u64)
         .map(|i| {
@@ -356,6 +360,8 @@ fn visible_rows(h: &Harness<'_, SizedState>) -> Vec<(usize, egui::Rect)> {
     rows
 }
 
+/// Scrolls from the last visible row `times` times, stepping enough frames after each scroll for
+/// the list to settle.
 fn scroll_rows(h: &mut Harness<'_, SizedState>, times: usize) {
     for _ in 0..times {
         let node = h
@@ -369,6 +375,8 @@ fn scroll_rows(h: &mut Harness<'_, SizedState>, times: usize) {
     }
 }
 
+/// Row pitch is one text height plus item spacing, order stays newest-first, and scrolling reaches
+/// the oldest job.
 #[test]
 fn rows_use_one_text_height_without_double_spacing_at_a_larger_font() {
     let mut h = large_font_harness();
@@ -414,6 +422,8 @@ fn rows_use_one_text_height_without_double_spacing_at_a_larger_font() {
     assert!(end.first().unwrap().0 < 39);
 }
 
+/// App, model and date filters are named ComboBoxes with no unnamed widget; clicking Days then
+/// Jobs leaves the selected tab at Jobs.
 #[test]
 fn each_filter_is_named_by_what_it_filters_not_by_its_current_value() {
     let mut h = harness(HistoryViewState::default(), two_apps(), T0 + 5000);

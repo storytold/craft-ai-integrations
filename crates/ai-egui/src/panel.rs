@@ -74,6 +74,8 @@ struct TestIdentity {
 }
 
 impl TestIdentity {
+    /// Captures every draft field whose change makes a running test's answer stale: endpoint,
+    /// provider, key, whether a key is used, and the key header.
     fn of(draft: &ConnectionDraft) -> Self {
         Self {
             endpoint: draft.endpoint.clone(),
@@ -295,6 +297,9 @@ impl ConnectionPanel {
         self.events.pop_front()
     }
 
+    /// Records an answer only while the draft still accepts models for the tested address; a rejected
+    /// answer leaves the test line alone rather than showing `Passed`. Vertex-express `Unsupported`
+    /// becomes `Unverified`, other errors `Failed`, and elapsed time saturates at `u64::MAX`.
     fn apply_answer(
         &mut self,
         answer: Result<craft_ai_client::TestReport, craft_ai_core::AiError>,
@@ -335,6 +340,8 @@ mod tests {
     use craft_ai_native::shared::SharedStore;
     use std::sync::Arc;
 
+    /// A panel over a temporary shared store and in-memory secrets. Keep the returned `TempDir`
+    /// alive for as long as the panel is used.
     fn panel() -> (tempfile::TempDir, ConnectionPanel) {
         let dir = tempfile::tempdir().unwrap();
         let shared = SharedStore::new(dir.path().join("connections.json"));
@@ -342,6 +349,7 @@ mod tests {
         (dir, ConnectionPanel::new(manager))
     }
 
+    /// A successful test report for one model named after `model`, with zero elapsed time and no probe.
     fn answer(model: &str) -> Result<TestReport, craft_ai_core::AiError> {
         Ok(TestReport {
             models: vec![ModelInfo::new(

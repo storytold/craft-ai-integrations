@@ -64,6 +64,8 @@ struct Sample {
     secrets: Arc<MemoryStore>,
 }
 
+/// Builds a temporary sample store: local ComfyUI models only when `sam3_installed`, two remote
+/// providers, one disabled local provider, and a suite default that fails for lack of a key.
 fn build(sam3_installed: bool) -> Sample {
     let seg = [InputRole::Source, InputRole::Prompt];
     let mut connections = Vec::new();
@@ -172,6 +174,7 @@ impl Demo {
         )
     }
 
+    /// Recomputes the picker for the current tool and keeps the previous view if the client errors.
     fn refresh(&mut self) {
         let options = craft_ai_features::setup_options(&craft_ai_features::builtin());
         if let Ok(view) = self.client("demo").picker(&self.role(), &options) {
@@ -187,6 +190,8 @@ impl Demo {
         }
     }
 
+    /// Stores the suite-wide choice through `ToolDesk` and refreshes the picker. `every_app` selects
+    /// the photocraft client and adds scope wording; otherwise the client is launcher.
     fn choose(&mut self, connection: ConnectionId, model: ModelId, every_app: bool) {
         let desk = ToolDesk::new(
             self.client(if every_app { "photocraft" } else { "launcher" }),
@@ -201,6 +206,8 @@ impl Demo {
         self.refresh();
     }
 
+    /// Applies one queued demo action: rebuild, refresh, a picker or popup choice, a dismissal, or a
+    /// notice about what setup would open. Nothing is downloaded.
     fn apply(&mut self, action: DemoAction) {
         match action {
             DemoAction::Rebuild => {
@@ -266,12 +273,15 @@ impl Demo {
 }
 
 impl eframe::App for Demo {
+    /// Drains queued demo actions outside the paint callback, applying each once.
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Some(action) = self.pending.pop_front() {
             self.apply(action);
         }
     }
 
+    /// Draws the tool toggles, the picker or popup, and the note; queues each press once and asks for
+    /// a repaint.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.label(
@@ -318,6 +328,7 @@ impl eframe::App for Demo {
     }
 }
 
+/// Starts the eframe picker demo with the sample data installed and performs the initial refresh.
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([560.0, 640.0]),

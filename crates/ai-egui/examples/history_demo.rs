@@ -171,6 +171,8 @@ struct Demo {
 }
 
 impl Demo {
+    /// Returns sample data unless `real`, where the real log is merged; a missing or unreadable file
+    /// becomes an empty log.
     fn load(real: bool) -> HistoryLog {
         if !real {
             return sample_log(now_ms());
@@ -189,6 +191,8 @@ impl Demo {
         }
     }
 
+    /// Refresh reloads the log, Clear empties only this window's copy, and Export writes
+    /// `history-export.csv` in the current directory.
     fn apply(&mut self, action: HistoryAction) {
         match action {
             HistoryAction::Refresh => {
@@ -210,12 +214,15 @@ impl Demo {
 }
 
 impl eframe::App for Demo {
+    /// Drains queued history actions outside the paint callback, applying each once.
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Some(action) = self.pending.pop_front() {
             self.apply(action);
         }
     }
 
+    /// Draws the heading, history view and last note, queueing the view's action once and requesting
+    /// another repaint.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading(if self.real {
@@ -236,6 +243,7 @@ impl eframe::App for Demo {
     }
 }
 
+/// Starts the eframe history demo; `--real` selects the real log instead of the sample.
 fn main() -> eframe::Result {
     let real = std::env::args().any(|a| a == "--real");
     let options = eframe::NativeOptions {

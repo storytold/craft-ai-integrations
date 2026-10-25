@@ -38,6 +38,7 @@ fn snapshot_builder<State>(size: egui::Vec2) -> HarnessBuilder<State> {
         })
 }
 
+/// Snapshot settings: output under `tests/snapshots`, threshold 0.6 and zero failed pixels.
 fn snapshot_options() -> SnapshotOptions {
     SnapshotOptions::new()
         .output_path("tests/snapshots")
@@ -45,6 +46,7 @@ fn snapshot_options() -> SnapshotOptions {
         .max_failed_pixels(0)
 }
 
+/// The logical screen rectangle from the origin at `size`.
 fn screen(size: egui::Vec2) -> egui::Rect {
     egui::Rect::from_min_size(egui::Pos2::ZERO, size)
 }
@@ -57,6 +59,7 @@ struct Job {
     outcome: Outcome,
 }
 
+/// A synthetic completed Photocraft job for the history fixtures.
 fn job(run: &'static str, at: u64, model: &'static str) -> Job {
     Job {
         run,
@@ -67,6 +70,7 @@ fn job(run: &'static str, at: u64, model: &'static str) -> Job {
     }
 }
 
+/// Builds a matching start and end record for each job and merges them.
 fn history_log(jobs: &[Job]) -> HistoryLog {
     let mut records = Vec::new();
     for job in jobs {
@@ -111,6 +115,7 @@ struct HistoryState {
     action: Option<HistoryAction>,
 }
 
+/// A 40-job history harness at 480×700 with a 26pt body font on a fixed dark background.
 fn large_font_history() -> Harness<'static, HistoryState> {
     let jobs: Vec<Job> = (0..40u64)
         .map(|i| {
@@ -143,6 +148,7 @@ fn large_font_history() -> Harness<'static, HistoryState> {
     )
 }
 
+/// Parses `model-N` indices from accessible labels and returns visible rows sorted by top edge.
 fn visible_rows(h: &Harness<'_, HistoryState>) -> Vec<(usize, egui::Rect)> {
     let mut rows: Vec<(usize, egui::Rect)> = h
         .query_all_by_label_contains("photocraft")
@@ -159,6 +165,8 @@ fn visible_rows(h: &Harness<'_, HistoryState>) -> Vec<(usize, egui::Rect)> {
     rows
 }
 
+/// Checks one text height plus item spacing per row and newest-first order, then takes the
+/// large-font snapshot.
 #[test]
 fn history_at_a_larger_font_uses_one_text_height_per_row() {
     let mut h = large_font_history();
@@ -179,6 +187,7 @@ fn history_at_a_larger_font_uses_one_text_height_per_row() {
     h.snapshot_options("history_large_font_dark_480x700", &snapshot_options());
 }
 
+/// A three-job history at 240×420 with the All date range selected and a dark background.
 fn narrow_history() -> Harness<'static, HistoryState> {
     let jobs = [
         job("a", T0, "flux"),
@@ -209,6 +218,8 @@ fn narrow_history() -> Harness<'static, HistoryState> {
     )
 }
 
+/// Filters and actions stay inside 240×420 with no unnamed widget; capture the snapshot, then
+/// confirm that Refresh reports an action.
 #[test]
 fn history_filters_and_actions_stay_inside_a_narrow_viewport() {
     let mut h = narrow_history();
@@ -249,6 +260,7 @@ struct ProgressState {
     cancelled: bool,
 }
 
+/// A 320×480 progress harness at 40% in either left-to-right or right-to-left layout.
 fn progress_harness(right_to_left: bool) -> Harness<'static, ProgressState> {
     let size = egui::vec2(320.0, 480.0);
     snapshot_builder(size).build_ui_state(
@@ -275,6 +287,7 @@ fn progress_harness(right_to_left: bool) -> Harness<'static, ProgressState> {
     )
 }
 
+/// Bar and Cancel stay in the viewport, do not overlap, and follow the layout's LTR/RTL order.
 fn cancel_bounds_are_usable(h: &Harness<'_, ProgressState>, right_to_left: bool) {
     let viewport = screen(egui::vec2(320.0, 480.0));
     let bar = h.get_by_label_contains("Working, 40%");
@@ -310,6 +323,7 @@ fn cancel_bounds_are_usable(h: &Harness<'_, ProgressState>, right_to_left: bool)
     }
 }
 
+/// Takes the LTR snapshot, then confirms Cancel is clickable.
 #[test]
 fn progress_cancel_is_visible_and_clickable_left_to_right() {
     let mut h = progress_harness(false);
@@ -321,6 +335,7 @@ fn progress_cancel_is_visible_and_clickable_left_to_right() {
     assert!(h.state().cancelled);
 }
 
+/// Takes the RTL snapshot, then confirms Cancel is clickable.
 #[test]
 fn progress_cancel_is_visible_and_clickable_right_to_left() {
     let mut h = progress_harness(true);
@@ -339,6 +354,7 @@ struct FormState {
     event: Option<FormEvent>,
 }
 
+/// A connection form at 240×560 over a fixed dark background.
 fn connection_harness() -> Harness<'static, FormState> {
     snapshot_builder(egui::vec2(240.0, 560.0)).build_ui_state(
         |ui, state: &mut FormState| {
@@ -355,6 +371,8 @@ fn connection_harness() -> Harness<'static, FormState> {
     )
 }
 
+/// Fields and key keep their labels and roles; the fields, key, checkbox and buttons stay inside
+/// 240×560. Capture the snapshot, then confirm that Save reports an action.
 #[test]
 fn connection_fields_keep_their_names_roles_and_bounds_when_narrow() {
     let mut h = connection_harness();

@@ -1,38 +1,42 @@
 # egui 0.37 migration plan for craft-ai-integrations
 
-Current publication candidate (2026-10-25): implementation and qualification changes are committed at `087f5a0` on the migration branch; the uncommitted-source descriptions below are historical. The current panel source, snapshot-test source and all five golden image hashes match the retained passing mutation-qualification packet. The changed widget package passed 108 tests, strict all-target lint and formatting; the separate consumer smoke passed a locked check and one draw test. Full remote workspace/platform CI, native host/IME/clipboard and paired performance acceptance remain open. Publication requires explicit approval; human review and human merge are required.
+Current publication candidate (2026-10-25): `origin/main` is `0e553407716e958c6281d5b6df0a9554fc5632b7` (tree identical to the merged #105 head `7b3f3e616c37f4eadc04525f075ee1fce08448eb`) and this follow-up adds the 13-file documentation and cancellation-test change set, plus corrected qualification records, on `codex/egui-037-ai-followup-20261025`. Managed job `egui037-ai-final-ci-20261025-1331`, run on the identical `7b3f3e6` tree plus that 13-file change set, passed the targeted `craft-ai-egui` and `craft-ai-engine` tests and the locked consumer smoke: **126 passed, 0 failed, 4 ignored** (the ignored tests are doctests), with formatting and strict all-target clippy for those two packages green; the run left the worktree unchanged. The earlier 108-test mutation-qualification packet at `egui037-ai-regression-mutation-20261024-2205` is retained as historical evidence. Full remote workspace/platform CI, native host/IME/clipboard and paired performance acceptance remain open. Publication requires explicit approval; human review and human merge are required.
 
 ## Historical implementation and qualification record
 
-Status: implementation and headless qualification are complete for the current follow-up;
+Status: implementation and headless qualification have advanced through the current follow-up;
 **not acceptance-complete**. The source audit at
-`1a02afd6bed425bcd516d8de2f3dc3b29614b23d` is retained below as historical evidence. The current
-checkout is `7c80bbc52cb5a84cebeb67529a18d670a15c511b` plus local AI-5 follow-up changes (the
-deterministic snapshot suite, the separate consumer-smoke root, the panel mutation group and these
-docs). The follow-up passed 108 tests, strict all-target clippy and fmt on Linux; its five candidate
-snapshots, lifecycle mutants and locked consumer smoke are checked, and an independent test-packet
-review passed. Native GUI/IME, physical-GPU and performance qualification remain open. No push, pull
-request, comment, release, merge or other publication is authorised; each future publication and the
-final merge still need fresh explicit human approval after the exact content and validation are shown.
+`1a02afd6bed425bcd516d8de2f3dc3b29614b23d` is retained below as historical evidence. The
+108-test checkpoint was the `7c80bbc52cb5a84cebeb67529a18d670a15c511b` checkout plus local AI-5
+follow-up changes (the deterministic snapshot suite, the separate consumer-smoke root, the panel
+mutation group and these docs); it passed 108 tests under managed job
+`egui037-ai-regression-mutation-20261024-2205`, with strict all-target clippy and fmt on Linux, five
+candidate snapshots, lifecycle mutants and the locked consumer smoke checked, and an independent
+test-packet review passed. The follow-up supersedes that test count with the
+126-passed/0-failed/4-ignored managed job described above; native GUI/IME, physical-GPU, performance
+and remote/platform CI remain open. No push, pull request, comment, release, merge or other
+publication is authorised; each future publication and the final merge still need fresh explicit
+human approval after the exact content and validation are shown.
 
 The repository is `storytold/craft-ai-integrations`. Its only egui consumer is `crates/ai-egui` (package `craft-ai-egui`).
 This plan covers that crate, its examples, tests, workspace dependency graph, and the contracts it must keep for any app that
 may adopt it.
 
-### Current implemented state (2026-10-24)
+### Current implemented state (2026-10-25)
 
 | Item | Actual state |
 | --- | --- |
-| Source | `7c80bbc52cb5a84cebeb67529a18d670a15c511b`, plus the inherited pin-only root `Cargo.toml`/`Cargo.lock` updates and the local follow-up files listed in the change review. |
+| Source | `origin/main` `0e553407716e958c6281d5b6df0a9554fc5632b7` (tree identical to `7b3f3e616c37f4eadc04525f075ee1fce08448eb`), plus the 13-file documentation and cancellation-test change set and this documentation correction; no new commit yet. |
 | Production egui family | Reviewed storytold `storytold/egui` at `6d518fc799681571963842f95b55a6b68431b15a`; one family source in the root lock. |
 | Production winit | Reviewed storytold `storytold/winit` at `a517b3846ee8457d84ee4975110bfda6797c44dc`. |
 | Root lock | `Cargo.lock` SHA-256 `7505336b3831762c90b73610723161c163852edfee43daea350630e93dd4d799`; retained unchanged by this documentation, snapshot and smoke-root work. |
-| Consumer recipe | `consumer-smoke/` is a separate workspace that repeats the complete `[patch.crates-io]` recipe, path-depends on this repository's `ai-egui` and `ai-core`, and asserts the public widget values are that `craft_ai_core` identity. Its locked check and one draw test passed with one `craft-ai-core` identity and the pinned egui family; the rendererless root leaves the winit patches unused. |
+| Consumer recipe | `consumer-smoke/` is a separate workspace that repeats the complete `[patch.crates-io]` recipe, path-depends on this repository's `ai-egui` and `ai-core`, and asserts the public widget values are that `craft_ai_core` identity. Its locked test build and one draw test passed with one `craft-ai-core` identity and the pinned egui family; the rendererless root leaves the winit patches unused. |
 | Font policy | The library keeps `egui` at `default-features = false`. Tests/examples opt into bundled `default_fonts`; the snapshot suite installs `FontDefinitions::default()` explicitly and keeps kittest's missing-glyph panic. A host supplies fonts or gets them through eframe; production does not force them. |
 | Test-only features | `egui_kittest` uses `snapshot` + `wgpu` only as a dev dependency. `eframe` stays a dev dependency with `default_fonts`, `glow`, `x11`, `wayland`. No new public feature flag. |
 | Duplicate core policy | This workspace and the smoke root use one path `craft-ai-core`. Do not combine it with `craft-libs/crates/ai-core`; replacing the local copy remains separate `CORE-SYNC` work. |
-| Final headless qualification | Under managed job `egui037-ai-regression-mutation-20261024-2205`, **108 tests passed** with strict `clippy --all-targets` and `cargo fmt --all --check` green on Linux, then again after restoration. Five committed kittest snapshots are hash-stable. The `eg` group caught both compiled lifecycle mutants; changing the background from RGB(27,27,27) to RGB(30,30,30) failed the expected snapshot with 75,486 changed pixels. The locked consumer smoke passed one draw test with one `craft-ai-core` identity and the pinned egui family. An independent test-packet review passed. This is not evidence for native GUI, IME/clipboard, physical-GPU or performance acceptance. |
-| Still open | Native Linux X11/Wayland and Windows widget workflows (focus, keyboard, clipboard/IME, screenshots); macOS IME/Metal/termination remains an explicit blocker; physical-GPU and performance qualification; any app adoption; human review of this documentation and fresh explicit approval for publication. The non-widget mutation groups were not rerun in the final headless job. |
+| Historical headless checkpoint (2026-10-24) | Under managed job `egui037-ai-regression-mutation-20261024-2205`, **108 tests passed** with strict `clippy --all-targets` and `cargo fmt --all --check` green on Linux, then again after restoration. Five committed kittest snapshots are hash-stable. The `eg` group caught both compiled lifecycle mutants; changing the background from RGB(27,27,27) to RGB(30,30,30) failed the expected snapshot with 75,486 changed pixels. The locked consumer smoke passed one draw test with one `craft-ai-core` identity and the pinned egui family. An independent test-packet review passed. This remains historical: it is not evidence for native GUI, IME/clipboard, physical-GPU or performance acceptance. |
+| Current headless qualification (2026-10-25) | Under managed job `egui037-ai-final-ci-20261025-1331`, on the `7b3f3e6` tree plus the 13-file documentation and cancellation-test change set: **126 passed, 0 failed, 4 ignored** (doctests) across the targeted `craft-ai-egui`/`craft-ai-engine` suites and the locked consumer smoke. The formatting command left the worktree unchanged, strict all-target clippy for those two packages was green, and the five kittest snapshots passed. This supersedes the 108-test count but does not rerun the historical mutation controls; it is not evidence for native GUI, IME/clipboard, physical-GPU or performance acceptance. |
+| Still open | Full remote workspace/platform CI; native Linux X11/Wayland and Windows widget workflows (focus, keyboard, clipboard/IME, screenshots); macOS IME/Metal/termination remains an explicit blocker; physical-GPU and performance qualification; any app adoption; human review of this documentation and fresh explicit approval for publication. The non-widget mutation groups were not rerun in the current headless job. |
 
 ## 1. Baseline and provenance
 
@@ -718,9 +722,10 @@ These are external reports, not reproduced here.
 
 ### 8.3 Known limitations of this plan
 
-- The original source audit ran no compile or test; API impact there was inferred from 0.37.0 source/changelog. The final
-  headless follow-up qualification covers 108 tests, five candidate snapshots, the `eg` lifecycle mutants and the locked
-  consumer smoke; it does not cover native workflows, physical GPUs, performance or the other mutation groups.
+- The original source audit ran no compile or test; API impact there was inferred from 0.37.0 source/changelog. The
+  historical 108-test checkpoint covers five candidate snapshots, the `eg` lifecycle mutants and the locked consumer
+  smoke; the current 126-passed/0-failed/4-ignored managed job covers the targeted widget and engine tests plus that
+  smoke. Neither covers native workflows, physical GPUs, performance, remote/platform CI or the other mutation groups.
 - The consumer table reflects the exact planning checkouts; re-inventory before final integration.
 - The fork/winit candidates are not accepted storytold revisions; E1–E21, W15P, E4/P2b and E21b/P7b are not revalidated here.
   Upstream #8731, #8736, #8512, #8763, #8764 and #8748 are external reports.
@@ -754,19 +759,23 @@ The checkout now resolves the reviewed storytold egui family at
 native event bridge, and `consumer-smoke/` repeats that recipe because patches do not propagate to
 a consumer root. The root lockfile SHA-256 is recorded above.
 
-This dependency state satisfies the pin half of AI-2. The follow-up source and headless tests are
-now qualified as recorded above: 108 tests, five candidate snapshots, the `eg` lifecycle mutant group
-and the locked consumer smoke. Native/platform and performance evidence remain absent, the other
-mutation groups were not rerun, and the repository has no published app adoption. No
-acceptance-complete claim is made; publication still needs explicit human approval.
+This dependency state satisfies the pin half of AI-2. The historical checkpoint and the current
+managed job are recorded above: the earlier 108-test mutation run and the current
+126-passed/0-failed/4-ignored targeted suite plus locked consumer smoke. Native/platform, performance
+and remote-CI evidence remain absent, the other mutation groups were not rerun, and the repository
+has no published app adoption. No acceptance-complete claim is made; publication still needs
+explicit human approval.
 
-## Human-review readiness summary — 2026-10-24
+## Human-review readiness summary — 2026-10-25
 
-The documentation now records only the qualification actually run for this follow-up: 108 passing
-tests, strict all-target clippy and fmt, five hash-stable candidate snapshots, both compiled
-connection-panel lifecycle mutants caught, the negative pixel control caught at 75,486 changed
-pixels, restored source and goldens, a passing locked consumer smoke with one core identity, and a
-passing independent test-packet review.
+The documentation now separates the historical 108-test mutation checkpoint from the current
+managed qualification. The historical checkpoint recorded strict all-target clippy and fmt, five
+hash-stable candidate snapshots, both compiled connection-panel lifecycle mutants caught, the
+negative pixel control caught at 75,486 changed pixels, restored source and goldens, a passing
+locked consumer smoke with one core identity, and a passing independent test-packet review. The
+current job `egui037-ai-final-ci-20261025-1331` records 126 passed, 0 failed and 4 ignored doctests
+for the targeted widget and engine suites plus the locked consumer smoke, with formatting and
+strict all-target clippy green; it did not rerun the mutation controls.
 
 Genuinely open AI gates: native Linux X11/Wayland and Windows focus/keyboard/clipboard/IME/rendering
 screenshots; macOS IME/Metal/termination; physical-GPU qualification; the performance protocol; any

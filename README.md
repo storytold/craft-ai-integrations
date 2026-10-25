@@ -73,10 +73,12 @@ Read [docs/STATUS.md](docs/STATUS.md) before relying on a provider or tool. In s
 - **Tested against scripted servers on localhost:** every hosted adapter, the media copier, the generic
   ComfyUI adapter, the declarative adapter and the client flow.
 - **Run for real on one machine:** the SAM 3 point and session clients through a headless ComfyUI; SAM 2.1 on rten with the published ONNX files; and an imported selection graph on ComfyUI 0.22.3. All on Windows, with one sample picture.
-- **Migrated shared widgets, headless:** `craft-ai-egui` passed 108 tests, strict all-target clippy
-  and `cargo fmt --check` on Linux, five committed kittest snapshots, and the locked consumer-smoke
-  check with one draw test and one `craft-ai-core` identity. The rendererless smoke does not use
-  winit.
+- **Migrated shared widgets, headless:** the targeted `craft-ai-egui`/`craft-ai-engine` tests and the
+  locked consumer smoke passed 126 tests with 0 failures and 4 ignored doctests under managed job
+  `egui037-ai-final-ci-20261025-1331`, with formatting that left the worktree unchanged, strict
+  all-target clippy for those two packages, five committed kittest snapshots, one draw test and one
+  `craft-ai-core` identity on Linux. The earlier 108-test mutation checkpoint is historical. The
+  rendererless smoke does not use winit.
 - **Not verified:** any real hosted service, TLS behind an intercepting proxy, macOS and Linux
   keychains, macOS builds of the test suite, and any app running a tool through the shared binding.
   Native widget behavior on Linux X11/Wayland and Windows (focus, keyboard, clipboard, IME and

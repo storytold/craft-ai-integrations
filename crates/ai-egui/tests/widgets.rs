@@ -15,6 +15,7 @@ use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 
+/// Synthetic Photocraft cloud-or-local disclosure with one image input and one parameter.
 fn disclosure(locality: Locality) -> Disclosure {
     Disclosure {
         app: AppId::new("photocraft").unwrap(),
@@ -113,6 +114,7 @@ struct StatusState {
     last: Option<StatusAction>,
 }
 
+/// A status harness at the default size whose state keeps the last reported action.
 fn status_harness(s: StatusState) -> Harness<'static, StatusState> {
     Harness::new_ui_state(
         |ui, st: &mut StatusState| {
@@ -131,6 +133,7 @@ fn status_harness(s: StatusState) -> Harness<'static, StatusState> {
     )
 }
 
+/// A status harness at a fixed size whose state keeps the last reported action.
 fn status_harness_sized(size: egui::Vec2, s: StatusState) -> Harness<'static, StatusState> {
     Harness::builder().with_size(size).build_ui_state(
         |ui, st: &mut StatusState| {
@@ -149,6 +152,8 @@ fn status_harness_sized(size: egui::Vec2, s: StatusState) -> Harness<'static, St
     )
 }
 
+/// An unavailable status explains its reason, offers the launcher, and hides Reset when there is
+/// no override.
 #[test]
 fn unavailable_feature_explains_itself_and_offers_the_launcher() {
     let mut h = status_harness(StatusState {
@@ -297,6 +302,7 @@ struct ProgressState {
     cancelled: bool,
 }
 
+/// A progress harness at the default size for `job`, with optional cost, recording cancellation.
 fn progress_harness(job: JobState, cost: Option<CostEstimate>) -> Harness<'static, ProgressState> {
     Harness::new_ui_state(
         |ui, st: &mut ProgressState| {
@@ -312,6 +318,7 @@ fn progress_harness(job: JobState, cost: Option<CostEstimate>) -> Harness<'stati
     )
 }
 
+/// A progress harness at a fixed size for `job`, with optional cost, recording cancellation.
 fn progress_harness_sized(
     size: egui::Vec2,
     job: JobState,
@@ -353,6 +360,7 @@ fn progress_harness_rtl_sized(
     )
 }
 
+/// A running job shows its percent and formatted cost, and Cancel reports.
 #[test]
 fn a_running_job_shows_percent_cost_and_can_be_cancelled() {
     let cost = CostEstimate {
@@ -379,6 +387,7 @@ fn a_job_with_no_percentage_still_shows_it_is_working() {
     h.get_by_label(CANCEL);
 }
 
+/// Succeeded, Cancelled and Failed show the right text and offer no Cancel.
 #[test]
 fn finished_jobs_say_how_they_ended_and_cannot_be_cancelled() {
     for (state, text) in [
@@ -398,6 +407,8 @@ fn finished_jobs_say_how_they_ended_and_cannot_be_cancelled() {
     }
 }
 
+/// The term radios expose their checked state; choosing One hour and pressing Allow returns that
+/// term.
 #[test]
 fn timed_consent_radios_expose_their_selected_state_and_duration() {
     struct State {
@@ -447,6 +458,7 @@ fn timed_consent_radios_expose_their_selected_state_and_duration() {
     );
 }
 
+/// The status model combo is labelled for its feature, and no widget is unnamed.
 #[test]
 fn the_status_model_picker_has_a_field_name_not_just_its_value() {
     let mut h = status_harness(StatusState {
@@ -468,6 +480,7 @@ fn the_status_model_picker_has_a_field_name_not_just_its_value() {
     assert!(h.unnamed_widgets().is_empty());
 }
 
+/// At 180×360 Launcher and Add connection stay inside, and Add reports.
 #[test]
 fn status_commands_stay_inside_a_narrow_header() {
     let mut h = status_harness_sized(
@@ -497,6 +510,7 @@ fn status_commands_stay_inside_a_narrow_header() {
     assert_eq!(h.state().last, Some(StatusAction::AddConnection));
 }
 
+/// At 320px the bar and Cancel are contained, do not overlap, and Cancel reports.
 #[test]
 fn cancel_stays_visible_and_does_not_overlap_progress_at_320() {
     let mut h = progress_harness_sized(
@@ -521,6 +535,7 @@ fn cancel_stays_visible_and_does_not_overlap_progress_at_320() {
     assert!(h.state().cancelled);
 }
 
+/// At 120px Cancel wraps below the bar, stays inside and still reports.
 #[test]
 fn narrow_cancel_wraps_below_the_bar_and_stays_clickable() {
     let mut h = progress_harness_sized(
@@ -544,6 +559,7 @@ fn narrow_cancel_wraps_below_the_bar_and_stays_clickable() {
     assert!(h.state().cancelled);
 }
 
+/// Indeterminate progress at 120px keeps Cancel inside the view and clickable.
 #[test]
 fn narrow_spinner_job_also_keeps_cancel_reachable() {
     let mut h = progress_harness_sized(
@@ -562,6 +578,7 @@ fn narrow_spinner_job_also_keeps_cancel_reachable() {
     assert!(h.state().cancelled);
 }
 
+/// At 320px right-to-left, Cancel precedes the bar, does not overlap it and reports.
 #[test]
 fn rtl_narrow_progress_keeps_cancel_visible_and_apart_from_the_bar() {
     let mut h = progress_harness_rtl_sized(
@@ -592,6 +609,7 @@ fn rtl_narrow_progress_keeps_cancel_visible_and_apart_from_the_bar() {
     assert!(h.state().cancelled);
 }
 
+/// At 320px right-to-left, Cancel precedes the label, does not overlap it and reports.
 #[test]
 fn rtl_narrow_spinner_job_keeps_cancel_visible_and_clickable() {
     let mut h = progress_harness_rtl_sized(
@@ -624,6 +642,8 @@ fn rtl_narrow_spinner_job_keeps_cancel_visible_and_clickable() {
     assert!(h.state().cancelled);
 }
 
+/// Draws the fixture bullet, ellipsis, dash and middle dot; the harness fails if the test font
+/// lacks a glyph.
 #[test]
 fn the_fixed_fixture_glyphs_are_in_the_test_fonts() {
     let mut h = Harness::new_ui_state(

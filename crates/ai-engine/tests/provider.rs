@@ -237,6 +237,8 @@ fn until(what: &str, check: impl Fn() -> bool) {
     }
 }
 
+/// A second job reports `Queued` behind the running first. Cancelling both leaves the second
+/// `Cancelled` without running, and the runner was loaded and run only once.
 #[test]
 fn a_job_waiting_behind_another_says_queued_and_cancelled_it_never_runs() {
     let dir = tempfile::tempdir().unwrap();
@@ -263,6 +265,8 @@ fn a_job_waiting_behind_another_says_queued_and_cancelled_it_never_runs() {
     assert_eq!(loads.load(Ordering::SeqCst), 1);
 }
 
+/// Submitting a burst ends in `RateLimited` with the plain-language wait message; cancelling the
+/// accepted jobs frees capacity again.
 #[test]
 fn a_burst_of_requests_is_refused_in_plain_words_and_room_returns_when_they_end() {
     let dir = tempfile::tempdir().unwrap();

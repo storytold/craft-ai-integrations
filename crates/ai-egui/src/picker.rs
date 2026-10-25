@@ -119,6 +119,8 @@ fn setup_label(group: &PickerGroup) -> Option<&'static str> {
     }
 }
 
+/// Draws one provider's title, badges, note and setup button, then its model rows. Models are
+/// disabled unless the group is `Ready`, while the provider stays visible and setup stays usable.
 fn group_ui(ui: &mut Ui, group: &PickerGroup) -> Option<PickerAction> {
     let mut action = None;
     let ready = group.state == GroupState::Ready;

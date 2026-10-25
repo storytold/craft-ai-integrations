@@ -48,6 +48,8 @@ pub fn saved_id(event: PanelEvent) -> Option<ConnectionId> {
 mod tests {
     use super::*;
 
+    /// Draws the public widgets from synthetic data and local core types, starting no provider or
+    /// store, and discards the headless renderer's texture delta.
     #[test]
     fn public_widgets_draw_without_a_provider_or_store() {
         let mut form = ConnectionFormState::new();

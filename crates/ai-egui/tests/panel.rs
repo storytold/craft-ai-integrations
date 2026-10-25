@@ -34,10 +34,13 @@ struct Rig {
     _dir: tempfile::TempDir,
 }
 
+/// A panel harness with a temporary shared store, in-memory secrets and no forced second pass.
 fn rig() -> Rig {
     rig_with(false)
 }
 
+/// Builds the shared harness; `force_multipass` makes the first pass request a discard, so a
+/// press is seen twice.
 fn rig_with(force_multipass: bool) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let shared = SharedStore::new(dir.path().join("connections.json"));
@@ -137,6 +140,8 @@ fn a_remote_connection_is_saved_with_its_key_in_the_secret_store_only() {
     assert_eq!(stored.expose(), KEY);
 }
 
+/// An invalid form keeps the password field visible, emits no event or stored connection, and does not
+/// echo the rejected key in its message.
 #[test]
 fn a_form_problem_stays_on_screen_and_saves_nothing() {
     let mut r = rig();
@@ -265,6 +270,8 @@ fn slow_models_server() -> Server {
     })
 }
 
+/// An answer that arrives after the address changed mid-test is neither reported as the new
+/// address's connection nor saved with its models.
 #[test]
 fn models_from_a_test_that_was_still_running_are_not_saved_for_the_new_address() {
     // The sibling test above edits the address *after* the answer is in. This is the other
@@ -307,6 +314,7 @@ fn models_from_a_test_that_was_still_running_are_not_saved_for_the_new_address()
     );
 }
 
+/// Selects Ollama in the provider combo and replaces the address field.
 fn choose_ollama_and_address(h: &mut Harness<'_, State>, address: &str) {
     h.get_by_role(Role::ComboBox).click();
     h.run();
@@ -315,6 +323,7 @@ fn choose_ollama_and_address(h: &mut Harness<'_, State>, address: &str) {
     replace_text(h, 1, address);
 }
 
+/// Starts a scripted model-list server returning the named models after an optional delay.
 fn named_models_server(models: &[&str], delay_ms: u64) -> Server {
     let entries: Vec<String> = models
         .iter()
@@ -329,6 +338,8 @@ fn named_models_server(models: &[&str], delay_ms: u64) -> Server {
     })
 }
 
+/// Name and address show their visible labels, the key is a labelled password input, and turning
+/// off "Uses a key" removes that input.
 #[test]
 fn each_field_has_its_visible_name_and_role_and_the_key_goes_away_when_not_used() {
     let mut r = rig();
@@ -366,6 +377,8 @@ fn each_field_has_its_visible_name_and_role_and_the_key_goes_away_when_not_used(
     }
 }
 
+/// After a Test press the next pass disables the button while the line reports `Running`; the
+/// gated answer re-enables it and reports the models.
 #[test]
 fn test_is_disabled_immediately_and_reports_the_running_state() {
     let (release, gate) = std::sync::mpsc::channel::<()>();
@@ -392,6 +405,8 @@ fn test_is_disabled_immediately_and_reports_the_running_state() {
     assert!(!r.h.get_by_label("Test").accesskit_node().is_disabled());
 }
 
+/// With a forced second pass, one Test press sends one request and one Save press emits one Saved
+/// event and one stored connection.
 #[test]
 fn one_click_tests_and_saves_once_when_egui_runs_a_second_pass() {
     let server = models_server();
@@ -426,6 +441,8 @@ fn one_click_tests_and_saves_once_when_egui_runs_a_second_pass() {
     assert_eq!(r.shared.load().unwrap().connections.len(), 1);
 }
 
+/// Calling `poll` outside a UI pass finishes the test, adds no UI pass, and a passing test emits
+/// no panel event.
 #[test]
 fn a_hidden_poll_finishes_the_test_without_another_ui_pass() {
     let server = models_server();
@@ -463,6 +480,8 @@ fn a_hidden_poll_finishes_the_test_without_another_ui_pass() {
     assert_eq!(server.count(), 1);
 }
 
+/// A slow answer for the replaced endpoint is dropped; only the new endpoint's models are
+/// reported and saved.
 #[test]
 fn a_late_answer_for_the_old_endpoint_cannot_replace_the_new_tests_models() {
     let old = named_models_server(&["old-1", "old-2"], 600);
@@ -505,6 +524,8 @@ fn a_late_answer_for_the_old_endpoint_cannot_replace_the_new_tests_models() {
     assert_eq!(saved.connections[0].models[0].id.as_str(), "new-1");
 }
 
+/// A save finishing in the same frame as Cancel delivers Saved first and Closed second, and the
+/// connection is stored.
 #[test]
 fn a_save_that_finishes_as_cancel_is_pressed_is_reported_before_closed() {
     let mut r = rig();

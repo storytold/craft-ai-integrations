@@ -126,6 +126,8 @@ impl HistoryViewState {
     }
 }
 
+/// A filter combo: drops a selected value that has left `options` (so a stale filter cannot hide
+/// everything), shows `all` in that case, and gives the control `name` for assistive tech.
 fn pick(
     ui: &mut Ui,
     id: &str,
@@ -272,6 +274,8 @@ pub fn history_view(
     action
 }
 
+/// Draws grouped totals in a height-capped scroll area that shrinks to its content. The scroll id includes `tab`, so Jobs and
+/// Days keep separate scroll positions.
 fn grouped<'a>(ui: &mut Ui, tab: Tab, rows: impl Iterator<Item = (String, &'a Totals)>) {
     ScrollArea::vertical()
         .id_salt(("history-list", tab))
