@@ -48,6 +48,15 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install software Vulkan renderer for kittest snapshots
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          # kittest prefers a CPU adapter. Mesa supplies lavapipe for headless Vulkan;
+          # selecting Vulkan avoids relying on a display-backed GL adapter.
+          # Windows and macOS keep their existing graphics backends.
+          echo 'WGPU_BACKEND=vulkan' >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
