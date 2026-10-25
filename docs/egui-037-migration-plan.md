@@ -1,5 +1,9 @@
 # egui 0.37 migration plan for craft-ai-integrations
 
+Current publication candidate (2026-10-25): implementation and qualification changes are committed at `087f5a0` on the migration branch; the uncommitted-source descriptions below are historical. The current panel source, snapshot-test source and all five golden image hashes match the retained passing mutation-qualification packet. The changed widget package passed 108 tests, strict all-target lint and formatting; the separate consumer smoke passed a locked check and one draw test. Full remote workspace/platform CI, native host/IME/clipboard and paired performance acceptance remain open. Publication requires explicit approval; human review and human merge are required.
+
+## Historical implementation and qualification record
+
 Status: implementation and headless qualification are complete for the current follow-up;
 **not acceptance-complete**. The source audit at
 `1a02afd6bed425bcd516d8de2f3dc3b29614b23d` is retained below as historical evidence. The current
