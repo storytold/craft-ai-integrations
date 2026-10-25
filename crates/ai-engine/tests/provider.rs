@@ -264,36 +264,6 @@ fn a_job_waiting_behind_another_says_queued_and_cancelled_it_never_runs() {
 }
 
 #[test]
-fn a_job_cancelled_before_its_model_is_loaded_never_loads_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut r = fake();
-    r.steps = 1_000;
-    let (loads, runs) = (r.loads.clone(), r.runs.clone());
-    let req = r.good_request().unwrap();
-    // Two models on one provider: the second is loaded only if a job for it gets to run.
-    let other = FakeRunner::new("candle", "other", "image.segment");
-    let other_loads = other.loads.clone();
-    let other_req = other.good_request().unwrap();
-    let p = EngineProvider::new(
-        "candle",
-        [
-            (Arc::new(r) as Arc<dyn ModelRunner>, weights(&dir)),
-            (Arc::new(other) as Arc<dyn ModelRunner>, weights(&dir)),
-        ],
-    );
-    let busy = p.submit(&model(), &req).unwrap();
-    until("the busy job runs", || runs.load(Ordering::SeqCst) == 1);
-    let other_job = p
-        .submit(&ModelId::new("other").unwrap(), &other_req)
-        .unwrap();
-    p.cancel(&other_job).unwrap();
-    p.cancel(&busy).unwrap();
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(other_loads.load(Ordering::SeqCst), 0);
-    assert_eq!(loads.load(Ordering::SeqCst), 1);
-}
-
-#[test]
 fn a_burst_of_requests_is_refused_in_plain_words_and_room_returns_when_they_end() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = fake();

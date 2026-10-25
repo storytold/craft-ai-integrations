@@ -246,3 +246,68 @@ impl Provider for EngineProvider {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use craft_ai_core::JobState;
+
+    use super::*;
+    use crate::testing::FakeRunner;
+
+    fn entry(fake: FakeRunner, dir: &tempfile::TempDir) -> Arc<Entry> {
+        let weights = dir.path().join("m.safetensors");
+        std::fs::write(&weights, b"w").unwrap();
+        let provider = EngineProvider::new(
+            "candle",
+            [(Arc::new(fake) as Arc<dyn ModelRunner>, weights)],
+        );
+        provider.entries[0].clone()
+    }
+
+    /// The worker thread's first act is `Entry::run`. A job cancelled before that call must not
+    /// load the weights or enter the runner, even when this entry is the first to touch them.
+    /// The same entry then loads and runs an uncancelled job, so the two zeroes come from the
+    /// cancel guard rather than from a fixture that could never have loaded or run anything.
+    #[test]
+    fn a_job_cancelled_before_its_turn_never_loads_or_runs_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fake = FakeRunner::new("candle", "sam3", "image.segment");
+        fake.step_pause = Duration::ZERO;
+        let (loads, runs) = (fake.loads.clone(), fake.runs.clone());
+        let request = fake.good_request().unwrap();
+        let entry = entry(fake, &dir);
+
+        let cancelled = Job::new();
+        cancelled.cancel();
+        let result = entry.run(&request, &cancelled);
+        assert_eq!(
+            result.as_ref().err().map(|e| e.kind),
+            Some(ErrorKind::Cancelled)
+        );
+        cancelled.finish(result);
+        assert_eq!(cancelled.snapshot().state, JobState::Cancelled);
+        assert_eq!(
+            loads.load(Ordering::SeqCst),
+            0,
+            "a cancelled job must not load the model"
+        );
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            0,
+            "a cancelled job must not run the model"
+        );
+
+        // Positive control through the same production path. If the `job.begin()` guard were
+        // removed, the cancelled job above would load (and, without the cancel check, run), so
+        // these counters would no longer be 0.
+        let control = Job::new();
+        let result = entry.run(&request, &control);
+        assert!(matches!(&result, Ok(outputs) if outputs.len() == 1));
+        control.finish(result);
+        assert_eq!(control.snapshot().state, JobState::Succeeded);
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+}
