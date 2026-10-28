@@ -11,6 +11,7 @@ No real hosted service, download host or repository was contacted by these tests
 |---|---|---|
 | OpenAI-compatible text and images | `craft-ai-openai` | Streaming, tools, structured output; image generate, edit and inpaint. A streamed reply is bounded three ways: per line (1 MiB), total bytes kept (the same as a whole reply, 128 MiB), and events held for one poll (65,536; a stream that passes it without a poll fails the job and the connection is dropped). |
 | FLUX image and video | `craft-ai-bfl` | |
+| FANTASTICO chat | `craft-ai-fantastico` | `text.complete` through `fantastico-sdk` 0.2, which mints a short-lived, capped key for the account and is told by the account where to spend it. Streaming, tools, structured output, cost per request. An agent loop's whole conversation goes as `turn` inputs and the whole reply comes back as a `completion` output: this adapter's own extension until the contract has turns. Used outside this repository by WordCraft's assistant against a real account; that run is not evidence kept here. |
 | Seedance video through BytePlus ModelArk | `craft-ai-seedance` | The Volcengine China address is refused. |
 | Gemini images on Vertex express mode | `craft-ai-vertex` | An express-mode key is not a full-project Vertex credential and has no free key probe. |
 | ArtCraft Omni API key | `craft-ai-artcraft` | Prompt-only image and video. Account or subscription access has no adapter: no official programmatic route is documented. An API key is not evidence that a subscription covers the requests. |

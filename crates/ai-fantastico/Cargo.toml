@@ -1,0 +1,21 @@
+[package]
+name = "craft-ai-fantastico"
+description = "A FANTASTICO account as a Craft AI provider: every major LLM from one prepaid credit, streaming and tool calls included. Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+craft-ai-core.workspace = true
+craft-ai-http.workspace = true
+# Mints the account's runtime keys, fills in `max_tokens`, retries and classifies failures. Its own
+# transport is left out: requests go through ours, which streams and takes the layer's TLS rule.
+fantastico-sdk = { version = "=0.2.3", default-features = false }
+serde_json.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[lints]
+workspace = true

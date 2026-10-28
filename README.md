@@ -28,6 +28,7 @@ Layout and rules mirror craft-libs: edition 2024, `MIT OR Apache-2.0`, no `unsaf
 | `craft-ai-http` | The one TLS setting every hosted call and download uses: the platform's certificate check. |
 | `craft-ai-media` | Durable local copies of hosted media links, with the checks that needs. |
 | `craft-ai-openai` | OpenAI-compatible text (streaming, tools, structured output) and images (generate, edit, inpaint). |
+| `craft-ai-fantastico` | A FANTASTICO account: every major chat model from one prepaid credit, through short-lived capped keys the account mints. Streaming, tools, structured output, cost per request; conversations as `turn` inputs (its own extension, see the crate docs). |
 | `craft-ai-bfl`, `craft-ai-vertex`, `craft-ai-seedance`, `craft-ai-artcraft` | Black Forest Labs FLUX, Vertex express-mode Gemini images, BytePlus ModelArk Seedance video, and the ArtCraft Omni API-key route. |
 | `craft-ai-declarative` | A provider described by a small data file instead of Rust. Design: `docs/design/declarative-adapter.md`. |
 | `craft-ai-comfyui`, `craft-ai-sam3` | Local ComfyUI workflows, including imported subject-selection graphs (`image.segment`) whose masks are checked before an app sees them; the SAM 3 point and session clients; the older direct SAM 3 detector bridge. |
