@@ -155,9 +155,11 @@ struct Fake {
 struct FakeLoaded(Fake);
 
 impl ModelRunner for Fake {
+    /// The built-in engine name the launcher's native route binds to.
     fn engine(&self) -> &str {
         "rten"
     }
+    /// The one model it offers: `image.segment` from a picture, with an optional prompt.
     fn model(&self) -> ModelInfo {
         let capability = CapabilityId::parse("image.segment").unwrap();
         ModelInfo::new(ModelId::new("sam21").unwrap(), "fake").with(
@@ -167,12 +169,14 @@ impl ModelRunner for Fake {
                 .requiring(InputRole::Source),
         )
     }
+    /// Loading needs no weights: the stand-in carries its own behaviour.
     fn load(&self, _: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
         Ok(Box::new(FakeLoaded(self.clone())))
     }
 }
 
 impl LoadedModel for FakeLoaded {
+    /// Answers one text output, or (when told to hang) waits until the job is cancelled and records it.
     fn run(&mut self, _: &Request, ctx: &RunContext) -> Result<Vec<Output>, AiError> {
         if self.0.hang {
             loop {
@@ -226,6 +230,7 @@ fn bound_tools(
     ))
 }
 
+/// A stand-in engine that answers at once, or hangs until cancelled.
 fn fake(hang: bool) -> Fake {
     Fake {
         hang,
@@ -233,6 +238,7 @@ fn fake(hang: bool) -> Fake {
     }
 }
 
+/// A Select subject request carrying a three-byte stand-in picture.
 fn picture_request(tools: &AppTools) -> Request {
     tools.request("select-subject").unwrap().with_input(
         InputRole::Source,
