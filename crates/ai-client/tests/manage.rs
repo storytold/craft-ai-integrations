@@ -505,7 +505,8 @@ fn new_provider_presets_store_keys_separately_and_probe_where_safe() {
             .unwrap()
             .models
             .len(),
-        2
+        3,
+        "FLUX 3 image, FLUX 3 video and FLUX.1 Fill"
     );
     assert_eq!(
         r.manager

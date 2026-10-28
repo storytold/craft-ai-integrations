@@ -106,11 +106,18 @@ fn try_builtin() -> Option<Vec<Feature>> {
     )?;
     fill.inputs = vec![InputRole::Source, InputRole::Mask, InputRole::Prompt];
     fill.uses = uses(&[("PhotoCraft", "Generative Fill")]);
-    fill.cloud = vec![cloud(
-        "openai",
-        "OpenAI image editing",
-        "Your own OpenAI key, billed by OpenAI. Built and tested offline only.",
-    )];
+    fill.cloud = vec![
+        cloud(
+            "openai",
+            "OpenAI image editing",
+            "Your own OpenAI key, billed by OpenAI. Built and tested offline only.",
+        ),
+        cloud(
+            "bfl",
+            "Black Forest Labs FLUX.1 Fill",
+            "Your own BFL key, billed by Black Forest Labs. Built and tested offline only.",
+        ),
+    ];
 
     let mut expand = feature(
         "generative-expand",

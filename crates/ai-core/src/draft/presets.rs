@@ -33,7 +33,7 @@ pub const PRESETS: &[Preset] = &[
         endpoint: "https://api.bfl.ai/v1",
         billing: Billing::Metered,
         needs_key: true,
-        note: "FLUX 3 image and video generation. Billed by Black Forest Labs.",
+        note: "FLUX 3 image and video generation, and FLUX.1 Fill inpainting. Billed by Black Forest Labs.",
     },
     Preset {
         key: "seedance",
