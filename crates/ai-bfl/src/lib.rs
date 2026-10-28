@@ -1,10 +1,12 @@
 //! BFL FLUX 3 image/video jobs and FLUX.1 Fill [pro] inpainting via the official asynchronous API.
-//! Polling uses our configured origin, never a server-supplied polling URL. FLUX 3 media are
+//! A task is polled at the `polling_url` BFL returns when that is https on `bfl.ai` (BFL requires it
+//! on the global address), otherwise at the configured origin; see `polling`. FLUX 3 media are
 //! short-lived remote handles; callers must persist them if they need durable assets. A fill is
 //! downloaded as soon as it is ready (BFL's links last ten minutes) and returned inline.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod fill;
 mod http;
+mod polling;
 use craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES;
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
@@ -13,7 +15,11 @@ use craft_ai_core::{
 };
 use http::{Http, encode_query};
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Debug)]
 pub struct BflConfig {
@@ -21,6 +27,8 @@ pub struct BflConfig {
     pub api_key: SecretString,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
+    /// How long a task may stay "Task not found" (over at least ten polls) before the job fails.
+    pub not_found_grace: Duration,
 }
 impl BflConfig {
     pub fn new(base_url: impl Into<String>, api_key: SecretString) -> Self {
@@ -29,6 +37,7 @@ impl BflConfig {
             api_key,
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(60),
+            not_found_grace: Duration::from_secs(60),
         }
     }
 }
@@ -49,13 +58,19 @@ enum Kind {
 
 struct Job {
     remote_id: String,
+    /// Where the task is read: the checked `polling_url`, or the configured address.
+    poll_url: String,
     kind: Kind,
     snapshot: JobSnapshot,
+    /// Consecutive "Task not found" answers, and when the first of them came.
+    not_found: Option<(u32, Instant)>,
 }
 
 pub struct BflProvider {
     http: Http,
+    base: Endpoint,
     loopback: bool,
+    not_found_grace: Duration,
     jobs: Mutex<HashMap<JobId, Job>>,
 }
 impl std::fmt::Debug for BflProvider {
@@ -88,6 +103,8 @@ impl BflProvider {
                 config.request_timeout,
             ),
             loopback: endpoint.is_loopback(),
+            base: endpoint,
+            not_found_grace: config.not_found_grace,
             jobs: Mutex::new(HashMap::new()),
         })
     }
@@ -248,6 +265,17 @@ impl Provider for BflProvider {
             .ok_or_else(|| AiError::new(ErrorKind::Provider, "BFL task ID is invalid"))?;
         let id = JobId::new(format!("bfl-{remote}"))
             .map_err(|_| AiError::new(ErrorKind::Provider, "BFL task ID cannot be represented"))?;
+        let poll_url = reply
+            .get("polling_url")
+            .and_then(Value::as_str)
+            .filter(|u| polling::polling_url_allowed(u, &self.base))
+            .map_or_else(
+                || {
+                    self.http
+                        .url(&format!("/get_result?id={}", encode_query(remote)))
+                },
+                str::to_owned,
+            );
         let mut jobs = self.job_lock()?;
         if jobs.len() >= 128 {
             return Err(AiError::new(ErrorKind::Quota, "too many tracked BFL jobs"));
@@ -256,14 +284,16 @@ impl Provider for BflProvider {
             id.clone(),
             Job {
                 remote_id: remote.to_owned(),
+                poll_url,
                 kind,
                 snapshot: JobSnapshot::new(JobState::Queued),
+                not_found: None,
             },
         );
         Ok(id)
     }
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
-        let (remote, kind, prior) = {
+        let (remote, url, kind, prior) = {
             let jobs = self.job_lock()?;
             let job = jobs
                 .get(id)
@@ -273,20 +303,29 @@ impl Provider for BflProvider {
                 stable.events.clear();
                 return Ok(stable);
             }
-            (job.remote_id.clone(), job.kind, job.snapshot.state.clone())
+            (
+                job.remote_id.clone(),
+                job.poll_url.clone(),
+                job.kind,
+                job.snapshot.state.clone(),
+            )
         };
-        let reply = self
-            .http
-            .get(&format!("/get_result?id={}", encode_query(&remote)))?;
+        // A 404 is the same answer as a "Task not found" status.
+        let Some(reply) = self.http.poll(&url)? else {
+            return self.not_found(id, prior);
+        };
+        let status = reply.get("status").and_then(Value::as_str).unwrap_or("");
+        if status == "Task not found" {
+            return self.not_found(id, prior);
+        }
         if reply.get("id").and_then(Value::as_str) != Some(remote.as_str()) {
             return Err(AiError::new(
                 ErrorKind::Provider,
                 "BFL returned a different task ID",
             ));
         }
-        let status = reply.get("status").and_then(Value::as_str).unwrap_or("");
-        let mut snap = match status {
-            "Pending" | "Task not found" => JobSnapshot::new(prior),
+        let snap = match status {
+            "Pending" => JobSnapshot::new(prior),
             "Reasoning" | "Generating" => JobSnapshot::new(JobState::Running { percent: None }),
             "Ready" => {
                 let field = if kind == Kind::Video {
@@ -317,17 +356,7 @@ impl Provider for BflProvider {
                 ));
             }
         };
-        let mut jobs = self.job_lock()?;
-        if let Some(job) = jobs.get_mut(id) {
-            if job.snapshot.state.is_terminal() {
-                snap = job.snapshot.clone();
-                snap.events.clear();
-            } else {
-                // Keep the state only: an inline result is handed out once, not held twice.
-                job.snapshot = JobSnapshot::new(snap.state.clone());
-            }
-        }
-        Ok(snap)
+        self.settle(id, snap, true)
     }
     fn cancel(&self, id: &JobId) -> Result<(), AiError> {
         let jobs = self.job_lock()?;
@@ -338,5 +367,49 @@ impl Provider for BflProvider {
                 "BFL API has no task cancellation route",
             )),
         }
+    }
+}
+
+impl BflProvider {
+    /// Counts a "Task not found" answer and fails the job once it has lasted (see `polling`).
+    fn not_found(&self, id: &JobId, prior: JobState) -> Result<JobSnapshot, AiError> {
+        let snap = {
+            let mut jobs = self.job_lock()?;
+            let job = jobs
+                .get_mut(id)
+                .ok_or_else(|| AiError::invalid("unknown BFL job"))?;
+            let (count, since) = job.not_found.unwrap_or((0, Instant::now()));
+            let count = count.saturating_add(1);
+            job.not_found = Some((count, since));
+            if count >= polling::NOT_FOUND_POLLS && since.elapsed() >= self.not_found_grace {
+                failed("BFL could not find the job; it may have expired")
+            } else {
+                JobSnapshot::new(prior)
+            }
+        };
+        self.settle(id, snap, false)
+    }
+    /// Records `snap` unless the job already finished, and returns what the caller should see.
+    /// `found` is false only for a "Task not found" answer; any other answer resets that count.
+    fn settle(
+        &self,
+        id: &JobId,
+        mut snap: JobSnapshot,
+        found: bool,
+    ) -> Result<JobSnapshot, AiError> {
+        let mut jobs = self.job_lock()?;
+        if let Some(job) = jobs.get_mut(id) {
+            if found {
+                job.not_found = None;
+            }
+            if job.snapshot.state.is_terminal() {
+                snap = job.snapshot.clone();
+                snap.events.clear();
+            } else {
+                // Keep the state only: an inline result is handed out once, not held twice.
+                job.snapshot = JobSnapshot::new(snap.state.clone());
+            }
+        }
+        Ok(snap)
     }
 }

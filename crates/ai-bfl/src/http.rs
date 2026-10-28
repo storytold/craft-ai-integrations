@@ -28,9 +28,21 @@ impl Http {
         }
     }
     fn response(&self, response: Result<Response<Body>, ureq::Error>) -> Result<Value, AiError> {
+        self.reply(response, false)?
+            .ok_or_else(|| status_error(404, None))
+    }
+    /// As `response`, but a 404 is `None` when `not_found_ok` is set.
+    fn reply(
+        &self,
+        response: Result<Response<Body>, ureq::Error>,
+        not_found_ok: bool,
+    ) -> Result<Option<Value>, AiError> {
         let mut response =
             response.map_err(|_| AiError::new(ErrorKind::Network, "could not reach BFL"))?;
         let status = response.status().as_u16();
+        if status == 404 && not_found_ok {
+            return Ok(None);
+        }
         if !response.status().is_success() {
             let retry_after = response
                 .headers()
@@ -50,7 +62,23 @@ impl Http {
             return Err(AiError::new(ErrorKind::Provider, "BFL reply is too large"));
         }
         serde_json::from_slice(&bytes)
+            .map(Some)
             .map_err(|_| AiError::new(ErrorKind::Provider, "BFL returned invalid JSON"))
+    }
+    /// Reads a task from `url`, which the caller has checked (`polling::polling_url_allowed`) or
+    /// built from the configured address. `None` means BFL answered 404.
+    pub fn poll(&self, url: &str) -> Result<Option<Value>, AiError> {
+        self.reply(
+            self.agent
+                .get(url)
+                .header("x-key", self.key.expose())
+                .call(),
+            true,
+        )
+    }
+    /// The configured address followed by `path`.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base)
     }
     pub fn get(&self, path: &str) -> Result<Value, AiError> {
         self.response(
