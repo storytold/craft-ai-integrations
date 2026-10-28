@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-bfl"
-description = "Black Forest Labs FLUX image and video provider for Craft AI"
+description = "Black Forest Labs FLUX image, video and FLUX.1 Fill inpainting provider for Craft AI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 craft-ai-core.workspace = true
 craft-ai-http.workspace = true
+png = "0.18"
 serde_json.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 

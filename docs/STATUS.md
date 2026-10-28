@@ -10,7 +10,7 @@ No real hosted service, download host or repository was contacted by these tests
 | Area | Crate | Notes |
 |---|---|---|
 | OpenAI-compatible text and images | `craft-ai-openai` | Streaming, tools, structured output; image generate, edit and inpaint. A streamed reply is bounded three ways: per line (1 MiB), total bytes kept (the same as a whole reply, 128 MiB), and events held for one poll (65,536; a stream that passes it without a poll fails the job and the connection is dropped). |
-| FLUX image and video | `craft-ai-bfl` | |
+| FLUX image and video, FLUX.1 Fill | `craft-ai-bfl` | FLUX.1 Fill [pro] (`flux-pro-1.0-fill`) serves `image.inpaint` for Generative fill: source, mask (white or transparent = fill; sent to BFL as a binary grayscale PNG, white = fill) and prompt, with BFL's documented options range-checked. The result is downloaded inline as soon as it is ready (BFL's links last ten minutes), only from an https `*.bfl.ai` address and without the key. Polling uses the configured address, not BFL's `polling_url`. BFL has no cancel route, so cancelling an unfinished job is `Unsupported`. FLUX.1 Expand is not mapped (it takes per-side pixel counts, which `image.outpaint` does not carry). |
 | Seedance video through BytePlus ModelArk | `craft-ai-seedance` | The Volcengine China address is refused. |
 | Gemini images on Vertex express mode | `craft-ai-vertex` | An express-mode key is not a full-project Vertex credential and has no free key probe. |
 | ArtCraft Omni API key | `craft-ai-artcraft` | Prompt-only image and video. Account or subscription access has no adapter: no official programmatic route is documented. An API key is not evidence that a subscription covers the requests. |

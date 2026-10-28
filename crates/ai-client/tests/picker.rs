@@ -257,12 +257,24 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
     let fill = builtin_role("generative-fill");
     let w = World::new(vec![], vec![]);
     let view = w.picker(&fill);
-    assert_eq!(titles(&view), [("OpenAI".to_owned(), GroupState::NotSetUp)]);
-    assert!(view.groups[0].models.is_empty());
+    assert_eq!(
+        titles(&view),
+        [
+            ("OpenAI".to_owned(), GroupState::NotSetUp),
+            ("Black Forest Labs".to_owned(), GroupState::NotSetUp)
+        ]
+    );
+    assert!(view.groups.iter().all(|g| g.models.is_empty()));
     assert_eq!(
         view.groups[0].setup,
         Some(SetupLink::New {
             option: "service:openai".into()
+        })
+    );
+    assert_eq!(
+        view.groups[1].setup,
+        Some(SetupLink::New {
+            option: "service:bfl".into()
         })
     );
 
@@ -278,7 +290,13 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
     );
     w.save_key("oa");
     let view = w.picker(&fill);
-    assert_eq!(titles(&view), [("Label oa".to_owned(), GroupState::Ready)]);
+    assert_eq!(
+        titles(&view),
+        [
+            ("Label oa".to_owned(), GroupState::Ready),
+            ("Black Forest Labs".to_owned(), GroupState::NotSetUp)
+        ]
+    );
 }
 
 /// With no connection, every local recipe of Select subject shows as its own not-set-up group

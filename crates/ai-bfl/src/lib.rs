@@ -1,8 +1,11 @@
-//! BFL FLUX 3 image/video jobs via the official asynchronous API.
-//! Polling uses our configured origin, never a server-supplied polling URL. Result media are
-//! short-lived remote handles; callers must persist them if they need durable assets.
+//! BFL FLUX 3 image/video jobs and FLUX.1 Fill [pro] inpainting via the official asynchronous API.
+//! Polling uses our configured origin, never a server-supplied polling URL. FLUX 3 media are
+//! short-lived remote handles; callers must persist them if they need durable assets. A fill is
+//! downloaded as soon as it is ready (BFL's links last ten minutes) and returned inline.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod fill;
 mod http;
+use craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES;
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
     Payload, Provider, Request, SecretString, capability::CapabilityId, endpoint::Endpoint,
@@ -30,14 +33,29 @@ impl BflConfig {
     }
 }
 
+/// The official global address and BFL's two regional ones.
+const OFFICIAL: &[&str] = &[
+    "https://api.bfl.ai/v1",
+    "https://api.eu.bfl.ai/v1",
+    "https://api.us.bfl.ai/v1",
+];
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Image,
+    Video,
+    Fill,
+}
+
 struct Job {
     remote_id: String,
-    media_type: &'static str,
+    kind: Kind,
     snapshot: JobSnapshot,
 }
 
 pub struct BflProvider {
     http: Http,
+    loopback: bool,
     jobs: Mutex<HashMap<JobId, Job>>,
 }
 impl std::fmt::Debug for BflProvider {
@@ -59,8 +77,7 @@ impl BflProvider {
         let base = config.base_url.trim_end_matches('/');
         let endpoint =
             Endpoint::parse(base).map_err(|_| AiError::invalid("invalid BFL API address"))?;
-        if base.contains(['?', '#']) || (!endpoint.is_loopback() && base != "https://api.bfl.ai/v1")
-        {
+        if base.contains(['?', '#']) || (!endpoint.is_loopback() && !OFFICIAL.contains(&base)) {
             return Err(AiError::invalid("BFL must use its official API address"));
         }
         Ok(Self {
@@ -70,11 +87,12 @@ impl BflProvider {
                 config.connect_timeout,
                 config.request_timeout,
             ),
+            loopback: endpoint.is_loopback(),
             jobs: Mutex::new(HashMap::new()),
         })
     }
     fn catalog() -> Vec<ModelInfo> {
-        [
+        let mut models: Vec<ModelInfo> = [
             ("flux-3-image", "FLUX 3 image", "image.generate"),
             ("flux-3-video", "FLUX 3 video", "video.generate"),
         ]
@@ -88,7 +106,97 @@ impl BflProvider {
                 ),
             )
         })
-        .collect()
+        .collect();
+        if let (Ok(id), Ok(cap)) = (
+            ModelId::new(fill::MODEL),
+            CapabilityId::parse("image.inpaint"),
+        ) {
+            models.push(
+                ModelInfo::new(id, "FLUX.1 Fill [pro]").with(
+                    CapabilitySpec::new(cap)
+                        .accepting(InputRole::Source, 1)
+                        .requiring(InputRole::Source)
+                        .accepting(InputRole::Mask, 1)
+                        .requiring(InputRole::Mask)
+                        .accepting(InputRole::Prompt, 1)
+                        .requiring(InputRole::Prompt),
+                ),
+            );
+        }
+        models
+    }
+    /// FLUX 3 image or video: a prompt and no options.
+    fn generate_body(request: &Request, kind: Kind) -> Result<(&'static str, Value), AiError> {
+        if !request.params.is_empty() {
+            return Err(AiError::unsupported(
+                "BFL options are not mapped yet; use provider defaults",
+            ));
+        }
+        let prompt = request
+            .inputs
+            .iter()
+            .find(|i| i.role == InputRole::Prompt)
+            .and_then(|i| match &i.payload {
+                Payload::Text { text } => Some(text),
+                _ => None,
+            })
+            .ok_or_else(|| AiError::invalid("BFL needs a text prompt"))?;
+        if prompt.is_empty() {
+            return Err(AiError::invalid("BFL needs a non-empty prompt"));
+        }
+        Ok(if kind == Kind::Video {
+            ("/flux-3-video", json!({"prompt":prompt,"mode":"t2v"}))
+        } else {
+            ("/flux-3-image", json!({"prompt":prompt}))
+        })
+    }
+    /// The finished fill, downloaded now because BFL's link expires. A link that is not BFL's,
+    /// too large or not a picture fails the job; a dropped connection is an error the next poll
+    /// retries.
+    fn fill_result(&self, uri: &str) -> Result<JobSnapshot, AiError> {
+        if !fill::delivery_allowed(uri, self.loopback) {
+            return Ok(failed("BFL result URL is not a BFL delivery address"));
+        }
+        let bytes = match self.http.download(uri, DEFAULT_MAX_INLINE_BYTES) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind == ErrorKind::Network => return Err(e),
+            Err(e) => return Ok(JobSnapshot::new(JobState::Failed { error: e })),
+        };
+        let Some(media) = fill::result_media(&bytes) else {
+            return Ok(failed("the BFL result is not a PNG, JPEG or WebP image"));
+        };
+        let mut snap = JobSnapshot::new(JobState::Succeeded);
+        snap.events.push(Event::Output(Output {
+            payload: Payload::inline(media, bytes)?,
+            label: None,
+        }));
+        Ok(snap)
+    }
+    /// A FLUX 3 result: the remote link, as a handle for the caller to persist.
+    fn handle_result(uri: &str, kind: Kind) -> Result<JobSnapshot, AiError> {
+        let endpoint = Endpoint::parse(uri)
+            .map_err(|_| AiError::new(ErrorKind::Provider, "BFL result URL is invalid"))?;
+        if !endpoint.https
+            || endpoint.is_loopback()
+            || uri.contains(['#', '?']) && uri.contains('@')
+        {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                "BFL result URL is unsafe",
+            ));
+        }
+        let media = if kind == Kind::Video {
+            "video/mp4"
+        } else {
+            "image/png"
+        };
+        let payload = Payload::handle(uri, media, None)?;
+        let mut snap = JobSnapshot::new(JobState::Succeeded);
+        snap.events.push(Event::Output(Output {
+            payload,
+            label: None,
+        }));
+        Ok(snap)
     }
     fn job_lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<JobId, Job>>, AiError> {
         self.jobs
@@ -96,6 +204,12 @@ impl BflProvider {
             .map_err(|_| AiError::new(ErrorKind::Internal, "BFL job registry unavailable"))
     }
 }
+fn failed(message: &str) -> JobSnapshot {
+    JobSnapshot::new(JobState::Failed {
+        error: AiError::new(ErrorKind::Provider, message),
+    })
+}
+
 impl Provider for BflProvider {
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         let value = self.http.get("/credits")?;
@@ -116,37 +230,17 @@ impl Provider for BflProvider {
             AiError::unsupported(format!("{model} cannot do {}", request.capability))
         })?;
         request.validate(spec, &Limits::default())?;
-        if !request.params.is_empty() {
-            return Err(AiError::unsupported(
-                "BFL options are not mapped yet; use provider defaults",
-            ));
-        }
-        let prompt = request
-            .inputs
-            .iter()
-            .find(|i| i.role == InputRole::Prompt)
-            .and_then(|i| match &i.payload {
-                Payload::Text { text } => Some(text),
-                _ => None,
-            })
-            .ok_or_else(|| AiError::invalid("BFL needs a text prompt"))?;
-        if prompt.is_empty() {
-            return Err(AiError::invalid("BFL needs a non-empty prompt"));
-        }
-        let video = model.as_str() == "flux-3-video";
-        let body = if video {
-            json!({"prompt":prompt,"mode":"t2v"})
-        } else {
-            json!({"prompt":prompt})
+        let kind = match model.as_str() {
+            fill::MODEL => Kind::Fill,
+            "flux-3-video" => Kind::Video,
+            _ => Kind::Image,
         };
-        let reply = self.http.post(
-            if video {
-                "/flux-3-video"
-            } else {
-                "/flux-3-image"
-            },
-            &body,
-        )?;
+        let (path, body) = if kind == Kind::Fill {
+            (fill::PATH, fill::body(request)?)
+        } else {
+            Self::generate_body(request, kind)?
+        };
+        let reply = self.http.post(path, &body)?;
         let remote = reply
             .get("id")
             .and_then(Value::as_str)
@@ -162,14 +256,14 @@ impl Provider for BflProvider {
             id.clone(),
             Job {
                 remote_id: remote.to_owned(),
-                media_type: if video { "video/mp4" } else { "image/png" },
+                kind,
                 snapshot: JobSnapshot::new(JobState::Queued),
             },
         );
         Ok(id)
     }
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
-        let (remote, media, prior) = {
+        let (remote, kind, prior) = {
             let jobs = self.job_lock()?;
             let job = jobs
                 .get(id)
@@ -179,11 +273,7 @@ impl Provider for BflProvider {
                 stable.events.clear();
                 return Ok(stable);
             }
-            (
-                job.remote_id.clone(),
-                job.media_type,
-                job.snapshot.state.clone(),
-            )
+            (job.remote_id.clone(), job.kind, job.snapshot.state.clone())
         };
         let reply = self
             .http
@@ -199,7 +289,7 @@ impl Provider for BflProvider {
             "Pending" | "Task not found" => JobSnapshot::new(prior),
             "Reasoning" | "Generating" => JobSnapshot::new(JobState::Running { percent: None }),
             "Ready" => {
-                let field = if media == "video/mp4" {
+                let field = if kind == Kind::Video {
                     "video"
                 } else {
                     "sample"
@@ -211,30 +301,15 @@ impl Provider for BflProvider {
                     .ok_or_else(|| {
                         AiError::new(ErrorKind::Provider, "BFL result has no media URL")
                     })?;
-                let endpoint = Endpoint::parse(uri)
-                    .map_err(|_| AiError::new(ErrorKind::Provider, "BFL result URL is invalid"))?;
-                if !endpoint.https
-                    || endpoint.is_loopback()
-                    || uri.contains(['#', '?']) && uri.contains('@')
-                {
-                    return Err(AiError::new(
-                        ErrorKind::Provider,
-                        "BFL result URL is unsafe",
-                    ));
+                if kind == Kind::Fill {
+                    self.fill_result(uri)?
+                } else {
+                    Self::handle_result(uri, kind)?
                 }
-                let payload = Payload::handle(uri, media, None)?;
-                let mut snap = JobSnapshot::new(JobState::Succeeded);
-                snap.events.push(Event::Output(Output {
-                    payload,
-                    label: None,
-                }));
-                snap
             }
-            "Error" | "Request Moderated" | "Content Moderated" => {
-                JobSnapshot::new(JobState::Failed {
-                    error: AiError::new(ErrorKind::Provider, format!("BFL task ended: {status}")),
-                })
-            }
+            "Request Moderated" => failed("BFL declined the request: content moderated"),
+            "Content Moderated" => failed("BFL withheld the result: content moderated"),
+            "Error" | "No Card Generated" => failed(&format!("BFL task ended: {status}")),
             _ => {
                 return Err(AiError::new(
                     ErrorKind::Provider,
@@ -248,7 +323,8 @@ impl Provider for BflProvider {
                 snap = job.snapshot.clone();
                 snap.events.clear();
             } else {
-                job.snapshot = snap.clone();
+                // Keep the state only: an inline result is handed out once, not held twice.
+                job.snapshot = JobSnapshot::new(snap.state.clone());
             }
         }
         Ok(snap)

@@ -1968,6 +1968,7 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "png",
  "serde_json",
  "ureq 3.4.2",
 ]
