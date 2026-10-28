@@ -15,6 +15,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py bp` | Local Burn weight preparation (`ai-burn-setup`): source hashes, cache key, damaged saved weights, cancel. |
 | `mutation_check.py be` | Burn engine: saved-weights loading, the panic guard, answer checks, file names, its catalogue route, the `.bpk` binding rule and the shared architecture revision. |
 | `mutation_check.py fr` | First-run setup flow: the licence tick only where needed, the one start button, the suggested folder, adopting checked files, the route-aware try-it sample, status and picker when a file has gone, route notes and engine advice. Cases in `mutation_first_run.py`. |
+| `mutation_check.py at` | `AppTools` (`ai-client/src/app_tools.rs`): an unknown tool never becomes another tool, custom tools are listed, a request carries the tool's capability, run returns outputs and reports a failed or cancelled job as an error, one cancel reaches every waiting job, a finished job removes only itself, and a job past its wait ends cancelled. Cases in `mutation_app_tools.py`. |
 | `mutation_check.py gs` | Generic selection: scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gs` | Generic selection workflows: the scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gu` | Generic selection uploads: one upload per picture, the bounded memory, the resend after a cleared scratch area or a failed job. |

@@ -148,6 +148,8 @@ fn a_custom_tool_is_listed_after_the_catalogue() -> TestResult {
 #[derive(Clone)]
 struct Fake {
     hang: bool,
+    /// Makes the model fail with a message instead of answering.
+    fail: bool,
     /// Set when a waiting run was stopped by a cancel.
     stopped: Arc<AtomicBool>,
 }
@@ -178,6 +180,9 @@ impl ModelRunner for Fake {
 impl LoadedModel for FakeLoaded {
     /// Answers one text output, or (when told to hang) waits until the job is cancelled and records it.
     fn run(&mut self, _: &Request, ctx: &RunContext) -> Result<Vec<Output>, AiError> {
+        if self.0.fail {
+            return Err(AiError::invalid("the model failed"));
+        }
         if self.0.hang {
             loop {
                 if let Err(error) = ctx.check_cancelled() {
@@ -234,7 +239,16 @@ fn bound_tools(
 fn fake(hang: bool) -> Fake {
     Fake {
         hang,
+        fail: false,
         stopped: Arc::default(),
+    }
+}
+
+/// A stand-in engine whose model fails.
+fn failing() -> Fake {
+    Fake {
+        fail: true,
+        ..fake(false)
     }
 }
 
@@ -303,7 +317,9 @@ fn cancel_reaches_the_running_job_and_is_harmless_otherwise() -> TestResult {
             std::thread::sleep(Duration::from_millis(10));
         }
     });
-    let error = tools.run(&plan, &ConsentLedger::default()).unwrap_err();
+    let error = tools
+        .run_for(&plan, &ConsentLedger::default(), Duration::from_secs(5))
+        .unwrap_err();
     stopper.join().unwrap();
     assert!(error.to_lowercase().contains("cancel"), "{error}");
     tools.canceller().cancel();
@@ -324,13 +340,18 @@ fn one_cancel_reaches_every_job_being_waited_for() -> TestResult {
         }));
     }
     std::thread::sleep(Duration::from_millis(100));
-    for _ in 0..200 {
-        tools.canceller().cancel();
+    // One cancel only: asking again would reach a second job after the first has gone.
+    tools.canceller().cancel();
+    for _ in 0..300 {
         if waiting.iter().all(|w| w.is_finished()) {
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(
+        waiting.iter().all(|w| w.is_finished()),
+        "one cancel did not reach every job"
+    );
     for w in waiting {
         let error = w.join().unwrap().unwrap_err();
         assert!(error.to_lowercase().contains("cancel"), "{error}");
@@ -356,5 +377,44 @@ fn a_job_that_outlasts_the_wait_is_cancelled() -> TestResult {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(stopped.load(Ordering::SeqCst), "the job was left running");
+    Ok(())
+}
+
+/// A job that ends removes only itself from what cancel can reach.
+#[test]
+fn a_finished_job_removes_only_itself() -> TestResult {
+    let (tools, _dir) = bound_tools("gridcraft", Some(fake(true)))?;
+    let tools = Arc::new(tools);
+    let long = {
+        let tools = tools.clone();
+        let plan = tools.plan("select-subject", picture_request(&tools))?;
+        std::thread::spawn(move || tools.run(&plan, &ConsentLedger::default()))
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    let plan = tools.plan("select-subject", picture_request(&tools))?;
+    let _ = tools.run_for(&plan, &ConsentLedger::default(), Duration::from_millis(100));
+    for _ in 0..200 {
+        tools.canceller().cancel();
+        if long.is_finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        long.is_finished(),
+        "the first job could no longer be cancelled"
+    );
+    let error = long.join().unwrap().unwrap_err();
+    assert!(error.to_lowercase().contains("cancel"), "{error}");
+    Ok(())
+}
+
+/// A model that fails is an error carrying its own message, never an empty success.
+#[test]
+fn a_failed_job_is_an_error_with_the_models_message() -> TestResult {
+    let (tools, _dir) = bound_tools("wordcraft", Some(failing()))?;
+    let plan = tools.plan("select-subject", picture_request(&tools))?;
+    let error = tools.run(&plan, &ConsentLedger::default()).unwrap_err();
+    assert!(error.contains("the model failed"), "{error}");
     Ok(())
 }

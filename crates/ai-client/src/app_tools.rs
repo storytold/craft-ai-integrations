@@ -198,15 +198,10 @@ impl AppTools {
         let job = self.client.start(plan, ledger).map_err(|e| e.message)?;
         let number = self.next_job.fetch_add(1, Ordering::Relaxed);
         lock(&self.running).push((number, job.clone()));
+        // `Job::wait` cancels the job itself when `limit` passes, so none is left running unseen.
         let done = job.wait(STEP, limit);
         lock(&self.running).retain(|(n, _)| *n != number);
-        let done = match done {
-            Ok(done) => done,
-            Err(error) => {
-                let _ = job.cancel();
-                return Err(error.message);
-            }
-        };
+        let done = done.map_err(|e| e.message)?;
         match done.state {
             JobState::Succeeded => Ok(done
                 .events

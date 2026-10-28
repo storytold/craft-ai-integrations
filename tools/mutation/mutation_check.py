@@ -478,6 +478,7 @@ CT = [
 from mutation_u2 import U2, U2_EQUIVALENT  # noqa: E402
 from mutation_contract import CA  # noqa: E402
 from mutation_scratch import SF, SF_EQUIVALENT  # noqa: E402
+from mutation_app_tools import AT, AT_EQUIVALENT  # noqa: E402
 from mutation_catalogue import CG  # noqa: E402
 from mutation_consent import CE, CE_EQUIVALENT  # noqa: E402
 from mutation_native import NF  # noqa: E402
@@ -554,7 +555,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'fr': FR, 'be': BE, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
+GROUPS = {'fr': FR, 'be': BE, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
@@ -564,11 +565,13 @@ EQUIVALENT = {
 }
 EQUIVALENT.update(U2_EQUIVALENT)
 EQUIVALENT.update(SF_EQUIVALENT)
+EQUIVALENT.update(AT_EQUIVALENT)
 EQUIVALENT.update(CE_EQUIVALENT)
 # Both reasons above are about Windows; on Linux and macOS both cases are caught. Observed on
 # ubuntu-latest and macos-latest through the Deliberate-bug checks workflow.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
-TIMEOUTS = {}
+# A case whose mutated code waits out a long limit instead of failing fast.
+TIMEOUTS = {'own-limit-ignored': 60}
 # Printed by a test that skips itself because the machine cannot do what it needs.
 SKIP_MARK = 'skipped: this machine does not allow directory links'
 
