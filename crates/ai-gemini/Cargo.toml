@@ -1,0 +1,22 @@
+[package]
+name = "craft-ai-gemini"
+description = "Google Gemini API (AI Studio key) image provider for Craft AI: prompt-guided Generative fill"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+craft-ai-core.workspace = true
+craft-ai-http.workspace = true
+png = "0.18"
+serde_json.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

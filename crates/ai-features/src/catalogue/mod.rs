@@ -117,6 +117,11 @@ fn try_builtin() -> Option<Vec<Feature>> {
             "Black Forest Labs FLUX.1 Fill",
             "Your own BFL key, billed by Black Forest Labs. Built and tested offline only.",
         ),
+        cloud(
+            "gemini",
+            "Google Gemini (Nano Banana)",
+            "Your own Google AI Studio key, billed by Google. Prompt-guided editing: Gemini takes no mask, so it is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Built and tested offline only.",
+        ),
     ];
 
     let mut expand = feature(

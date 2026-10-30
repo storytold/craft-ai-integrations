@@ -36,6 +36,15 @@ pub const PRESETS: &[Preset] = &[
         note: "FLUX 3 image and video generation, and FLUX.1 Fill inpainting. Billed by Black Forest Labs.",
     },
     Preset {
+        key: "gemini",
+        name: "Google Gemini",
+        provider: "gemini",
+        endpoint: "https://generativelanguage.googleapis.com/v1beta",
+        billing: Billing::Metered,
+        needs_key: true,
+        note: "Gemini image models (Nano Banana) with your Google AI Studio API key: prompt-guided Generative fill. Billed by Google.",
+    },
+    Preset {
         key: "seedance",
         name: "Seedance (BytePlus ModelArk)",
         provider: "seedance",

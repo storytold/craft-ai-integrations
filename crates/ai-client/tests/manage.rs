@@ -521,6 +521,32 @@ fn new_provider_presets_store_keys_separately_and_probe_where_safe() {
 }
 
 #[test]
+fn gemini_key_is_checked_by_listing_models_and_offers_the_fill_models() {
+    let r = rig();
+    let server = Server::start(|req| {
+        assert_eq!(req.path, "/v1/models?pageSize=1");
+        assert_eq!(req.header("x-goog-api-key"), Some("gemini-test"));
+        Reply::Json(200, r#"{"models":[]}"#.into())
+    });
+    let mut d = preset("gemini");
+    d.endpoint = server.url.clone();
+    d.key = "gemini-test".into();
+    r.manager.save(&d).unwrap();
+    let models = r
+        .manager
+        .test_saved(&id("google-gemini"), true)
+        .unwrap()
+        .models;
+    assert_eq!(models[0].id.as_str(), "gemini-nano-banana-2.1");
+    assert!(models.iter().all(|m| {
+        m.capabilities
+            .iter()
+            .any(|c| c.capability.as_str() == "image.inpaint")
+    }));
+    assert!(!file_text(&r).contains("gemini-test"));
+}
+
+#[test]
 fn vertex_express_key_is_saved_without_claiming_a_free_probe() {
     let r = rig();
     let mut d = preset("vertex-express");
