@@ -261,7 +261,8 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
         titles(&view),
         [
             ("OpenAI".to_owned(), GroupState::NotSetUp),
-            ("Black Forest Labs".to_owned(), GroupState::NotSetUp)
+            ("Black Forest Labs".to_owned(), GroupState::NotSetUp),
+            ("Google Gemini".to_owned(), GroupState::NotSetUp)
         ]
     );
     assert!(view.groups.iter().all(|g| g.models.is_empty()));
@@ -275,6 +276,12 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
         view.groups[1].setup,
         Some(SetupLink::New {
             option: "service:bfl".into()
+        })
+    );
+    assert_eq!(
+        view.groups[2].setup,
+        Some(SetupLink::New {
+            option: "service:gemini".into()
         })
     );
 
@@ -294,7 +301,8 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
         titles(&view),
         [
             ("Label oa".to_owned(), GroupState::Ready),
-            ("Black Forest Labs".to_owned(), GroupState::NotSetUp)
+            ("Black Forest Labs".to_owned(), GroupState::NotSetUp),
+            ("Google Gemini".to_owned(), GroupState::NotSetUp)
         ]
     );
 }

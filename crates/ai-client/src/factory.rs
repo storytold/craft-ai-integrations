@@ -17,6 +17,7 @@ use craft_ai_bfl::{BflConfig, BflProvider};
 use craft_ai_comfyui::{ComfyConfig, ComfyProvider, WorkflowLibrary};
 use craft_ai_core::{AiError, Connection, Locality, Provider, SecretString};
 use craft_ai_features::GpuVendor;
+use craft_ai_gemini::{GeminiConfig, GeminiProvider};
 use craft_ai_media::{MediaStore, MediaStoreConfig, PersistingProvider};
 use craft_ai_openai::{OpenAiConfig, OpenAiProvider};
 use craft_ai_sam3::{Sam3Config, Sam3Provider};
@@ -126,6 +127,21 @@ impl ProviderFactory {
                 cfg.request_timeout = request;
             }
             Ok(Arc::new(BflProvider::new(cfg)?))
+        });
+        f.register("gemini", move |c, s| {
+            let base = c
+                .endpoint
+                .as_deref()
+                .ok_or_else(|| AiError::invalid("Gemini API address is required"))?;
+            let key = s.ok_or_else(|| {
+                AiError::new(craft_ai_core::ErrorKind::Auth, "Gemini API key is required")
+            })?;
+            let mut cfg = GeminiConfig::new(base, key);
+            if let Some((connect, request)) = timeouts {
+                cfg.connect_timeout = connect;
+                cfg.request_timeout = request;
+            }
+            Ok(Arc::new(GeminiProvider::new(cfg)?))
         });
         f.register("seedance", move |c, s| {
             let base = c
@@ -405,9 +421,16 @@ mod tests {
     }
 
     #[test]
-    fn standard_knows_the_openai_family_and_bfl() {
+    fn standard_knows_the_openai_family_bfl_and_gemini() {
         let f = ProviderFactory::standard();
-        for n in ["openai", "OLLAMA", "lmstudio", "openrouter", "bfl"] {
+        for n in [
+            "openai",
+            "OLLAMA",
+            "lmstudio",
+            "openrouter",
+            "bfl",
+            "gemini",
+        ] {
             assert!(f.knows(n), "{n}");
         }
         assert!(!f.knows("fal"));
