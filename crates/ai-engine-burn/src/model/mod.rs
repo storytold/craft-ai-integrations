@@ -5,5 +5,30 @@
 pub mod decoder;
 pub mod encoder;
 
+fn broadcast_shape<const RANK: usize, const INPUT_RANK: usize>(
+    mut requested: [i64; RANK],
+    input_dimensions: [usize; INPUT_RANK],
+    offset: usize,
+) -> [i64; RANK] {
+    for (index, input_dimension) in input_dimensions.into_iter().enumerate() {
+        let dimension = &mut requested[offset + index];
+        if *dimension == 1 && input_dimension > 1 {
+            *dimension = input_dimension as i64;
+        }
+    }
+    requested
+}
+
+#[cfg(test)]
+mod tests {
+    use super::broadcast_shape;
+
+    #[test]
+    fn broadcasts_only_singleton_dimensions_in_the_input_range() {
+        assert_eq!(broadcast_shape([1, 3, 1, 7], [5, 2], 1), [1, 3, 2, 7]);
+        assert_eq!(broadcast_shape([4, 6], [9, 3], 0), [4, 6]);
+    }
+}
+
 /// What this code was generated from; part of the saved-weights cache key.
 pub const ARCHITECTURE_REVISION: &str = "sam21-tiny-burn-0.22.1-onnx-0.22.0-v1";

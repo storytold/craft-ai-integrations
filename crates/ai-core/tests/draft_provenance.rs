@@ -1,5 +1,5 @@
 //! Connection-test results belong only to the address they were requested from.
-use craft_ai_core::*;
+use craft_ai_core::{ConnectionDraft, ModelId, ModelInfo, PRESETS};
 
 /// A draft pointing at `endpoint` that uses no key.
 fn draft(endpoint: &str) -> ConnectionDraft {
