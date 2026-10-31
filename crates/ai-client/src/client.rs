@@ -118,6 +118,11 @@ impl Plan {
         &self.connection.label
     }
 
+    /// Which adapter the request goes to (`openai`, `bfl`, `gemini`…), for adapter-specific params.
+    pub fn provider(&self) -> &str {
+        &self.connection.provider
+    }
+
     pub fn model(&self) -> &ModelId {
         &self.model
     }
