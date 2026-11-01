@@ -57,10 +57,16 @@ impl Feature {
         })
     }
 
-    /// The first recipe apps can run. The ComfyUI route, a plain built-in Install offer and
-    /// engine advice's hardware limits use it.
+    /// The first recipe apps can run. A plain built-in Install offer and engine advice's hardware
+    /// limits use it.
     pub fn first_usable_recipe(&self) -> Option<&LocalRecipe> {
         self.locals.iter().find(|r| r.usable)
+    }
+
+    /// The recipes ComfyUI runs, in catalogue order. A recipe that is built in only
+    /// ([`LocalRecipe::comfyui`] false) is never one of them.
+    pub fn comfyui_recipes(&self) -> impl Iterator<Item = &LocalRecipe> {
+        self.locals.iter().filter(|r| r.comfyui)
     }
 
     /// The recipe the built-in engine `provider` acts on: the first one apps can run that lists

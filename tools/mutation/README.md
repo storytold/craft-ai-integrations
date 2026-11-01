@@ -14,6 +14,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py rt` | rten engine picture handling: bounded PNG and JPEG decoding, mask encoding, resampling. |
 | `mutation_check.py bp` | Local Burn weight preparation (`ai-burn-setup`): source hashes, cache key, damaged saved weights, cancel. |
 | `mutation_check.py be` | Burn engine: saved-weights loading, the panic guard, answer checks, file names, its catalogue route, the `.bpk` binding rule and the shared architecture revision. |
+| `mutation_check.py bo` | A recipe only built-in runtimes run is never offered, planned, installed, registered or advised as a ComfyUI model. |
 | `mutation_check.py fr` | First-run setup flow: the licence tick only where needed, the one start button, the suggested folder, adopting checked files, the route-aware try-it sample, status and picker when a file has gone, route notes and engine advice. Cases in `mutation_first_run.py`. |
 | `mutation_check.py gs` | Generic selection: scratch sinks, the refusal of clicks and mapped selection workflows. |
 | `mutation_check.py gs` | Generic selection workflows: the scratch sinks, the refusal of clicks and mapped selection workflows. |

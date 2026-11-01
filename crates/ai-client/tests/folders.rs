@@ -57,12 +57,13 @@ fn listing(root: &Path) -> Vec<String> {
     out
 }
 
+/// Discovery registers the folder without selecting it for downloads.
 #[test]
-fn a_folder_is_read_stored_and_the_first_becomes_the_default() {
+fn a_linked_folder_is_read_and_stored_without_becoming_default() {
     let w = world();
     let added = desk(&w).add(w.models.path(), Some("My models")).unwrap();
     assert_eq!(added.folder.id, "my-models");
-    assert!(added.folder.default && added.folder.origin == FolderOrigin::Chosen);
+    assert!(!added.folder.default && added.folder.origin == FolderOrigin::Chosen);
     assert_eq!(added.folder.kinds["vae"], ["vae"]);
     assert_eq!(added.folder.kinds["loras"], ["Lora"]);
     assert_eq!(added.scan.files.len(), 2);
@@ -119,6 +120,7 @@ fn a_rescan_sees_what_was_added_since() {
     assert_eq!(d.list().unwrap()[0].kinds["diffusion_models"], ["unet"]);
 }
 
+/// Only an explicitly chosen folder may become the default.
 #[test]
 fn the_default_moves_and_a_linked_folder_can_never_be_it() {
     let w = world();
@@ -126,7 +128,8 @@ fn the_default_moves_and_a_linked_folder_can_never_be_it() {
     let second = tempfile::tempdir().unwrap();
     let first = d.add(w.models.path(), Some("one")).unwrap().folder;
     let two = d.add(second.path(), Some("two")).unwrap().folder;
-    assert!(first.default && !two.default);
+    d.set_default(&first.id).unwrap();
+    assert!(!first.default && !two.default);
     d.set_default(&two.id).unwrap();
     let now = d.list().unwrap();
     assert_eq!(
@@ -155,17 +158,19 @@ fn the_default_moves_and_a_linked_folder_can_never_be_it() {
     assert!(d.set_default("nope").is_err());
 }
 
+/// Removing a default never turns a discovery-only folder into a destination.
 #[test]
-fn removing_the_default_hands_it_to_the_next_chosen_folder() {
+fn removing_the_default_does_not_promote_a_linked_folder() {
     let w = world();
     let d = desk(&w);
     let other = tempfile::tempdir().unwrap();
     let first = d.add(w.models.path(), Some("one")).unwrap().folder;
     d.add(other.path(), Some("two")).unwrap();
+    d.set_default(&first.id).unwrap();
     d.remove(&first.id).unwrap();
     let left = d.list().unwrap();
     assert_eq!(left.len(), 1);
-    assert!(left[0].default, "downloads still have somewhere to go");
+    assert!(!left[0].default, "a linked folder is not silently promoted");
     assert!(d.remove(&first.id).is_err());
 }
 
@@ -409,7 +414,8 @@ fn native_downloads_go_only_to_the_chosen_default_not_a_linked_folder() {
         .update(|store| store.model_folders[0].default = false)
         .unwrap();
     let chosen = tempfile::tempdir().unwrap();
-    d.add(chosen.path(), None).unwrap();
+    let chosen_folder = d.add(chosen.path(), None).unwrap();
+    d.set_default(&chosen_folder.folder.id).unwrap();
     let dir = d.native_download_dir(&feature, "candle").unwrap();
     assert_eq!(dir, chosen.path().join("sam3_transformers"));
     assert!(
@@ -423,7 +429,8 @@ fn native_downloads_go_only_to_the_chosen_default_not_a_linked_folder() {
 fn native_install_requires_licence_and_rehashes_existing_files() {
     let w = world();
     let d = desk(&w);
-    d.add(w.models.path(), None).unwrap();
+    let selected = d.add(w.models.path(), None).unwrap();
+    d.set_default(&selected.folder.id).unwrap();
     let mut feature = small_native_feature();
     let hashes = [
         "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",

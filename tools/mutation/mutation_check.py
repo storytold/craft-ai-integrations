@@ -321,7 +321,7 @@ V1 = [
     ('status-reads-one-fixed-app', CLIENT, STATUS_RESOLVE, 'let resolved = match store.resolve(&AppId::new("launcher").unwrap_or_else(|_| self.app.clone()), role) {', CL, 'one_binding', ''),
     ('unbound-reads-as-broken', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(r) => write!(f, \"'{r}' is broken\"),", CL, 'one_binding', ''),
     ('unbound-hides-the-tool', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(_) => write!(f, \"no model is chosen\"),", CL, 'one_binding', ''),
-    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok::<(), AiError>(())', '            let _ = binding;\n            Ok::<(), AiError>(())', CL, 'one_binding', ''),
+    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(true)', '            let _ = binding;\n            Ok(true)', CL, 'one_binding', ''),
 ]
 
 PICK_G = C + 'ai-client/src/picker_groups.rs'
@@ -411,10 +411,10 @@ LC = [
     ('non-local-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", "if trimmed.contains(['?', '#']) {", CL, 'local', ''),
     ('query-in-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", 'if !endpoint.is_loopback() {', CL, 'local', ''),
     ('trailing-slash-kept', LOCAL_RS, "input.trim_end_matches('/')", "input.trim_end_matches('~')", CL, 'local', ''),
-    ('unrunnable-recipe-accepted', LOCAL_RS, 'feature.locals.iter().find(|r| r.usable)', 'feature.locals.iter().find(|_| true)', CL, 'local', ''),
+    ('unrunnable-recipe-accepted', LOCAL_RS, '            .comfyui_recipes()\n            .find(|r| r.usable)\n            .ok_or_else', '            .comfyui_recipes()\n            .find(|_| true)\n            .ok_or_else', CL, 'local', ''),
     ('unrunnable-named-recipe-accepted', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.workflow == workflow)', CL, 'local_recipes', 'cannot_run_yet'),
     ('named-recipe-name-ignored', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.usable)', CL, 'local_recipes', ''),
-    ('second-recipe-takes-plain-id', LOCAL_RS, '            None => feature\n                .locals\n                .first()\n                .is_some_and(|first| first.workflow == recipe.workflow),', '            None => true,', CL, 'local_recipes', 'own_connection'),
+    ('second-recipe-takes-plain-id', LOCAL_RS, '            None => feature\n                .comfyui_recipes()\n                .next()\n                .is_some_and(|first| first.workflow == recipe.workflow),', '            None => true,', CL, 'local_recipes', 'own_connection'),
     ('recipe-id-shares-runtime-namespace', LOCAL_RS, 'format!("local-{}-recipe-{}", feature.id, recipe.workflow)', 'format!("local-{}-{}", feature.id, recipe.workflow)', CL, 'local_recipes', 'built_in_runtime_never'),
     ('picker-ignores-which-recipe-is-installed', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || true)', CL, 'local_recipes', 'keeps_the_setup_link'),
     ('picker-recipe-connection-never-counts', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || false)', CL, 'local_recipes', 'setup_link'),
@@ -493,6 +493,7 @@ from mutation_generic_uploads import GU_CASES  # noqa: E402
 from mutation_segment import SEG_CASES  # noqa: E402
 from mutation_burn_preparation import BP  # noqa: E402
 from mutation_burn_engine import BE  # noqa: E402
+from mutation_built_in_only import BO  # noqa: E402
 from mutation_first_run import FR  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
@@ -555,7 +556,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'fr': FR, 'be': BE, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'fa': FA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
+GROUPS = {'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'fa': FA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

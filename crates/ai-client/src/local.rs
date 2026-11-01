@@ -69,15 +69,18 @@ pub(crate) fn is_recipe_connection(connection: &Connection, feature: &str) -> bo
 }
 
 impl ToolDesk {
-    /// Registers the first local model of `feature` that can run, served by the ComfyUI at
-    /// `endpoint` (a loopback address), and binds the tool to it if nothing is chosen yet.
+    /// Registers the first local model of `feature` that ComfyUI can run, served by the ComfyUI
+    /// at `endpoint` (a loopback address), and binds the tool to it if nothing is chosen yet.
     pub fn enable_local(&self, feature: &Feature, endpoint: &str) -> Result<LocalEnabled, AiError> {
-        let recipe = feature.locals.iter().find(|r| r.usable).ok_or_else(|| {
-            AiError::unsupported(format!(
-                "{} has no local model that can run yet",
-                feature.title
-            ))
-        })?;
+        let recipe = feature
+            .comfyui_recipes()
+            .find(|r| r.usable)
+            .ok_or_else(|| {
+                AiError::unsupported(format!(
+                    "{} has no local model that can run yet",
+                    feature.title
+                ))
+            })?;
         self.enable_recipe(feature, recipe, endpoint)
     }
 
@@ -92,8 +95,7 @@ impl ToolDesk {
         endpoint: &str,
     ) -> Result<LocalEnabled, AiError> {
         let recipe = feature
-            .locals
-            .iter()
+            .comfyui_recipes()
             .find(|r| r.workflow == workflow && r.usable)
             .ok_or_else(|| {
                 AiError::unsupported(format!(
@@ -129,8 +131,8 @@ impl ToolDesk {
                     && held.models.iter().any(|m| m.id.as_str() == recipe.workflow)
             }
             None => feature
-                .locals
-                .first()
+                .comfyui_recipes()
+                .next()
                 .is_some_and(|first| first.workflow == recipe.workflow),
         };
         let id = if primary {

@@ -32,7 +32,8 @@ pub fn world() -> (tempfile::TempDir, FolderDesk, PathBuf) {
     let models = dir.path().join("models");
     std::fs::create_dir(&models).unwrap();
     let desk = FolderDesk::new(SharedStore::new(dir.path().join("connections.json")));
-    desk.add(&models, None).unwrap();
+    let chosen = desk.add(&models, None).unwrap();
+    desk.set_default(&chosen.folder.id).unwrap();
     (dir, desk, models)
 }
 

@@ -1,6 +1,7 @@
 """be: the Burn engine's own rules (saved-weights loading, the panic guard, the answer checks, the
 file names it accepts), the catalogue route it is listed by, the binding's `.bpk` rule and the
-shared revision.
+shared revision; for InSPyReNet, the complete-weights rule, the matte size, the picture size and
+the move to the processor when the card fails.
 
 Not reached here, because they need the real model, a graphics card or a graph the converter
 panics on (the ignored live tests in `crates/ai-engine-burn/tests/live.rs` and
@@ -12,6 +13,7 @@ Case shape: name, file, old, new, package, target, test filter.
 """
 B = 'crates/ai-engine-burn/src/'
 PKG = 'craft-ai-engine-burn'
+FALLBACK = 'inspyrenet/fallback.rs'
 
 
 def lib(name, file, old, new, test):
@@ -54,6 +56,30 @@ BE = [
     lib('burn-damaged-copy-not-explained', 'runner/prepare.rs',
         'if error.message == craft_ai_burn_setup::DAMAGED_COPY {', 'if false {',
         'a_damaged_saved_copy_is_explained'),
+    lib('inspyrenet-incomplete-weights-accepted', 'inspyrenet/weights.rs',
+        'result.is_success() && result.missing.is_empty() && result.unused.iter().all(|k| recomputed(k))',
+        'true', 'a_load_that_is_not_whole'),
+    lib('inspyrenet-foreign-tensors-accepted', 'inspyrenet/weights.rs',
+        'result.unused.iter().all(|k| recomputed(k))', 'true', 'a_load_that_is_not_whole'),
+    lib('inspyrenet-matte-size-unchecked', 'inspyrenet/pipeline/mod.rs',
+        'if pred.len() != p.in_w * p.in_h {', 'if false {', 'a_wrong_answer_from_the_network'),
+    lib('inspyrenet-picture-bytes-unchecked', 'inspyrenet/pipeline/mod.rs',
+        '.filter(|n| picture.bytes.len() == n * 3)', '.filter(|_| true)', 'bad_and_empty_pictures'),
+    lib('inspyrenet-cancel-moves-to-processor', FALLBACK,
+        'Err(error) if error.kind != ErrorKind::Cancelled => error,', 'Err(error) => error,',
+        'a_cancel_is_not_a_failure'),
+    lib('inspyrenet-never-moves-to-processor', FALLBACK,
+        'let Some(rebuild) = self.rebuild.take() else {', 'let Some(rebuild) = None::<Rebuild> else {',
+        'moves_to_the_processor'),
+    lib('inspyrenet-processor-not-kept', FALLBACK,
+        '        self.current = rebuild()?;\n        self.current.predict(input, ctx)',
+        '        rebuild()?.predict(input, ctx)', 'moves_to_the_processor'),
+    lib('inspyrenet-card-load-not-retried', FALLBACK,
+        'Err(_) => Ok((processor()?, false)),', 'Err(error) => Err(error),',
+        'fails_to_load_loads_on_the_processor'),
+    lib('inspyrenet-bad-file-read-twice', FALLBACK,
+        'Err(error) if error.kind == ErrorKind::Unsupported => Err(error),',
+        'Err(error) if false => Err(error),', 'not_read_twice'),
     ('burn-revision-bumped-in-the-architecture', B + 'model/mod.rs',
      'onnx-0.22.0-v1";', 'onnx-0.22.0-v2";', PKG, 'revision', 'the_architecture_and_the_saved'),
     ('burn-revision-bumped-in-the-cache-key', 'crates/ai-burn-setup/src/sam21.rs',

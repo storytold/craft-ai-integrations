@@ -9,10 +9,12 @@ use crate::feature::{AppStatus, AppUse, Feature};
 use crate::recipe::CloudOption;
 
 mod florence2;
+mod inspyrenet;
 mod sam21;
 mod sam3;
 use craft_ai_core::{CapabilityId, InputRole};
 pub use florence2::FLORENCE2_LARGE_DIR;
+use inspyrenet::inspyrenet;
 use sam3::sam3;
 use sam21::sam21;
 
@@ -81,8 +83,8 @@ fn try_builtin() -> Option<Vec<Feature>> {
     )?;
     background.inputs = vec![InputRole::Source];
     background.uses = uses(&[("PhotoCraft", "Remove Background")]);
-    // No local recipe and no hosted route yet: no adapter here matts an image, and no model file
-    // has been checked against its real source. The screen says so instead of offering a guess.
+    // One model, built in only (Burn), and no hosted route yet.
+    background.locals = vec![inspyrenet()];
 
     let mut remove = feature(
         "remove-object",

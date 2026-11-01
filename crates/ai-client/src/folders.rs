@@ -33,12 +33,23 @@ impl FolderDesk {
         Self { shared }
     }
 
+    /// Reads the shared folder map without changing the registered folders.
     pub fn list(&self) -> Result<Vec<ModelFolder>, AiError> {
         Ok(self.shared.load()?.model_folders)
     }
 
-    /// Registers a folder the person chose and reads what is in it. The files are not touched.
+    /// Links a folder for discovery without choosing it for downloads.
     pub fn add(&self, path: &Path, label: Option<&str>) -> Result<FolderAdded, AiError> {
+        self.add_inner(path, label, false)
+    }
+
+    /// Registers a scanned folder, optionally choosing it as the first download destination.
+    fn add_inner(
+        &self,
+        path: &Path,
+        label: Option<&str>,
+        choose_if_missing: bool,
+    ) -> Result<FolderAdded, AiError> {
         // The path is stored as text, so one that is not valid text cannot be kept faithfully:
         // refuse it rather than store a different folder from the one chosen.
         let text = path
@@ -69,15 +80,11 @@ impl FolderDesk {
                 ));
             }
             let id = unique_id(&name, &store.model_folders);
-            let default = !store
-                .model_folders
-                .iter()
-                .any(|f| f.default && f.origin == FolderOrigin::Chosen);
             let folder = ModelFolder {
                 id,
                 label: name.clone(),
                 path: text.clone(),
-                default,
+                default: choose_if_missing && !store.model_folders.iter().any(|f| f.default),
                 origin: FolderOrigin::Chosen,
                 kinds: scan.kinds.clone(),
             };
@@ -101,7 +108,7 @@ impl FolderDesk {
         }
         std::fs::create_dir_all(path)
             .map_err(|_| AiError::new(ErrorKind::Internal, "that folder could not be created"))?;
-        self.add(path, label)
+        self.add_inner(path, label, true)
     }
 
     /// The folder new downloads go to, made if there is none yet: the folder the suite suggests
@@ -128,9 +135,8 @@ impl FolderDesk {
     }
 
     /// [`ensure_default`](Self::ensure_default) with the suggested folder given. Returns the
-    /// folder a person already made the default as it is. With folders chosen but none marked
-    /// default, the first becomes the default. With none, `suggested` is made and registered. A
-    /// folder read from another program is never made the default.
+    /// folder a person already made the default as it is. Otherwise `suggested` is made and
+    /// registered. Linked folders are never promoted automatically.
     pub fn ensure_default_at(&self, suggested: &Path) -> Result<ModelFolder, AiError> {
         if let Some(folder) = self.chosen_default()? {
             return Ok(folder);
@@ -138,23 +144,12 @@ impl FolderDesk {
         Ok(self.add_new(suggested, Some("ArtCraft models"))?.folder)
     }
 
-    /// The default among the folders the person chose: the one marked default, else the first
-    /// chosen folder, which is then marked. `None` when they chose none. Needs no suggestion, so
-    /// a computer that suggests no place still finds a folder the person already has.
+    /// Returns only an explicitly selected default, never a merely linked folder.
     fn chosen_default(&self) -> Result<Option<ModelFolder>, AiError> {
-        let chosen: Vec<ModelFolder> = self
+        Ok(self
             .list()?
             .into_iter()
-            .filter(|f| f.origin == FolderOrigin::Chosen)
-            .collect();
-        if let Some(default) = chosen.iter().find(|f| f.default) {
-            return Ok(Some(default.clone()));
-        }
-        if let Some(first) = chosen.first() {
-            self.set_default(&first.id)?;
-            return self.find(&first.id).map(Some);
-        }
-        Ok(None)
+            .find(|f| f.origin == FolderOrigin::Chosen && f.default))
     }
 
     /// Reads the folder again, for files added or moved since. Replaces its map.
@@ -185,20 +180,11 @@ impl FolderDesk {
         Ok(())
     }
 
-    /// Forgets the folder. Its files stay where they are. The default moves to the next folder
-    /// the person chose, so downloads still have somewhere to go.
+    /// Forgets the folder without touching its files or choosing a replacement download target.
     pub fn remove(&self, id: &str) -> Result<(), AiError> {
         self.find(id)?;
         self.shared.update(|store| {
             store.model_folders.retain(|f| f.id != id);
-            let has_default = store.model_folders.iter().any(|f| f.default);
-            let next = store
-                .model_folders
-                .iter_mut()
-                .find(|f| f.origin == FolderOrigin::Chosen);
-            if let (false, Some(next)) = (has_default, next) {
-                next.default = true;
-            }
         })?;
         Ok(())
     }

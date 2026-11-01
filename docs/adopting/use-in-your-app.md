@@ -287,7 +287,9 @@ so you draw them and run the work on a thread:
 2. Only when the person takes the suggested folder, call `FolderDesk::ensure_default`, then give
    `SetupSession::review` a fresh plan. It takes the suggested folder only when the person has
    none, and never replaces one they chose. Do not call it while drawing the first screen: it
-   makes the folder.
+   makes the folder. `FolderDesk::add` links an existing folder for discovery; it does not select
+   that folder for downloads. Call `set_default` only when the person explicitly chooses it as
+   the destination. Removing a default never promotes another linked folder automatically.
 3. One button calls `SetupSession::start`. It checks the files already on disk when there are
    complete ones, and downloads when there are not. When it does nothing, `SetupSession::blocker`
    says why (busy, no folder, agreement missing, this app cannot run it). If a check of the
