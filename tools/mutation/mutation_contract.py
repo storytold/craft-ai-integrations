@@ -46,4 +46,11 @@ CA = [
     ('app-status-and-plan-ignore-required-input', ROLE,
      'spec.requires.iter().find(|i| !role.inputs.contains(i))', 'spec.requires.iter().find(|_| false)',
      CL, 'required_inputs', 'status_and_plan'),
+    ('start-accepts-another-apps-plan', 'crates/ai-client/src/client_run.rs',
+     'if plan.disclosure.app != self.app {', 'if false {',
+     CL, 'plan_app_scope', 'another_apps_plan_is_refused_before_key_provider_and_history'),
+    ('start-accepts-another-apps-local-plan', 'crates/ai-client/src/client_run.rs',
+     'if plan.disclosure.app != self.app {',
+     'if plan.disclosure.locality == craft_ai_core::Locality::Remote && plan.disclosure.app != self.app {',
+     CL, 'plan_app_scope', 'another_apps_plan_is_refused_before_key_provider_and_history'),
 ]

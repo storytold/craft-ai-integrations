@@ -49,6 +49,7 @@ impl World {
         world
     }
 
+    /// A client with this app's adapter and the suite's shared setup.
     fn client(&self, app: &str, factory: ProviderFactory) -> AiClient {
         AiClient::new(
             AppId::new(app).unwrap(),
@@ -58,6 +59,7 @@ impl World {
         .with_factory(factory)
     }
 
+    /// A launcher desk used only to declare the tool and choose its shared model.
     fn desk(&self) -> ToolDesk {
         let launcher = AiClient::new(
             AppId::new("launcher").unwrap(),
@@ -68,11 +70,13 @@ impl World {
     }
 }
 
+/// Waits for a stand-in job to finish with a bounded timeout.
 fn finish(job: &craft_ai_client::Job) -> Finished {
     job.wait(Duration::from_millis(2), Duration::from_secs(10))
         .unwrap()
 }
 
+/// Joins the text deltas emitted by a completed stand-in job.
 fn text(events: &[Event]) -> String {
     events
         .iter()
@@ -83,6 +87,7 @@ fn text(events: &[Event]) -> String {
         .collect()
 }
 
+/// Both apps run the suite's declared tool through their own adapters without app overrides.
 #[test]
 fn two_apps_run_the_one_declared_tool_through_their_own_adapters() {
     let world = World::chosen(false);
@@ -123,6 +128,7 @@ fn two_apps_run_the_one_declared_tool_through_their_own_adapters() {
     );
 }
 
+/// Missing adapters stay unavailable; start refuses foreign plans before checking the adapter.
 #[test]
 fn an_app_without_the_adapter_says_so_and_sends_nothing() {
     let world = World::chosen(false);
@@ -144,9 +150,18 @@ fn an_app_without_the_adapter_says_so_and_sends_nothing() {
         "{}",
         err.message
     );
-    // And a plan made elsewhere is still refused at start, with the same words.
+    // A plan from another app is refused for app scope before adapter checks.
     let elsewhere = ships_it.plan(&tool(), photo_request(4)).unwrap();
-    let err = lacks_it
+    assert_eq!(
+        lacks_it
+            .start(&elsewhere, &ConsentLedger::default())
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidRequest
+    );
+    // A different client for the same app still refuses a missing adapter with the same words.
+    let same_app_without_adapter = world.client("photocraft", ProviderFactory::standard());
+    let err = same_app_without_adapter
         .start(&elsewhere, &ConsentLedger::default())
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported);
