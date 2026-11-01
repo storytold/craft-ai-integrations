@@ -1,5 +1,9 @@
-//! SAM 2.1 on the rten engine for Craft AI: the built-in runner behind the `image.segment`
-//! capability, reading the published ONNX files as they are, for every app that asks for it.
+//! The rten engine for Craft AI: built-in runners that read the published ONNX files as they are,
+//! for every app that asks for their capability.
+//!
+//! - **SAM 2.1** behind `image.segment` (below);
+//! - **DeepFilterNet 3** behind `audio.enhance`: isolates the voice from background noise and room
+//!   sound (see [`Dfn3Runner`]).
 //!
 //! An app does not use this crate directly. It puts [`runners`] in an
 //! [`EngineRegistry`](craft_ai_engine::EngineRegistry), or turns on the `rten` feature of
@@ -27,6 +31,7 @@
     clippy::unreachable
 )]
 
+mod dfn3;
 pub mod picture;
 pub mod resample;
 mod runner;
@@ -34,6 +39,10 @@ mod sam21;
 
 // What another engine needs to answer the same request with its own runtime: the request
 // handling is [`Loaded`] over a [`Backend`], so only the model run differs.
+pub use dfn3::{
+    DFN3_DF_DECODER_FILE, DFN3_ENCODER_FILE, DFN3_ERB_DECODER_FILE, DFN3_MODEL, Dfn3Runner,
+    MAX_REDUCTION_DB, WAV,
+};
 pub use runner::{ENGINE, Loaded, MODEL, Sam21Runner, read_prompt, runners};
 pub use sam21::{
     Area, Backend, Click, DECODER_FILE, ENCODER_FILE, Prediction, best_proposal, prompt_points,

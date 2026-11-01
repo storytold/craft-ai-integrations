@@ -31,7 +31,7 @@ pub const MODEL: &str = "sam21";
 
 /// Every runner this crate offers, for an `EngineRegistry`.
 pub fn runners() -> Vec<Arc<dyn ModelRunner>> {
-    vec![Arc::new(Sam21Runner)]
+    vec![Arc::new(Sam21Runner), crate::dfn3::runner()]
 }
 
 /// SAM 2.1 on the rten engine. It runs on the processor, on every system.
