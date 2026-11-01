@@ -88,7 +88,7 @@ fn select_subject() -> Feature {
 
 /// Runs the sample to its end.
 fn run(desk: &ToolDesk, feature: &Feature) -> SampleReport {
-    let TestStart::Started(job) = desk.start_sample(feature, false).unwrap() else {
+    let TestStart::Started(job) = desk.start_sample(feature, None).unwrap() else {
         panic!("a local sample needs no agreement");
     };
     ToolDesk::finish(&feature.role().unwrap(), &job, Duration::from_secs(5))

@@ -9,6 +9,13 @@ ROLE = CORE + 'role.rs'
 M = 'craft-ai-core'
 CL = 'craft-ai-client'
 CA = [
+    ('sample-approval-ignores-changed-destination', 'crates/ai-client/src/tools_sample.rs',
+     'if reviewed != Some(plan.disclosure()) {', 'if reviewed.is_none() {',
+     CL, 'sample_consent', 'changed_destination_asks_again_before_saving_or_building'),
+    ('sample-approval-compares-only-destination', 'crates/ai-client/src/tools_sample.rs',
+     'if reviewed != Some(plan.disclosure()) {',
+     'if reviewed.is_none_or(|shown| shown.destination != plan.disclosure().destination) {',
+     CL, 'sample_consent', 'changed_payload_asks_again_before_saving_or_building'),
     ('late-model-answer-taken', DRAFT,
      'if address.trim() != self.endpoint.trim() {', 'if false {',
      M, 'draft_provenance', 'a_test_that_answers_after_the_address_moved_on'),
