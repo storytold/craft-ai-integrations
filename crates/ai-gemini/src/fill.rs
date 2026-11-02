@@ -43,6 +43,7 @@ const RATIOS: &[(u32, u32)] = &[
 const MAX_SIDE: u32 = 8192;
 const MAX_PIXELS: u64 = 32 * 1024 * 1024;
 const BOUNDS: Bounds = Bounds {
+    service: "Gemini fill",
     max_side: MAX_SIDE,
     max_pixels: MAX_PIXELS,
 };
@@ -107,28 +108,10 @@ fn size_token(model: &str, asked: Option<&str>, w: u32, h: u32) -> &'static str 
     }
 }
 
-fn inline<'a>(request: &'a Request, role: InputRole, what: &str) -> Result<&'a [u8], AiError> {
-    mask::inline(request, role, "Gemini fill", what)
-}
-
-fn too_big() -> AiError {
-    AiError::invalid(format!(
-        "pictures for Gemini fill may be at most {MAX_SIDE} pixels a side and 32 megapixels"
-    ))
-}
-
-fn check_size(width: u32, height: u32) -> Result<(), AiError> {
-    if BOUNDS.fits(width, height) {
-        Ok(())
-    } else {
-        Err(too_big())
-    }
-}
-
 /// Reads the craft mask and returns the one Gemini is shown: an opaque 8-bit grayscale PNG, white where to paint,
 /// black where to keep (see [`craft_ai_media::mask::binary`]).
 pub(crate) fn shown_mask(data: &[u8]) -> Result<(Vec<u8>, u32, u32), AiError> {
-    mask::binary(data, BOUNDS, too_big)
+    mask::binary(data, BOUNDS)
 }
 
 /// The instruction that stands in for a mask parameter. An empty prompt means "what would be
@@ -185,14 +168,15 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
             }
         }
     }
-    let source = inline(request, InputRole::Source, "source image")?;
+    let source = mask::inline(request, BOUNDS, InputRole::Source, "source image")?;
     let media = sniff(source)
         .ok_or_else(|| AiError::invalid("the source image is not a PNG, JPEG or WebP image"))?;
-    let (mask, width, height) = shown_mask(inline(request, InputRole::Mask, "mask")?)?;
+    let (mask, width, height) =
+        shown_mask(mask::inline(request, BOUNDS, InputRole::Mask, "mask")?)?;
     if media == "image/png" {
         let (w, h) = mask::png_size(source)
             .ok_or_else(|| AiError::invalid("the source image is not a readable PNG"))?;
-        check_size(w, h)?;
+        BOUNDS.check(w, h)?;
         if (w, h) != (width, height) {
             return Err(AiError::invalid(
                 "the mask must be the same size as the source image",
