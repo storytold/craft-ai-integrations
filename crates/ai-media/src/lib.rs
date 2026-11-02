@@ -15,6 +15,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+/// Reading and writing the masks the inpainting adapters send.
+pub mod mask;
 /// Media identified by its first bytes; shared with the adapters that check what they send or
 /// receive.
 pub mod sniff;

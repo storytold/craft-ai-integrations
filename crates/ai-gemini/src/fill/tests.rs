@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
 use craft_ai_core::CapabilityId;
+use png::{BitDepth, ColorType};
+use std::io::Cursor;
 
 fn png_of(
     width: u32,

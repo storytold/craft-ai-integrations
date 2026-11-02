@@ -1968,6 +1968,7 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "craft-ai-media",
  "png",
  "serde_json",
  "ureq 3.4.2",
@@ -2163,6 +2164,7 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "craft-ai-media",
  "png",
  "serde_json",
  "ureq 3.4.2",
@@ -2182,6 +2184,7 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "png",
  "serde_json",
  "tempfile",
  "ureq 3.4.2",

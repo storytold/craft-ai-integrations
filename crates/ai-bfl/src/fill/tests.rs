@@ -1,6 +1,9 @@
 use super::*;
 use craft_ai_core::CapabilityId;
+use craft_ai_core::ErrorKind;
 use craft_ai_core::payload::base64_decode;
+use png::{BitDepth, ColorType};
+use std::io::Cursor;
 
 fn png_of(
     color: ColorType,
