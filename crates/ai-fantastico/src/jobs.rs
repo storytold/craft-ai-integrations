@@ -9,10 +9,11 @@
 //! Cancelling marks the job `Cancelled` at once and discards whatever the worker produces later.
 //! A streamed reply is also closed at its next line, which ends the provider's work. A reply that
 //! is not streamed cannot be interrupted mid-flight; its worker finishes and is discarded, within
-//! the SDK's time budget.
+//! the SDK's time budget. A cancelled worker sends nothing further, and it keeps its place under the
+//! connection's cap until it has finished, so cancelling never lets more workers run than the cap.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_ai_core::job::{Event, JobSnapshot, JobState};
@@ -112,10 +113,30 @@ impl JobCell {
     }
 }
 
+/// A worker's place under the connection's cap, given back when dropped (on a panic too).
+struct Permit(Arc<AtomicUsize>);
+
+impl Permit {
+    fn take(workers: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
+        // Counted first and given back when refused: the count never lets more than `max` through.
+        let before = workers.fetch_add(1, Ordering::SeqCst);
+        let permit = Self(Arc::clone(workers));
+        (before < max).then_some(permit)
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// All jobs of one provider.
 pub(crate) struct Registry {
     next: AtomicU64,
     max_active: usize,
+    /// Workers still running, whatever their jobs show: a cancelled job's worker counts until it ends.
+    workers: Arc<AtomicUsize>,
     jobs: Mutex<Vec<(JobId, Arc<JobCell>)>>,
 }
 
@@ -124,6 +145,7 @@ impl Registry {
         Self {
             next: AtomicU64::new(1),
             max_active: max_active.max(1),
+            workers: Arc::new(AtomicUsize::new(0)),
             jobs: Mutex::new(Vec::new()),
         }
     }
@@ -148,14 +170,14 @@ impl Registry {
         let n = self.next.fetch_add(1, Ordering::Relaxed);
         let id = JobId::new(format!("fantastico-{n}"))
             .map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))?;
+        let permit = Permit::take(&self.workers, self.max_active).ok_or_else(|| {
+            AiError::new(
+                ErrorKind::RateLimited,
+                "too many jobs are running on this FANTASTICO connection; wait for one to finish",
+            )
+        })?;
         {
             let mut jobs = self.lock();
-            if jobs.iter().filter(|(_, c)| !c.is_terminal()).count() >= self.max_active {
-                return Err(AiError::new(
-                    ErrorKind::RateLimited,
-                    "too many jobs are running on this FANTASTICO connection; wait for one to finish",
-                ));
-            }
             jobs.push((id.clone(), Arc::clone(&cell)));
             while jobs.len() > KEEP_FINISHED {
                 match jobs.iter().position(|(_, c)| c.is_terminal()) {
@@ -171,7 +193,10 @@ impl Registry {
             .name(format!("craft-ai-{id}"))
             .spawn(move || {
                 worker_cell.start();
-                match work(&worker_cell) {
+                let outcome = work(&worker_cell);
+                // Free before the job shows as finished, so whoever sees that can submit the next.
+                drop(permit);
+                match outcome {
                     Ok(usage) => worker_cell.succeed(usage),
                     Err(e) => worker_cell.fail(e),
                 }

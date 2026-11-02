@@ -32,6 +32,10 @@
 //! factory.register(craft_ai_fantastico::PROVIDER_NAME, craft_ai_fantastico::build_titled("WordCraft"));
 //! ```
 //!
+//! A replacement built this way doesn't keep the factory's timeouts: on
+//! `ProviderFactory::probing()` the connection test loses its 20-second cap, and each request takes
+//! the SDK's own time (30 s for the account service, 90 s for the model).
+//!
 //! Or build one directly:
 //!
 //! ```no_run
@@ -108,7 +112,8 @@ pub struct FantasticoConfig {
     /// (30 s for the account service, 90 s for the model).
     pub request_timeout: Option<Duration>,
     /// Jobs that may run at once on this connection. Each running job holds its own runtime key,
-    /// and each key reserves part of the account's credit, so this stays small.
+    /// and each key reserves part of the account's credit, so this stays small. A cancelled job
+    /// counts until its worker has ended.
     pub max_active_jobs: usize,
 }
 
@@ -339,7 +344,8 @@ pub fn build(
 }
 
 /// As [`build`], naming the app in the provider's usage reports: register
-/// `build_titled("WordCraft")` instead of `build`.
+/// `build_titled("WordCraft")` instead of `build`. Like `build`, it doesn't take the factory's
+/// timeouts.
 pub fn build_titled(
     title: impl Into<String>,
 ) -> impl Fn(&Connection, Option<SecretString>) -> Result<Arc<dyn Provider>, AiError>

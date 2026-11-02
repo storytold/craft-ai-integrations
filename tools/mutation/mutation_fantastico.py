@@ -42,8 +42,17 @@ FA = [
      P, 'lib', 'events_depend_on_streaming_and_structure'),
     # One job more than the connection's cap is refused, not queued (each job holds a key's reserve).
     ('job-cap-dropped', JOBS,
-     '>= self.max_active {', '>= usize::MAX {',
+     '(before < max).then_some(permit)', 'Some(permit)',
      P, 'conformance', 'too_many_jobs_at_once_is_a_rate_limit_not_a_queue'),
+    # A cancelled job's worker keeps its place under the cap until it has ended.
+    ('worker-place-freed-at-start', JOBS,
+     '                worker_cell.start();\n',
+     '                worker_cell.start();\n                let permit = { drop(permit); None::<Permit> };\n',
+     P, 'conformance', 'a_cancelled_worker_keeps_its_place_until_it_ends'),
+    # A job that has ended starts no further request.
+    ('cancelled-job-keeps-sending', TRANSPORT,
+     'if jobs::sink_stopped() {', 'if false {',
+     P, 'conformance', 'a_cancelled_job_starts_no_further_request'),
     # The assembled stream's text is checked against the cap before a piece is kept or shown.
     ('stream-text-cap-unchecked', STREAM,
      '        if kept > self.max {\n            self.over = true;\n            return false;\n        }',

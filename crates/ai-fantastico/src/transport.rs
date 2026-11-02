@@ -157,6 +157,10 @@ fn is_event_stream(headers: &[(String, String)]) -> bool {
 
 impl Transport for SdkTransport {
     fn send(&self, request: &HttpRequest) -> Result<HttpResponse, String> {
+        // A job that has ended starts nothing more: the SDK treats this as final, without retrying.
+        if jobs::sink_stopped() {
+            return Err("the job has ended".into());
+        }
         let WireResponse {
             status,
             headers,

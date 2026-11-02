@@ -4,7 +4,7 @@
 
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use craft_ai_core::conformance::{
@@ -12,7 +12,8 @@ use craft_ai_core::conformance::{
 };
 use craft_ai_core::job::{Event, JobState};
 use craft_ai_core::{
-    AiError, CapabilityId, ErrorKind, InputRole, ModelId, Payload, Provider, Request, SecretString,
+    AiError, CapabilityId, ErrorKind, InputRole, JobId, ModelId, Payload, Provider, Request,
+    SecretString,
 };
 use craft_ai_fantastico::{FantasticoConfig, FantasticoProvider, Wire, WireResponse};
 use fantastico_sdk::{HttpRequest, Method};
@@ -348,7 +349,147 @@ fn too_many_jobs_at_once_is_a_rate_limit_not_a_queue() {
     assert_eq!(third.kind, ErrorKind::RateLimited);
     p.cancel(&a).unwrap();
     p.cancel(&b).unwrap();
-    assert!(p.submit(&model(), &chat("d")).is_ok());
+    submit_when_free(&p);
+}
+
+/// Submits as soon as a worker has made room.
+fn submit_when_free(p: &FantasticoProvider) -> JobId {
+    for _ in 0..2000 {
+        match p.submit(&model(), &chat("next")) {
+            Ok(job) => return job,
+            Err(e) if e.kind == ErrorKind::RateLimited => pause(),
+            Err(e) => panic!("{e}"),
+        }
+    }
+    panic!("no worker finished");
+}
+
+fn wait_for_end(p: &FantasticoProvider, job: &JobId) -> JobState {
+    for _ in 0..2000 {
+        let state = p.poll(job).unwrap().state;
+        if state.is_terminal() {
+            return state;
+        }
+        pause();
+    }
+    panic!("job did not finish");
+}
+
+/// Holds the requests whose address ends in `suffix` until let through, the way a reply that isn't
+/// streamed holds its worker: nothing can interrupt it while it waits.
+struct Held {
+    fake: Arc<Fake>,
+    suffix: &'static str,
+    /// (requests that have arrived, requests that may go on), in order of arrival.
+    counts: Mutex<(usize, usize)>,
+    changed: Condvar,
+}
+
+impl Held {
+    fn new(suffix: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            fake: Fake::new(Chat::Text),
+            suffix,
+            counts: Mutex::new((0, 0)),
+            changed: Condvar::new(),
+        })
+    }
+
+    fn provider(self: &Arc<Self>, max_active_jobs: usize) -> FantasticoProvider {
+        let mut config = FantasticoConfig::new(SecretString::new(ACCOUNT_KEY));
+        config.max_active_jobs = max_active_jobs;
+        FantasticoProvider::with_wire(config, Arc::clone(self) as Arc<dyn Wire>).unwrap()
+    }
+
+    fn let_through(&self, n: usize) {
+        self.counts.lock().unwrap().1 += n;
+        self.changed.notify_all();
+    }
+
+    fn wait_for_arrivals(&self, n: usize) {
+        let counts = self.counts.lock().unwrap();
+        let (counts, timeout) = self
+            .changed
+            .wait_timeout_while(counts, Duration::from_secs(30), |c| c.0 < n)
+            .unwrap();
+        assert!(
+            !timeout.timed_out(),
+            "{} requests arrived, not {n}",
+            counts.0
+        );
+    }
+
+    fn arrivals(&self) -> usize {
+        self.counts.lock().unwrap().0
+    }
+
+    fn model_calls(&self) -> usize {
+        let log = self.fake.log.lock().unwrap();
+        log.iter().filter(|(url, _)| url.ends_with(CHAT)).count()
+    }
+}
+
+impl Wire for Held {
+    fn send(&self, req: &HttpRequest) -> Result<WireResponse, String> {
+        if req.url.ends_with(self.suffix) {
+            let mut counts = self.counts.lock().unwrap();
+            let arrival = counts.0;
+            counts.0 += 1;
+            self.changed.notify_all();
+            let wait = Duration::from_secs(30);
+            drop(
+                self.changed
+                    .wait_timeout_while(counts, wait, |c| c.1 <= arrival),
+            );
+        }
+        self.fake.send(req)
+    }
+}
+
+/// Cancelling a job doesn't stop a request that isn't streamed. Its job shows as cancelled at once,
+/// and its worker keeps its place until it ends: never more workers than the cap.
+#[test]
+fn a_cancelled_worker_keeps_its_place_until_it_ends() {
+    let held = Held::new(CHAT);
+    let p = held.provider(2);
+    let refused = |p: &FantasticoProvider| p.submit(&model(), &chat("no")).unwrap_err().kind;
+    let a = p.submit(&model(), &chat("a")).unwrap();
+    let b = p.submit(&model(), &chat("b")).unwrap();
+    held.wait_for_arrivals(2);
+    assert_eq!(refused(&p), ErrorKind::RateLimited);
+
+    p.cancel(&a).unwrap();
+    p.cancel(&b).unwrap();
+    assert_eq!(p.poll(&a).unwrap().state, JobState::Cancelled);
+    assert_eq!(p.poll(&b).unwrap().state, JobState::Cancelled);
+    assert_eq!(refused(&p), ErrorKind::RateLimited);
+    assert_eq!(held.arrivals(), 2);
+
+    // One worker ends: room for one job, and only one.
+    held.let_through(1);
+    let c = submit_when_free(&p);
+    assert_eq!(refused(&p), ErrorKind::RateLimited);
+    held.wait_for_arrivals(3);
+
+    held.let_through(2);
+    assert_eq!(wait_for_end(&p, &c), JobState::Succeeded);
+    assert_eq!(p.poll(&a).unwrap().state, JobState::Cancelled);
+}
+
+/// A job cancelled while its key is being minted never goes on to call the model.
+#[test]
+fn a_cancelled_job_starts_no_further_request() {
+    let held = Held::new("/edge/key");
+    let p = held.provider(1);
+    let a = p.submit(&model(), &chat("a")).unwrap();
+    held.wait_for_arrivals(1);
+    p.cancel(&a).unwrap();
+    held.let_through(2);
+
+    // With room for one worker, the next job starts only once this one's has ended.
+    let next = submit_when_free(&p);
+    assert_eq!(wait_for_end(&p, &next), JobState::Succeeded);
+    assert_eq!(held.model_calls(), 1);
 }
 
 /// What an agent loop does: the conversation so far as turns, the whole reply back.
