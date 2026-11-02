@@ -268,3 +268,13 @@ fn a_start_image_binding_must_be_a_connected_image_loader() {
     unconnected["graph"] = stray;
     assert!(parse(unconnected).is_err(), "a loader that feeds nothing");
 }
+
+/// A valid loader binding must name a node that exists, checked during import.
+#[test]
+fn a_start_image_binding_to_a_missing_node_is_refused_on_import() {
+    let mut extra = start_image();
+    extra["source"]["node"] = json!("missing-loader");
+    let error = WorkflowSpec::parse(&spec(extra), None).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::InvalidRequest);
+    assert_eq!(error.message, "source node is missing");
+}
