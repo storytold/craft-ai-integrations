@@ -70,6 +70,8 @@ struct Slot {
     state: JobState,
     /// Events not yet handed out by a poll.
     events: Vec<Event>,
+    /// Whether a poll has delivered the terminal state, including failure or cancellation.
+    terminal_delivered: bool,
 }
 
 type Jobs = Arc<Mutex<HashMap<JobId, Slot>>>;
@@ -329,13 +331,20 @@ impl Provider for GeminiProvider {
             }
             if jobs.len() >= MAX_TRACKED {
                 // Forget finished jobs whose results were already handed out.
-                jobs.retain(|_, s| !s.state.is_terminal() || !s.events.is_empty());
+                jobs.retain(|_, s| !s.terminal_delivered);
+                if jobs.len() >= MAX_TRACKED {
+                    return Err(AiError::new(
+                        ErrorKind::RateLimited,
+                        "too many Gemini results are waiting; check a finished fill first",
+                    ));
+                }
             }
             jobs.insert(
                 id.clone(),
                 Slot {
                     state: JobState::Running { percent: None },
                     events: Vec::new(),
+                    terminal_delivered: false,
                 },
             );
         }
@@ -383,6 +392,7 @@ impl Provider for GeminiProvider {
             .ok_or_else(|| AiError::invalid("unknown Gemini job"))?;
         let mut snapshot = JobSnapshot::new(slot.state.clone());
         snapshot.events = std::mem::take(&mut slot.events);
+        slot.terminal_delivered |= slot.state.is_terminal();
         Ok(snapshot)
     }
 
@@ -397,3 +407,6 @@ impl Provider for GeminiProvider {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod registry_tests;

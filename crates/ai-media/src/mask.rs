@@ -104,12 +104,11 @@ pub fn binary(data: &[u8], bounds: Bounds) -> Result<(Vec<u8>, u32, u32), AiErro
     if frame.bit_depth != BitDepth::Eight || pixels.len() < count * channels {
         return Err(bad_mask());
     }
-    let pixels: Vec<&[u8]> = pixels.chunks_exact(channels).take(count).collect();
+    let pixels = pixels.chunks_exact(channels).take(count);
     let has_alpha = channels % 2 == 0;
     let alpha = |p: &[u8]| p.last().copied().unwrap_or(255);
-    let by_alpha = has_alpha && pixels.iter().any(|p| alpha(p) < 255);
+    let by_alpha = has_alpha && pixels.clone().any(|p| alpha(p) < 255);
     let gray: Vec<u8> = pixels
-        .iter()
         .map(|p| {
             let paint = if by_alpha {
                 alpha(p) < 128
