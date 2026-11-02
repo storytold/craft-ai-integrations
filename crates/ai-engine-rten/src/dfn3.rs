@@ -10,6 +10,13 @@
 //! the input and lined up with it sample for sample, so an app can put it in place of the
 //! original. Each channel is processed on its own.
 //!
+//! **Size:** the answer travels inline too, under the shared inline limit
+//! ([`Limits::default`]). A 16-bit input becomes twice as large as 32-bit float, so the answer's
+//! exact size is worked out from the input before any processing, and a recording whose answer
+//! wouldn't fit is refused then, in words; the encoded answer is checked again before it is
+//! returned. This also bounds the work: at most `limit / 4` samples across all channels (about
+//! 175 s of mono, 87 s of stereo), so every buffer the processing makes is bounded by the limit.
+//!
 //! **Files:** the publisher's ONNX export of DeepFilterNet 3 (Rikorose/DeepFilterNet, MIT OR
 //! Apache-2.0): `enc.onnx` (the weights file the connection records), `erb_dec.onnx` and
 //! `df_dec.onnx`, side by side. The catalogue names their sizes and SHA-256. Their interface:
@@ -22,8 +29,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use craft_ai_core::{
-    AiError, CapabilityId, CapabilitySpec, ErrorKind, InputRole, ModelId, ModelInfo, Output,
-    Payload, Request,
+    AiError, CapabilityId, CapabilitySpec, ErrorKind, InputRole, Limits, ModelId, ModelInfo,
+    Output, Payload, Request,
 };
 use craft_ai_engine::{LoadedModel, ModelRunner, RunContext};
 use rten::{Model, NodeId, Value};
@@ -128,7 +135,13 @@ impl<E: Estimator + 'static> LoadedModel for Enhancer<E> {
                 audio.sample_rate
             )));
         }
+        let limits = Limits::default();
         let total = audio.channels.len();
+        let frames = audio.channels.first().map_or(0, Vec::len);
+        let size = wav::encoded_len(audio.sample_rate, total, frames)?;
+        if size > limits.max_inline_bytes {
+            return Err(too_large(size, limits.max_inline_bytes));
+        }
         let mut out = Vec::with_capacity(total);
         for (i, channel) in audio.channels.iter().enumerate() {
             ctx.check_cancelled()?;
@@ -139,11 +152,31 @@ impl<E: Estimator + 'static> LoadedModel for Enhancer<E> {
         }
         ctx.check_cancelled()?;
         let data = wav::encode(audio.sample_rate, &out)?;
-        Ok(vec![Output {
-            payload: Payload::inline(WAV, data)?,
-            label: None,
-        }])
+        Ok(vec![answer(data, &limits)?])
     }
+}
+
+/// The cleaned audio as the one output, refused if it is over `limits` after all.
+fn answer(data: Vec<u8>, limits: &Limits) -> Result<Output, AiError> {
+    let size = data.len() as u64;
+    let payload = Payload::inline(WAV, data)?;
+    payload
+        .check(limits)
+        .map_err(|_| too_large(size, limits.max_inline_bytes))?;
+    Ok(Output {
+        payload,
+        label: None,
+    })
+}
+
+/// Said when the cleaned audio, 32-bit float, would be over the inline limit.
+fn too_large(size: u64, limit: u64) -> AiError {
+    let mb = |b: u64| b as f64 / (1024. * 1024.);
+    AiError::invalid(format!(
+        "The cleaned recording would be {:.1} MB, over the {:.0} MB a result can carry. Clean a shorter part, or fewer channels, at a time.",
+        mb(size),
+        mb(limit)
+    ))
 }
 
 /// The recording: an inline WAV, not a link.

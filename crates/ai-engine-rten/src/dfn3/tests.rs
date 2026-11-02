@@ -316,6 +316,71 @@ fn bad_requests_are_refused_in_plain_words() {
     }
 }
 
+/// The answer's size is worked out exactly before any processing: the prediction matches what is
+/// written, for any channel count and length.
+#[test]
+fn the_answer_size_is_predicted_exactly() {
+    for (channels, frames) in [(1, 0), (1, 4_801), (2, 30_000), (8, 7)] {
+        let data = wav::encode(48_000, &vec![vec![0.25; frames]; channels]).unwrap();
+        assert_eq!(
+            wav::encoded_len(48_000, channels, frames).unwrap(),
+            data.len() as u64
+        );
+    }
+}
+
+/// A 16-bit recording small enough to send (18 MB) whose 32-bit answer (36 MB) would be over the
+/// shared inline limit is refused in words before the model runs, not answered with a result that
+/// breaks the limit.
+#[test]
+fn a_recording_whose_answer_would_be_over_the_inline_limit_is_refused_before_processing() {
+    let limit = craft_ai_core::Limits::default().max_inline_bytes as usize;
+    let frames = limit / 2 / 2 + 48_000; // 16-bit mono: just over half the limit as float
+    let input = wav_of(48_000, &[vec![0.1; frames]], 16, false);
+    assert!(input.len() < limit, "the request itself fits");
+    let fake = Fake::identity();
+    let mut model = Enhancer::new(fake.clone());
+    let e = model
+        .run(&request(input), &RunContext::detached())
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+    assert!(e.message.contains("over the 32 MB"), "{}", e.message);
+    assert!(
+        fake.seen.lock().unwrap().is_empty(),
+        "refused before the model ran"
+    );
+    // the same length minus a little fits and is answered
+    let fits = (limit - 1_024) / 4;
+    let mut model = Enhancer::new(Fake::silence());
+    let out = model
+        .run(
+            &request(wav_of(48_000, &[vec![0.1; fits]], 16, false)),
+            &RunContext::detached(),
+        )
+        .unwrap();
+    let Payload::Inline { data, .. } = &out[0].payload else {
+        panic!()
+    };
+    assert!(data.len() <= limit);
+}
+
+/// The encoded answer is checked against the limit again before it is returned.
+#[test]
+fn an_encoded_answer_over_the_limit_is_never_returned() {
+    let small = craft_ai_core::Limits {
+        max_inline_bytes: 100,
+        ..Default::default()
+    };
+    assert!(answer(vec![0; 100], &small).is_ok());
+    let e = answer(vec![0; 101], &small).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+    assert!(
+        e.message.contains("cleaned recording would be"),
+        "{}",
+        e.message
+    );
+}
+
 /// A runner built on the stand-in passes the shared runner checks: a whole job, Cancel, a refused
 /// request, an unknown job, missing weights and a second job.
 #[test]

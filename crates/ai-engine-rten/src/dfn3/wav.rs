@@ -62,6 +62,18 @@ fn unreadable() -> AiError {
     AiError::invalid("The WAV file is damaged or cut short.")
 }
 
+/// The exact size of the 32-bit float WAV [`encode`] writes for `channels` channels of `frames`
+/// samples each: its header (measured by writing an empty file) plus four bytes a sample.
+pub(crate) fn encoded_len(
+    sample_rate: u32,
+    channels: usize,
+    frames: usize,
+) -> Result<u64, AiError> {
+    let header = encode(sample_rate, &vec![Vec::new(); channels])?.len() as u64;
+    let samples = (frames as u64).saturating_mul(channels as u64);
+    Ok(header.saturating_add(samples.saturating_mul(4)))
+}
+
 /// Writes `channels` (all the same length) as a 32-bit float WAV.
 pub(crate) fn encode(sample_rate: u32, channels: &[Vec<f32>]) -> Result<Vec<u8>, AiError> {
     let spec = hound::WavSpec {

@@ -7,6 +7,12 @@ use crate::recipe::{Licence, LocalRecipe, ModelFile, NativeRoute, Source};
 /// `models/DeepFilterNet3_onnx.tar.gz` in Rikorose/DeepFilterNet; this mirror at a pinned revision
 /// holds the same three files one by one, and each was checked byte for byte against that archive
 /// by SHA-256. The engine reads them as they are: no conversion, nothing hosted by us.
+///
+/// Licence of the weights, as read on 02/11/2026: the repository's root `LICENSE` is MIT OR
+/// Apache-2.0 and makes no exception for `models/`; the authors' own `libDF` (manifest licence
+/// `MIT/Apache-2.0`) embeds `models/DeepFilterNet3_onnx.tar.gz` with `include_bytes!` under its
+/// default `default-model` feature, so their release builds ship it under that licence. Nothing
+/// states a licence for the weights in so many words.
 fn deepfilternet3_files() -> Vec<ModelFile> {
     const REVISION: &str = "191b102108bf10180909258809dcb3d2a0e59b46";
     let file = |name: &str, size_bytes: u64, sha256: &str| {
@@ -25,7 +31,7 @@ fn deepfilternet3_files() -> Vec<ModelFile> {
             url: Some("https://github.com/Rikorose/DeepFilterNet#license".to_owned()),
             accept_required: false,
             note: Some(
-                "Identical, byte for byte, to the ONNX export the DeepFilterNet authors publish in their repository. The mirror declares Apache-2.0."
+                "Identical, byte for byte, to the ONNX export the DeepFilterNet authors publish in their repository's models folder. That repository is licensed MIT OR Apache-2.0 with no exception for the models, and the authors' own Rust library (libDF, under the same licence) builds this very archive in by default. No statement names the weights separately. The mirror declares Apache-2.0."
                     .to_owned(),
             ),
         },
