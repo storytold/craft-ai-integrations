@@ -19,26 +19,6 @@ fn request(payload: Payload) -> Request {
     Request::new(role().capability).with_input(InputRole::Source, payload)
 }
 
-struct Fake;
-impl Provider for Fake {
-    /// The model list is supplied by the shared fixture.
-    fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
-        Ok(Vec::new())
-    }
-    /// Planning never submits.
-    fn submit(&self, _: &ModelId, _: &Request) -> Result<JobId, AiError> {
-        Err(AiError::unsupported("planning only"))
-    }
-    /// Planning never polls.
-    fn poll(&self, _: &JobId) -> Result<JobSnapshot, AiError> {
-        Err(AiError::unsupported("planning only"))
-    }
-    /// Nothing runs, so nothing is cancelled.
-    fn cancel(&self, _: &JobId) -> Result<(), AiError> {
-        Ok(())
-    }
-}
-
 struct World {
     dir: tempfile::TempDir,
     client: AiClient,
@@ -72,7 +52,12 @@ impl World {
             })
             .unwrap();
         let mut factory = ProviderFactory::standard();
-        factory.register("size-fake", |_, _| Ok(Arc::new(Fake)));
+        factory.register("size-fake", |_, _| {
+            Ok(Arc::new(mock::MockProvider::new(
+                Vec::new(),
+                mock::Script::default(),
+            )))
+        });
         let client = AiClient::new(
             AppId::new("size-app").unwrap(),
             shared,
@@ -133,4 +118,14 @@ fn other_payloads_keep_their_size() {
     assert_eq!(w.disclosed(remote), Some(7));
     let inline = Payload::inline("image/png", vec![1, 2, 3]).unwrap();
     assert_eq!(w.disclosed(inline), Some(3));
+}
+
+/// An invalid file address cannot lend credibility to an app's claimed size.
+#[test]
+fn malformed_file_addresses_show_no_claimed_size() {
+    let w = World::new();
+    for uri in ["file://[bad", "FiLe://[bad", "file://host:bad/a.png"] {
+        let payload = Payload::handle(uri, "image/png", Some(5)).unwrap();
+        assert_eq!(w.disclosed(payload), None, "{uri}");
+    }
 }

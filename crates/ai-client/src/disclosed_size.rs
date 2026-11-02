@@ -11,11 +11,22 @@ use craft_ai_core::{Disclosure, Payload, Request};
 /// Replaces the claimed size of every `file:` input in `disclosure` with the measured one.
 pub(crate) fn measure_local_files(disclosure: &mut Disclosure, request: &Request) {
     for (item, input) in disclosure.items.iter_mut().zip(&request.inputs) {
-        if let Payload::Handle(h) = &input.payload
-            && let Ok(url) = url::Url::parse(&h.uri)
-            && url.scheme() == "file"
-        {
-            item.bytes = local_file_len(&url);
+        let Payload::Handle(handle) = &input.payload else {
+            continue;
+        };
+        let url = url::Url::parse(&handle.uri).ok();
+        // Even a malformed file address must discard the app's unverified claim.
+        let is_file = url.as_ref().map_or_else(
+            || {
+                handle
+                    .uri
+                    .split_once(':')
+                    .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
+            },
+            |url| url.scheme() == "file",
+        );
+        if is_file {
+            item.bytes = url.as_ref().and_then(local_file_len);
         }
     }
 }
