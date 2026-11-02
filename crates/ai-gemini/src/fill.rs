@@ -11,9 +11,8 @@
 //! is treated as a placeholder to replace, not as content to keep.
 use craft_ai_core::payload::{base64_decode, base64_encode};
 use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request};
-use png::{BitDepth, ColorType, Transformations};
+use craft_ai_media::mask::{self, Bounds};
 use serde_json::{Value, json};
-use std::io::Cursor;
 
 /// Image models offered, best default first: (id, label).
 pub(crate) const MODELS: &[(&str, &str)] = &[
@@ -43,6 +42,10 @@ const RATIOS: &[(u32, u32)] = &[
 /// Our own bound on the pictures sent (Google documents a request size limit, not a pixel one).
 const MAX_SIDE: u32 = 8192;
 const MAX_PIXELS: u64 = 32 * 1024 * 1024;
+const BOUNDS: Bounds = Bounds {
+    max_side: MAX_SIDE,
+    max_pixels: MAX_PIXELS,
+};
 
 /// Whether `model` may be asked for: one of [`MODELS`], or any well-formed `gemini-…-image…` id so
 /// a newer model works without an update to this crate.
@@ -105,17 +108,7 @@ fn size_token(model: &str, asked: Option<&str>, w: u32, h: u32) -> &'static str 
 }
 
 fn inline<'a>(request: &'a Request, role: InputRole, what: &str) -> Result<&'a [u8], AiError> {
-    let input = request
-        .inputs
-        .iter()
-        .find(|i| i.role == role)
-        .ok_or_else(|| AiError::invalid(format!("Gemini fill needs a {what}")))?;
-    match &input.payload {
-        Payload::Inline { data, .. } => Ok(data),
-        _ => Err(AiError::unsupported(format!(
-            "the {what} must be inline image data; this adapter does not read files or URLs"
-        ))),
-    }
+    mask::inline(request, role, "Gemini fill", what)
 }
 
 fn too_big() -> AiError {
@@ -125,95 +118,17 @@ fn too_big() -> AiError {
 }
 
 fn check_size(width: u32, height: u32) -> Result<(), AiError> {
-    if width == 0
-        || height == 0
-        || width > MAX_SIDE
-        || height > MAX_SIDE
-        || u64::from(width) * u64::from(height) > MAX_PIXELS
-    {
-        return Err(too_big());
+    if BOUNDS.fits(width, height) {
+        Ok(())
+    } else {
+        Err(too_big())
     }
-    Ok(())
 }
 
-/// A PNG's size from its header, without decoding the pixels.
-fn png_size(data: &[u8]) -> Option<(u32, u32)> {
-    let reader = png::Decoder::new(Cursor::new(data)).read_info().ok()?;
-    Some((reader.info().width, reader.info().height))
-}
-
-fn bad_mask() -> AiError {
-    AiError::invalid("the mask is not a readable PNG image")
-}
-
-/// Reads the craft mask and returns the one Gemini is shown: an opaque 8-bit grayscale PNG, white
-/// where to paint, black where to keep. A mask with any transparency is read by its alpha
-/// (transparent = paint, as OpenAI's edits take it), otherwise by brightness (white = paint).
+/// Reads the craft mask and returns the one Gemini is shown: an opaque 8-bit grayscale PNG, white where to paint,
+/// black where to keep (see [`craft_ai_media::mask::binary`]).
 pub(crate) fn shown_mask(data: &[u8]) -> Result<(Vec<u8>, u32, u32), AiError> {
-    if sniff(data) != Some("image/png") {
-        return Err(AiError::invalid("the mask must be a PNG image"));
-    }
-    let limit = png::Limits {
-        bytes: (MAX_PIXELS * 8) as usize,
-    };
-    let mut decoder = png::Decoder::new_with_limits(Cursor::new(data), limit);
-    decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
-    let mut reader = decoder.read_info().map_err(|_| bad_mask())?;
-    let (width, height) = (reader.info().width, reader.info().height);
-    check_size(width, height)?;
-    let mut buffer = vec![0u8; reader.output_buffer_size().ok_or_else(bad_mask)?];
-    let frame = reader.next_frame(&mut buffer).map_err(|_| bad_mask())?;
-    let channels = match frame.color_type {
-        ColorType::Grayscale => 1,
-        ColorType::GrayscaleAlpha => 2,
-        ColorType::Rgb => 3,
-        ColorType::Rgba => 4,
-        ColorType::Indexed => return Err(bad_mask()),
-    };
-    let count = width as usize * height as usize;
-    let pixels = buffer.get(..frame.buffer_size()).ok_or_else(bad_mask)?;
-    if frame.bit_depth != BitDepth::Eight || pixels.len() < count * channels {
-        return Err(bad_mask());
-    }
-    let pixels: Vec<&[u8]> = pixels.chunks_exact(channels).take(count).collect();
-    let has_alpha = channels % 2 == 0;
-    let alpha = |p: &[u8]| p.last().copied().unwrap_or(255);
-    let by_alpha = has_alpha && pixels.iter().any(|p| alpha(p) < 255);
-    let gray: Vec<u8> = pixels
-        .iter()
-        .map(|p| {
-            let paint = if by_alpha {
-                alpha(p) < 128
-            } else {
-                let c = |i: usize| u32::from(p.get(i).copied().unwrap_or(0));
-                let luma = if channels >= 3 {
-                    (c(0) * 299 + c(1) * 587 + c(2) * 114) / 1000
-                } else {
-                    c(0)
-                };
-                luma > 127
-            };
-            if paint { 255 } else { 0 }
-        })
-        .collect();
-    if !gray.contains(&255) {
-        return Err(AiError::invalid("the mask marks nothing to fill"));
-    }
-    Ok((encode_gray(&gray, width, height)?, width, height))
-}
-
-fn encode_gray(gray: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AiError> {
-    fn fail<E>(_: E) -> AiError {
-        AiError::new(ErrorKind::Internal, "the mask could not be prepared")
-    }
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, width, height);
-    encoder.set_color(ColorType::Grayscale);
-    encoder.set_depth(BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(fail)?;
-    writer.write_image_data(gray).map_err(fail)?;
-    writer.finish().map_err(fail)?;
-    Ok(out)
+    mask::binary(data, BOUNDS, too_big)
 }
 
 /// The instruction that stands in for a mask parameter. An empty prompt means "what would be
@@ -275,7 +190,7 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
         .ok_or_else(|| AiError::invalid("the source image is not a PNG, JPEG or WebP image"))?;
     let (mask, width, height) = shown_mask(inline(request, InputRole::Mask, "mask")?)?;
     if media == "image/png" {
-        let (w, h) = png_size(source)
+        let (w, h) = mask::png_size(source)
             .ok_or_else(|| AiError::invalid("the source image is not a readable PNG"))?;
         check_size(w, h)?;
         if (w, h) != (width, height) {
