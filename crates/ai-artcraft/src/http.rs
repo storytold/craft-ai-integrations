@@ -64,6 +64,120 @@ impl Http {
         serde_json::from_slice(&bytes)
             .map_err(|_| AiError::new(ErrorKind::Provider, "ArtCraft API returned invalid JSON"))
     }
+    /// Uploads a validated PNG as a private intermediate file, with no local filename disclosed.
+    pub fn upload_png(&self, png: &[u8]) -> Result<String, AiError> {
+        let boundary = format!("craft-{}", uuid::Uuid::new_v4());
+        let mut data = Vec::new();
+        for (name, value) in [
+            ("uuid_idempotency_token", uuid::Uuid::new_v4().to_string()),
+            ("maybe_visibility", "private".to_owned()),
+            ("is_intermediate_system_file", "true".to_owned()),
+        ] {
+            data.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+        }
+        data.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"craft-fill.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
+        data.extend_from_slice(png);
+        data.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let reply = self.decode(
+            self.agent
+                .post(format!("{}/v1/omni_api/upload/image", self.base))
+                .header("Authorization", format!("Bearer {}", self.key.expose()))
+                .content_type(format!("multipart/form-data; boundary={boundary}"))
+                .send(&data),
+        )?;
+        let token = reply
+            .get("media_file_token")
+            .and_then(Value::as_str)
+            .filter(|s| {
+                s.starts_with("m_")
+                    && s.len() <= 128
+                    && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+            });
+        if reply.get("success").and_then(Value::as_bool) != Some(true) || token.is_none() {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                "ArtCraft did not return a valid uploaded image token",
+            ));
+        }
+        token
+            .map(str::to_owned)
+            .ok_or_else(|| AiError::new(ErrorKind::Provider, "ArtCraft image upload failed"))
+    }
+
+    /// Bounded CDN image download, without auth, cookies or redirects. Loopback is test-only by base.
+    pub fn image(&self, uri: &str) -> Result<craft_ai_core::Payload, AiError> {
+        let bad = || {
+            AiError::new(
+                ErrorKind::Provider,
+                "ArtCraft result image URL is not permitted",
+            )
+        };
+        let url = url::Url::parse(uri).map_err(|_| bad())?;
+        let local = craft_ai_core::endpoint::Endpoint::parse(&self.base)
+            .is_ok_and(|e| e.is_loopback())
+            && craft_ai_core::endpoint::Endpoint::parse(uri).is_ok_and(|e| e.is_loopback());
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+            || !(url.scheme() == "https"
+                && url.host_str() == Some("cdn-2.fakeyou.com")
+                && url.port_or_known_default() == Some(443)
+                || local && matches!(url.scheme(), "http" | "https"))
+        {
+            return Err(bad());
+        }
+        let mut response = self.agent.get(uri).call().map_err(|_| {
+            AiError::new(
+                ErrorKind::Network,
+                "ArtCraft result image could not be downloaded",
+            )
+        })?;
+        if !response.status().is_success() {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                "ArtCraft result image download was refused",
+            ));
+        }
+        let limits = craft_ai_core::Limits::default();
+        let limit = limits.max_inline_bytes;
+        if response
+            .headers()
+            .get("content-length")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .is_some_and(|n| n > limit)
+        {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                "ArtCraft result image is too large",
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(limit + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| {
+                AiError::new(
+                    ErrorKind::Network,
+                    "ArtCraft result image download ended early",
+                )
+            })?;
+        let media = craft_ai_media::sniff::media_type(&bytes)
+            .map(|m| m.0)
+            .filter(|m| matches!(*m, "image/png" | "image/jpeg" | "image/webp"))
+            .ok_or_else(|| {
+                AiError::new(
+                    ErrorKind::Provider,
+                    "ArtCraft did not return a readable result image",
+                )
+            })?;
+        let payload = craft_ai_core::Payload::inline(media, bytes)?;
+        payload.check(&limits)?;
+        Ok(payload)
+    }
+
     pub fn get(&self, path: &str) -> Result<Value, AiError> {
         self.decode(
             self.agent

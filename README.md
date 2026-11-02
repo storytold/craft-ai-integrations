@@ -79,8 +79,9 @@ Read [docs/STATUS.md](docs/STATUS.md) before relying on a provider or tool. In s
   all-target clippy for those two packages, five committed kittest snapshots, one draw test and one
   `craft-ai-core` identity on Linux. The earlier 108-test mutation checkpoint is historical. The
   rendererless smoke does not use winit.
-- **Not verified:** any real hosted service, TLS behind an intercepting proxy, macOS and Linux
-  keychains, macOS builds of the test suite, and any app running a tool through the shared binding.
+- **Limited hosted check:** a local PhotoCraft build completed one Nano Banana 2 fill through the Omni adapter. The tester reported poor blending; this is not output-quality acceptance. See [Omni Generative Fill](docs/OMNI-GENERATIVE-FILL.md).
+- **Not verified:** other real hosted services, TLS behind an intercepting proxy, macOS and Linux
+  keychains, macOS builds of the test suite, and app adoption beyond that limited Omni check.
   Native widget behavior on Linux X11/Wayland and Windows (focus, keyboard, clipboard, IME and
   rendering), physical-GPU qualification, performance, and app adoption of the widgets also remain
   unverified.

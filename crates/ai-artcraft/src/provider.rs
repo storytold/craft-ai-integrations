@@ -2,8 +2,7 @@
 use crate::http::Http;
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
-    Payload, Provider, Request, SecretString, capability::CapabilityId, endpoint::Endpoint,
-    model::CapabilitySpec, payload::Limits,
+    Payload, Provider, Request, SecretString, endpoint::Endpoint, payload::Limits,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,6 +34,7 @@ const KEEP_JOBS: usize = 128;
 struct Job {
     remote: String,
     video: bool,
+    inline_image: bool,
     snapshot: JobSnapshot,
 }
 /// Holds a slot for a request that has been sent but has no job token yet, so concurrent
@@ -91,26 +91,9 @@ impl ArtCraftProvider {
             max_active: config.max_active_jobs.max(1),
         })
     }
+    /// Models supported by this adapter; listing them does not verify an account.
     pub fn documented_models() -> Vec<ModelInfo> {
-        [
-            ("nano_banana", "Nano Banana (unverified)", "image.generate"),
-            (
-                "seedance_2p0",
-                "Seedance 2.0 (unverified)",
-                "video.generate",
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(id, label, cap)| {
-            Some(
-                ModelInfo::new(ModelId::new(id).ok()?, label).with(
-                    CapabilitySpec::new(CapabilityId::parse(cap).ok()?)
-                        .accepting(InputRole::Prompt, 1)
-                        .requiring(InputRole::Prompt),
-                ),
-            )
-        })
-        .collect()
+        crate::models::documented()
     }
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<JobId, Job>>, AiError> {
         self.jobs
@@ -140,6 +123,11 @@ impl Provider for ArtCraftProvider {
                 "ArtCraft Omni API options are not mapped yet",
             ));
         }
+        let fill = if request.capability.as_str() == "image.inpaint" {
+            Some(crate::fill::prepare(request)?)
+        } else {
+            None
+        };
         let prompt = request
             .inputs
             .iter()
@@ -148,7 +136,7 @@ impl Provider for ArtCraftProvider {
                 Payload::Text { text } => Some(text),
                 _ => None,
             })
-            .filter(|s| !s.trim().is_empty())
+            .filter(|s| fill.is_some() || !s.trim().is_empty())
             .ok_or_else(|| AiError::invalid("ArtCraft Omni API needs a text prompt"))?;
         let video = model.as_str() == "seedance_2p0";
         // Reserve before sending: a paid job that cannot be tracked must never be created.
@@ -167,7 +155,14 @@ impl Provider for ArtCraftProvider {
             self.pending.fetch_add(1, Ordering::SeqCst);
             Reservation(&self.pending)
         };
-        let body = json!({"model":model.as_str(),"prompt":prompt,"idempotency_token":uuid::Uuid::new_v4().to_string()});
+        let mut body = json!({"model":model.as_str(),"prompt":prompt,"idempotency_token":uuid::Uuid::new_v4().to_string()});
+        if let Some(fill) = &fill {
+            let source = self.http.upload_png(fill.source)?;
+            let mask = self.http.upload_png(&fill.mask)?;
+            body["image_media_tokens"] = json!([source, mask]);
+            body["image_batch_count"] = json!(1);
+            body["prompt"] = json!(craft_ai_media::mask::fill_instruction(prompt));
+        }
         let response = self.http.post(
             if video {
                 "/v1/omni_api/generate/video"
@@ -217,13 +212,14 @@ impl Provider for ArtCraftProvider {
             Job {
                 remote: remote.to_owned(),
                 video,
+                inline_image: fill.is_some(),
                 snapshot: JobSnapshot::new(JobState::Queued),
             },
         );
         Ok(id)
     }
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
-        let (remote, video, prior) = {
+        let (remote, video, inline_image, prior) = {
             let jobs = self.lock()?;
             let job = jobs
                 .get(id)
@@ -233,7 +229,12 @@ impl Provider for ArtCraftProvider {
                 stable.events.clear();
                 return Ok(stable);
             }
-            (job.remote.clone(), job.video, job.snapshot.state.clone())
+            (
+                job.remote.clone(),
+                job.video,
+                job.inline_image,
+                job.snapshot.state.clone(),
+            )
         };
         let reply = self
             .http
@@ -272,40 +273,10 @@ impl Provider for ArtCraftProvider {
                     .ok_or_else(|| {
                         AiError::new(ErrorKind::Provider, "ArtCraft job result has no CDN URL")
                     })?;
-                let endpoint = Endpoint::parse(uri).map_err(|_| {
-                    AiError::new(ErrorKind::Provider, "ArtCraft job result URL is invalid")
-                })?;
-                if !endpoint.https || endpoint.is_loopback() || uri.contains('@') {
-                    return Err(AiError::new(
-                        ErrorKind::Provider,
-                        "ArtCraft job result URL is unsafe",
-                    ));
-                }
-                let path = uri.split('?').next().unwrap_or(uri).to_ascii_lowercase();
-                let media = if video {
-                    if path.ends_with(".mp4") {
-                        "video/mp4"
-                    } else if path.ends_with(".webm") {
-                        "video/webm"
-                    } else {
-                        return Err(AiError::unsupported(
-                            "ArtCraft returned an unknown video format",
-                        ));
-                    }
-                } else if path.ends_with(".png") {
-                    "image/png"
-                } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
-                    "image/jpeg"
-                } else if path.ends_with(".webp") {
-                    "image/webp"
-                } else {
-                    return Err(AiError::unsupported(
-                        "ArtCraft returned an unknown image format",
-                    ));
-                };
+                let payload = crate::result::payload(&self.http, uri, video, inline_image)?;
                 let mut done = JobSnapshot::new(JobState::Succeeded);
                 done.events.push(Event::Output(Output {
-                    payload: Payload::handle(uri, media, None)?,
+                    payload,
                     label: None,
                 }));
                 done
