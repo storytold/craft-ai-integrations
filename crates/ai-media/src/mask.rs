@@ -11,9 +11,11 @@ use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request};
 use png::{BitDepth, ColorType, Transformations};
 use std::io::Cursor;
 
-/// The largest pictures an adapter accepts: a side and a total pixel count.
+/// The largest pictures an adapter accepts: a side and a total pixel count. `service` names the
+/// adapter in its errors ("FLUX Fill needs a mask").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounds {
+    pub service: &'static str,
     pub max_side: u32,
     pub max_pixels: u64,
 }
@@ -27,16 +29,29 @@ impl Bounds {
             && height <= self.max_side
             && u64::from(width) * u64::from(height) <= self.max_pixels
     }
+
+    /// [`Bounds::fits`] as a result, with the error a person reads.
+    pub fn check(&self, width: u32, height: u32) -> Result<(), AiError> {
+        if self.fits(width, height) {
+            return Ok(());
+        }
+        Err(AiError::invalid(format!(
+            "pictures for {} may be at most {} pixels a side and {} megapixels",
+            self.service,
+            self.max_side,
+            self.max_pixels / (1024 * 1024)
+        )))
+    }
 }
 
-/// The inline bytes of the request's `role` input. `adapter` names the service in the error when
-/// the input is missing ("FLUX Fill needs a mask"); `what` names the input.
+/// The inline bytes of the request's `role` input; `what` names the input in errors.
 pub fn inline<'a>(
     request: &'a Request,
+    bounds: Bounds,
     role: InputRole,
-    adapter: &str,
     what: &str,
 ) -> Result<&'a [u8], AiError> {
+    let adapter = bounds.service;
     let input = request
         .inputs
         .iter()
@@ -61,13 +76,9 @@ fn bad_mask() -> AiError {
 }
 
 /// Reads the craft mask and returns an opaque 8-bit grayscale PNG, white where to paint and black
-/// where to keep, with its size. A mask outside `bounds` fails with `too_big()`; one that marks
-/// nothing to fill is refused.
-pub fn binary(
-    data: &[u8],
-    bounds: Bounds,
-    too_big: impl Fn() -> AiError,
-) -> Result<(Vec<u8>, u32, u32), AiError> {
+/// where to keep, with its size. A mask outside `bounds`, or one that marks nothing to fill, is
+/// refused.
+pub fn binary(data: &[u8], bounds: Bounds) -> Result<(Vec<u8>, u32, u32), AiError> {
     if !matches!(crate::sniff::media_type(data), Some(("image/png", _))) {
         return Err(AiError::invalid("the mask must be a PNG image"));
     }
@@ -78,9 +89,7 @@ pub fn binary(
     decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(|_| bad_mask())?;
     let (width, height) = (reader.info().width, reader.info().height);
-    if !bounds.fits(width, height) {
-        return Err(too_big());
-    }
+    bounds.check(width, height)?;
     let mut buffer = vec![0u8; reader.output_buffer_size().ok_or_else(bad_mask)?];
     let frame = reader.next_frame(&mut buffer).map_err(|_| bad_mask())?;
     let channels = match frame.color_type {

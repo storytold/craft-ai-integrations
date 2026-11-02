@@ -18,6 +18,7 @@ pub(crate) const PATH: &str = "/flux-pro-1.0-fill";
 const MAX_SIDE: u32 = 8192;
 const MAX_PIXELS: u64 = 32 * 1024 * 1024;
 const BOUNDS: Bounds = Bounds {
+    service: "FLUX Fill",
     max_side: MAX_SIDE,
     max_pixels: MAX_PIXELS,
 };
@@ -40,28 +41,10 @@ pub(crate) fn result_media(data: &[u8]) -> Option<&'static str> {
     sniff(data)
 }
 
-fn inline<'a>(request: &'a Request, role: InputRole, what: &str) -> Result<&'a [u8], AiError> {
-    mask::inline(request, role, "FLUX Fill", what)
-}
-
-fn too_big() -> AiError {
-    AiError::invalid(format!(
-        "pictures for FLUX Fill may be at most {MAX_SIDE} pixels a side and 32 megapixels"
-    ))
-}
-
-fn check_size(width: u32, height: u32) -> Result<(), AiError> {
-    if BOUNDS.fits(width, height) {
-        Ok(())
-    } else {
-        Err(too_big())
-    }
-}
-
 /// Reads the craft mask and returns BFL's: an opaque 8-bit grayscale PNG, white where to paint,
 /// black where to keep (see [`craft_ai_media::mask::binary`]).
 pub(crate) fn bfl_mask(data: &[u8]) -> Result<(Vec<u8>, u32, u32), AiError> {
-    mask::binary(data, BOUNDS, too_big)
+    mask::binary(data, BOUNDS)
 }
 
 /// Copies the options BFL documents for this endpoint, each checked against its documented range.
@@ -111,14 +94,14 @@ pub(crate) fn body(request: &Request) -> Result<Value, AiError> {
             _ => None,
         })
         .ok_or_else(|| AiError::invalid("FLUX Fill needs a non-empty text prompt"))?;
-    let source = inline(request, InputRole::Source, "source image")?;
+    let source = mask::inline(request, BOUNDS, InputRole::Source, "source image")?;
     let media = sniff(source)
         .ok_or_else(|| AiError::invalid("the source image is not a PNG, JPEG or WebP image"))?;
-    let (mask, width, height) = bfl_mask(inline(request, InputRole::Mask, "mask")?)?;
+    let (mask, width, height) = bfl_mask(mask::inline(request, BOUNDS, InputRole::Mask, "mask")?)?;
     if media == "image/png" {
         let (w, h) = mask::png_size(source)
             .ok_or_else(|| AiError::invalid("the source image is not a readable PNG"))?;
-        check_size(w, h)?;
+        BOUNDS.check(w, h)?;
         if (w, h) != (width, height) {
             return Err(AiError::invalid(
                 "the mask must be the same size as the source image",
