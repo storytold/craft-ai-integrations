@@ -110,12 +110,12 @@ fn try_builtin() -> Option<Vec<Feature>> {
         cloud(
             "openai",
             "OpenAI image editing",
-            "Your own OpenAI key, billed by OpenAI. Built and tested offline only.",
+            "Your own OpenAI key, billed by OpenAI. Used live from PhotoCraft.",
         ),
         cloud(
             "bfl",
             "Black Forest Labs FLUX.1 Fill",
-            "Your own BFL key, billed by Black Forest Labs. Built and tested offline only.",
+            "Your own BFL key, billed by Black Forest Labs. Used live from PhotoCraft.",
         ),
         cloud(
             "gemini",

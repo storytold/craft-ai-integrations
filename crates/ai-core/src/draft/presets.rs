@@ -42,7 +42,7 @@ pub const PRESETS: &[Preset] = &[
         endpoint: "https://generativelanguage.googleapis.com/v1beta",
         billing: Billing::Metered,
         needs_key: true,
-        note: "Gemini image models (Nano Banana) with your Google AI Studio API key: prompt-guided Generative fill. Billed by Google.",
+        note: "Gemini image models (Nano Banana) with your Google AI Studio API key: prompt-guided Generative fill. Gemini takes no mask and may change the picture outside the selection, so keep only the selected part. Billed by Google.",
     },
     Preset {
         key: "seedance",
