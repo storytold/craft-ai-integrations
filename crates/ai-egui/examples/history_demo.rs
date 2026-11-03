@@ -204,7 +204,7 @@ impl Demo {
                 self.note = "Cleared in this window only. The file on disk was not touched.".into();
             }
             HistoryAction::Export(csv) => {
-                self.note = match std::fs::write("history-export.csv", csv) {
+                self.note = match export(csv.as_bytes()) {
                     Ok(()) => "Wrote history-export.csv in the current folder.".into(),
                     Err(e) => format!("Could not write the file: {e}"),
                 };
@@ -263,4 +263,21 @@ fn main() -> eframe::Result {
             }))
         }),
     )
+}
+
+/// Writes `history-export.csv` without following whatever is already at that name: an old export
+/// or a link someone planted is removed (the link itself, never its target) and a new file is
+/// created in its place, readable only by this user.
+fn export(csv: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    const NAME: &str = "history-export.csv";
+    match std::fs::remove_file(NAME) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(NAME)?.write_all(csv)
 }
