@@ -38,7 +38,9 @@ pub use store::{MediaStore, MediaStoreConfig};
 
 /// The link rules, for other downloaders that must follow the same ones.
 pub mod links {
-    pub use crate::url_rules::{check, check_resolved, is_loopback, redirect_target};
+    pub use crate::url_rules::{
+        GuardedResolver, check, check_resolved, is_loopback, redirect_target,
+    };
 }
 
 use craft_ai_core::{
