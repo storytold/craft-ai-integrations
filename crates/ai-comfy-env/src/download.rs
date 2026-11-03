@@ -99,7 +99,7 @@ enum Attempt {
 
 impl Downloader {
     pub fn new(config: DownloadConfig) -> Self {
-        let agent = ureq::Agent::new_with_config(
+        let agent = ureq::Agent::with_parts(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
                 .proxy(craft_ai_http::loopback_proxy())
@@ -109,6 +109,8 @@ impl Downloader {
                 .timeout_connect(Some(config.connect_timeout))
                 .timeout_recv_body(Some(config.body_timeout))
                 .build(),
+            ureq::unversioned::transport::DefaultConnector::new(),
+            craft_ai_media::links::GuardedResolver::new(config.allow_loopback),
         );
         Self { agent, config }
     }
