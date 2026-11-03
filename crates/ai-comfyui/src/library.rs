@@ -31,10 +31,11 @@ mod native_paths {
     pub use craft_ai_native::paths;
 }
 
-use crate::workflow::{Binding, Workflow};
+use crate::workflow::{Binding, MAX_GRAPH_NODES, Workflow};
 use craft_ai_core::{AiError, ErrorKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -259,18 +260,21 @@ fn infer_output_node(graph: &Value) -> Result<String, AiError> {
             "API workflow must be a node map",
         ));
     };
-    let consumed: Vec<String> = nodes
+    // Refused again by `Workflow::import`; checked here so an oversized graph costs nothing.
+    if nodes.len() > MAX_GRAPH_NODES {
+        return Err(AiError::invalid("workflow graph is too large"));
+    }
+    let consumed: HashSet<&str> = nodes
         .values()
         .filter_map(|n| n.get("inputs").and_then(Value::as_object))
         .flat_map(|inputs| inputs.values())
         .filter_map(Value::as_array)
         .flatten()
         .filter_map(Value::as_str)
-        .map(str::to_owned)
         .collect();
     let mut sink: Option<&String> = None;
     for id in nodes.keys() {
-        if !consumed.iter().any(|c| c == id) {
+        if !consumed.contains(id.as_str()) {
             sink = Some(id);
         }
     }
