@@ -76,6 +76,56 @@ impl Default for DownloadConfig {
     }
 }
 
+/// Opens the part file without following a link at its name. A fresh start removes what was there
+/// and creates the file exclusively, which never follows a link; a resume opens the existing file
+/// with `O_NOFOLLOW` on Unix. Either way the handle must be a plain file with one name, so the
+/// bytes cannot land in a file elsewhere.
+fn open_part(part: &Path, append: bool) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    if append {
+        options.append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+    } else {
+        match std::fs::remove_file(part) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        options.write(true).create_new(true);
+    }
+    let file = options.open(part)?;
+    let meta = file.metadata()?;
+    #[cfg(unix)]
+    let single = std::os::unix::fs::MetadataExt::nlink(&meta) == 1;
+    // The link count cannot be read here, so a part from an earlier run is never resumed (see
+    // `resumable`) and this handle is always the one this run created exclusively.
+    #[cfg(not(unix))]
+    let single = true;
+    if !meta.is_file() || !single {
+        return Err(std::io::Error::other(
+            "the download file is not a plain file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Whether a part file may be resumed: a plain file with one name. The link count is only
+/// readable on Unix, so elsewhere a part from an earlier run is cleared and downloaded afresh
+/// rather than appended to a file a hard link may join it to.
+fn resumable(meta: &std::fs::Metadata) -> bool {
+    if !meta.file_type().is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::MetadataExt::nlink(meta) == 1
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Downloads recipe files.
 pub struct Downloader {
     agent: ureq::Agent,
@@ -230,7 +280,23 @@ impl Downloader {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Attempt, AiError> {
-        let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+        // Anything at the part name that is not a plain file with a single name (a link someone
+        // planted, or a file a hard link joins to one elsewhere) is removed, never followed: only
+        // the entry goes, not what it points at. A resume would otherwise append the response to
+        // a file elsewhere, or fail on every retry because the open refuses a second name.
+        let mut have = match std::fs::symlink_metadata(part) {
+            Ok(meta) if resumable(&meta) => meta.len(),
+            Ok(_) => {
+                std::fs::remove_file(part).map_err(|_| {
+                    AiError::new(
+                        ErrorKind::Internal,
+                        "could not clear what is in the way of the download file",
+                    )
+                })?;
+                0
+            }
+            Err(_) => 0,
+        };
         if have > file.size_bytes {
             // A part bigger than the promised file can only be cleared, never resumed;
             // and a part that cannot be cleared either must fail, not start over on
@@ -308,12 +374,7 @@ impl Downloader {
             ));
         }
         let start = if append { have } else { 0 };
-        let mut out = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(append)
-            .truncate(!append)
-            .open(part)
+        let mut out = open_part(part, append)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not open the download file"))?;
         self.copy(response, &mut out, start, file.size_bytes, cancel, progress)
     }

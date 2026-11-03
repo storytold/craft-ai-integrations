@@ -2071,6 +2071,7 @@ dependencies = [
  "dirs 7.0.0",
  "flate2",
  "fs4",
+ "libc",
  "percent-encoding",
  "serde",
  "serde_json",
