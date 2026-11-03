@@ -36,6 +36,7 @@ Layout and rules mirror craft-libs: edition 2024, `MIT OR Apache-2.0`, no `unsaf
 | `craft-ai-engine`, `craft-ai-engine-candle`, `craft-ai-engine-rten`, `craft-ai-engine-burn` | Built-in model engines: the runner contract and the one provider that runs any registered model on this computer; SAM 3 on Candle (Apache-2.0 only; see its NOTICE); SAM 2.1 on rten, a pure Rust engine that reads the publisher's `.onnx` files as they are, on the processor (the default); and SAM 2.1 on Burn, an optional graphics-card engine that reads weights prepared once on this computer (`craft-ai-burn-setup`). Guides: `docs/ADD-AN-ENGINE.md`, `docs/BURN-ENGINE.md`. |
 | `craft-ai-comfy-env` | Finds an existing ComfyUI Desktop install, inventories its model files and node packs, downloads missing model files into it. |
 | `craft-ai-egui` | Theme-neutral egui widgets: status, model picker, consent prompt, job progress, connection panel, history. Needs Rust 1.95. |
+| `craft-ai-mcp` | Bridge that exposes the Craft AI tool catalogue as MCP tools over streamable HTTP for LM Studio/Bionic hosts; discovers new apps in the `storytold` org and installs matching skills. |
 
 `craft-ai-egui` targets egui 0.37 and resolves it through the reviewed storytold family at
 `6d518fc799681571963842f95b55a6b68431b15a`, with winit at
