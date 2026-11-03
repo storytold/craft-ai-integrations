@@ -1,6 +1,7 @@
 //! Substitution rules for declarative specs: what a template may name, and that the structure of
 //! a request can never come from the user's text.
 
+use craft_ai_core::spec::MAX_TEMPLATE_BYTES;
 use craft_ai_core::spec::template::{Slot, Values, render_text, render_value, slots, value_slots};
 use serde_json::json;
 
@@ -33,9 +34,12 @@ fn the_three_names_are_known_and_nothing_else() {
 fn braces_are_closed_or_doubled() {
     assert!(slots("a { b").unwrap_err().contains("never closed"));
     assert!(slots("a } b").unwrap_err().contains("lone }"));
-    assert_eq!(render_text("{{literal}}", &values()).unwrap(), "{literal}");
     assert_eq!(
-        render_text("{{{prompt}}}", &values()).unwrap(),
+        render_text("{{literal}}", &values(), &mut values().budget()).unwrap(),
+        "{literal}"
+    );
+    assert_eq!(
+        render_text("{{{prompt}}}", &values(), &mut values().budget()).unwrap(),
         "{a red door}"
     );
 }
@@ -47,7 +51,7 @@ fn text_is_inserted_and_never_read_again() {
         ..values()
     };
     assert_eq!(
-        render_text("say: {prompt}!", &v).unwrap(),
+        render_text("say: {prompt}!", &v, &mut v.budget()).unwrap(),
         "say: {job_id} and {{ and }!"
     );
 }
@@ -59,7 +63,7 @@ fn a_prompt_cannot_add_a_field_or_change_a_key() {
         prompt: Some(r#"x","admin":true,"y":"#),
         ..values()
     };
-    let body = render_value(&template, &v).unwrap();
+    let body = render_value(&template, &v, &mut v.budget()).unwrap();
     assert_eq!(body["prompt"], json!(r#"x","admin":true,"y":"#));
     assert_eq!(body.as_object().unwrap().len(), 3);
     assert!(body.get("admin").is_none());
@@ -69,7 +73,7 @@ fn a_prompt_cannot_add_a_field_or_change_a_key() {
 #[test]
 fn keys_are_literal_and_nested_values_are_rendered() {
     let template = json!({"a": [{"b": "{model}"}, "{job_id}"], "c": {"d": "{prompt}"}});
-    let body = render_value(&template, &values()).unwrap();
+    let body = render_value(&template, &values(), &mut values().budget()).unwrap();
     assert_eq!(
         body,
         json!({"a": [{"b": "img-1"}, "job-7"], "c": {"d": "a red door"}})
@@ -87,7 +91,12 @@ fn keys_are_literal_and_nested_values_are_rendered() {
 
 #[test]
 fn a_key_is_never_substituted_even_when_it_looks_like_a_slot() {
-    let body = render_value(&json!({"{prompt}": "{model}"}), &values()).unwrap();
+    let body = render_value(
+        &json!({"{prompt}": "{model}"}),
+        &values(),
+        &mut values().budget(),
+    )
+    .unwrap();
     assert_eq!(body, json!({"{prompt}": "img-1"}));
 }
 
@@ -97,6 +106,25 @@ fn a_slot_with_no_value_is_an_error_not_an_empty_string() {
         prompt: Some("x"),
         ..Values::default()
     };
-    let why = render_text("/jobs/{job_id}", &v).unwrap_err();
+    let why = render_text("/jobs/{job_id}", &v, &mut v.budget()).unwrap_err();
     assert!(why.contains("{job_id} is not available"), "{why}");
+}
+
+#[test]
+fn a_template_cannot_multiply_a_large_prompt_past_the_call_budget() {
+    let big = "p".repeat(MAX_TEMPLATE_BYTES);
+    let v = Values {
+        prompt: Some(&big),
+        ..values()
+    };
+    // Once is always fine; twice fits in the slack; three times is over the budget.
+    let template = json!({"a": "{prompt}", "b": "{prompt}", "c": "{prompt}"});
+    let why = render_value(&template, &v, &mut v.budget()).unwrap_err();
+    assert!(why.contains("too large"), "{why}");
+    let mut budget = v.budget();
+    render_value(&json!(["{prompt}", "{prompt}"]), &v, &mut budget).unwrap();
+    assert!(budget < MAX_TEMPLATE_BYTES);
+    // Short values may be repeated freely.
+    let mut budget = values().budget();
+    render_text(&"{model}{job_id}".repeat(64), &values(), &mut budget).unwrap();
 }
