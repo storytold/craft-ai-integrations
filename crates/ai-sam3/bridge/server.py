@@ -9,11 +9,18 @@ import base64
 import binascii
 import io
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 MAX_REQUEST = 24 * 1024 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
+# A client that stalls is dropped: each read waits at most IDLE_SECONDS, and the whole body must
+# arrive within BODY_SECONDS. At most MAX_CONNECTIONS are served at once; more are closed.
+IDLE_SECONDS = 15
+BODY_SECONDS = 60
+MAX_CONNECTIONS = 8
 
 
 def predict_with_sam3(checkpoint):
@@ -42,8 +49,52 @@ def predict_with_sam3(checkpoint):
     return predict
 
 
+class BridgeServer(ThreadingHTTPServer):
+    """One thread per connection, so a slow client cannot block the others, up to a fixed count."""
+
+    daemon_threads = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
+def read_body(rfile, size, deadline):
+    """Exactly `size` bytes, or None if the client stops sending or runs past `deadline`."""
+    chunks, have = [], 0
+    while have < size:
+        if time.monotonic() > deadline:
+            return None
+        try:
+            chunk = rfile.read1(min(size - have, 1 << 20))
+        except OSError:
+            return None
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        have += len(chunk)
+    return b"".join(chunks)
+
+
 def handler_for(predict):
+    # The model is not shared between threads: one prediction at a time.
+    predicting = threading.Lock()
+
     class Handler(BaseHTTPRequestHandler):
+        timeout = IDLE_SECONDS
+
         def log_message(self, *_args):
             # Do not log prompts, image contents, or arbitrary request paths.
             pass
@@ -71,7 +122,11 @@ def handler_for(predict):
                 if not 0 < size <= MAX_REQUEST:
                     self.reply(413, {"error": "request too large"})
                     return
-                body = json.loads(self.rfile.read(size))
+                raw_body = read_body(self.rfile, size, time.monotonic() + BODY_SECONDS)
+                if raw_body is None:
+                    self.close_connection = True
+                    return
+                body = json.loads(raw_body)
                 prompt = body["prompt"]
                 image = body["image"]
                 if not isinstance(prompt, str) or not 0 < len(prompt) <= 4096:
@@ -85,7 +140,9 @@ def handler_for(predict):
                 self.reply(400, {"error": "invalid detection request"})
                 return
             try:
-                self.reply(200, predict(raw, prompt))
+                with predicting:
+                    result = predict(raw, prompt)
+                self.reply(200, result)
             except Exception:
                 # Detailed exceptions can contain paths or image data; do not reflect them.
                 self.reply(500, {"error": "SAM 3 inference failed"})
@@ -103,7 +160,7 @@ def main():
     if not 1 <= args.port <= 65535:
         ap.error("port must be 1..65535")
     backend = predict_with_sam3(args.checkpoint)
-    server = HTTPServer(("127.0.0.1", args.port), handler_for(backend))
+    server = BridgeServer(("127.0.0.1", args.port), handler_for(backend))
     print(f"SAM 3 bridge ready at http://127.0.0.1:{args.port}/v1", flush=True)
     server.serve_forever()
 

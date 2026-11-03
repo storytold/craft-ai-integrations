@@ -1,12 +1,13 @@
 import base64
 import json
+import socket
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
-from http.server import HTTPServer
-
-from server import handler_for
+import server
+from server import BridgeServer, handler_for
 
 
 class BridgeTests(unittest.TestCase):
@@ -18,7 +19,8 @@ class BridgeTests(unittest.TestCase):
             cls.seen.append((raw, prompt))
             return {"width": 12, "height": 8, "boxes": [[1, 2, 3, 4]], "scores": [0.7]}
 
-        cls.server = HTTPServer(("127.0.0.1", 0), handler_for(fake))
+        server.IDLE_SECONDS, server.BODY_SECONDS = 1, 2
+        cls.server = BridgeServer(("127.0.0.1", 0), handler_for(fake))
         cls.url = "http://127.0.0.1:%s/v1" % cls.server.server_port
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -51,6 +53,19 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as err:
             urllib.request.urlopen(req)
         self.assertIn(err.exception.code, (400, 413))
+
+    def test_a_stalled_body_neither_blocks_others_nor_holds_its_connection(self):
+        port = self.server.server_port
+        stalled = socket.create_connection(("127.0.0.1", port))
+        self.addCleanup(stalled.close)
+        stalled.sendall(b"POST /v1/detect HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{")
+        started = time.monotonic()
+        with urllib.request.urlopen(self.url + "/health", timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertLess(time.monotonic() - started, 1)
+        stalled.settimeout(10)
+        self.assertEqual(stalled.recv(1024), b"")  # closed by the server, not left open
+        self.assertLess(time.monotonic() - started, 5)
 
 
 if __name__ == "__main__":
