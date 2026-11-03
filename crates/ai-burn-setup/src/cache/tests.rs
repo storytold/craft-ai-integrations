@@ -240,3 +240,21 @@ fn a_manifest_that_cannot_be_opened_is_a_damaged_copy() {
 mod boundaries;
 #[path = "safety.rs"]
 mod safety;
+
+/// A pipe in place of an original is refused at once, not waited on with the model lock held.
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_place_of_an_original_is_refused_without_blocking() {
+    let r = Rig::new();
+    let encoder = r.source.join("encoder.onnx");
+    fs::remove_file(&encoder).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(&encoder).status();
+    if !made.is_ok_and(|s| s.success()) {
+        eprintln!("skipped: mkfifo is not available");
+        return;
+    }
+    let fake = Fake::default();
+    let error = r.prepare(&fake).unwrap_err();
+    assert!(error.message.contains("original model files"), "{error:?}");
+    assert_eq!(fake.0.get(), 0);
+}
