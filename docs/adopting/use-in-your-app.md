@@ -138,8 +138,8 @@ let request = Request::new(role.capability.clone())
 
 `plan` checks the request against the chosen model and builds the disclosure: what would leave
 this computer, and where it would go. It sends nothing and reads no key. For a `file:` handle on
-this computer it shows the file's size on disk, not the `size` you passed, and a file it cannot
-look at shows no size.
+this computer it shows the file's size on disk, not the `size` you passed. A file it cannot look
+at, or a handle address that does not parse, shows no size.
 
 <!-- snippet: plan -->
 ```rust

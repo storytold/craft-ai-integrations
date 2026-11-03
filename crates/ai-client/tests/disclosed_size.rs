@@ -4,6 +4,7 @@ use std::sync::Arc;
 use craft_ai_client::{AiClient, ProviderFactory};
 use craft_ai_core::*;
 use craft_ai_native::{secrets::MemoryStore, shared::SharedStore};
+use serde_json::json;
 
 /// An image role whose one input is the picture to send.
 fn role() -> Role {
@@ -19,58 +20,59 @@ fn request(payload: Payload) -> Request {
     Request::new(role().capability).with_input(InputRole::Source, payload)
 }
 
+/// A handle as it arrives in a deserialized request, without `Payload::handle`'s checks.
+fn raw_handle(uri: &str, size: u64) -> Payload {
+    serde_json::from_value(json!({
+        "type": "handle", "uri": uri, "media_type": "image/png", "size_bytes": size
+    }))
+    .unwrap()
+}
+
 struct World {
     dir: tempfile::TempDir,
     client: AiClient,
 }
 
 impl World {
-    /// A remote connection bound to the role, with an adapter that sends nothing.
+    /// A remote connection bound to the role, with a scripted adapter that sends nothing.
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let shared = SharedStore::new(dir.path().join("connections.json"));
-        let model = ModelInfo::new(ModelId::new("size-model").unwrap(), "Size model").with(
-            CapabilitySpec::new(role().capability)
-                .accepting(InputRole::Source, 1)
-                .requiring(InputRole::Source),
-        );
-        let connection: Connection = serde_json::from_value(serde_json::json!({
-            "id":"size-connection", "label":"Size connection", "provider":"size-fake",
-            "endpoint":"https://size.example.invalid/v1", "locality":"remote",
-            "auth":{"kind":"none"}, "billing":"free", "models":[model]
+        let spec = CapabilitySpec::new(role().capability)
+            .accepting(InputRole::Source, 1)
+            .requiring(InputRole::Source);
+        let model = ModelInfo::new(ModelId::new("size-model").unwrap(), "Size model").with(spec);
+        let store: StoreFile = serde_json::from_value(json!({
+            "schema_version": store::SCHEMA_VERSION,
+            "defaults": [{"role": role().id, "connection": "size-link", "model": model.id}],
+            "connections": [{
+                "id": "size-link", "label": "Size link", "provider": "size-fake",
+                "endpoint": "https://size.example.invalid/v1", "locality": "remote",
+                "auth": {"kind": "none"}, "billing": "free", "models": [model]
+            }]
         }))
         .unwrap();
-        shared
-            .replace(&StoreFile {
-                defaults: vec![Binding {
-                    role: role().id,
-                    connection: connection.id.clone(),
-                    model: model.id,
-                }],
-                connections: vec![connection],
-                ..StoreFile::default()
-            })
-            .unwrap();
+        let shared = SharedStore::new(dir.path().join("connections.json"));
+        shared.replace(&store).unwrap();
         let mut factory = ProviderFactory::standard();
         factory.register("size-fake", |_, _| {
-            Ok(Arc::new(mock::MockProvider::new(
-                Vec::new(),
-                mock::Script::default(),
-            )))
+            let script = mock::Script::default();
+            Ok(Arc::new(mock::MockProvider::new(Vec::new(), script)))
         });
-        let client = AiClient::new(
-            AppId::new("size-app").unwrap(),
-            shared,
-            Arc::new(MemoryStore::new()),
-        )
-        .with_factory(factory);
+        let secrets = Arc::new(MemoryStore::new());
+        let app = AppId::new("size-app").unwrap();
+        let client = AiClient::new(app, shared, secrets).with_factory(factory);
         Self { dir, client }
+    }
+
+    /// The disclosure the consent prompt would show.
+    fn plan(&self, payload: Payload) -> Disclosure {
+        let plan = self.client.plan(&role(), request(payload)).unwrap();
+        plan.disclosure().clone()
     }
 
     /// The size the consent prompt would show for the one input.
     fn disclosed(&self, payload: Payload) -> Option<u64> {
-        let plan = self.client.plan(&role(), request(payload)).unwrap();
-        plan.disclosure().items[0].bytes
+        self.plan(payload).items[0].bytes
     }
 
     /// A `file:` address for a real file of `len` bytes in the fixture folder.
@@ -96,6 +98,23 @@ fn a_local_files_size_is_measured_not_taken_from_the_app() {
         let payload = Payload::handle(&uri, "image/png", claimed).unwrap();
         assert_eq!(w.disclosed(payload), Some(4096), "claimed {claimed:?}");
     }
+    // The uploaders' parser ignores spaces around an address, so the same file is measured.
+    let padded = Payload::handle(&format!(" {uri} "), "image/png", Some(5)).unwrap();
+    assert_eq!(w.disclosed(padded), Some(4096));
+}
+
+/// A new plan for the same address measures the file again, so a changed file is a changed
+/// disclosure and is asked about again.
+#[test]
+fn a_replanned_file_shows_its_current_size() {
+    let w = World::new();
+    let uri = w.file("changing.png", 5);
+    let first = w.plan(Payload::handle(&uri, "image/png", Some(5)).unwrap());
+    w.file("changing.png", 9);
+    let second = w.plan(Payload::handle(&uri, "image/png", Some(5)).unwrap());
+    assert_eq!(first.items[0].bytes, Some(5));
+    assert_eq!(second.items[0].bytes, Some(9));
+    assert_ne!(first, second);
 }
 
 /// A size that could not be checked is not shown as if it were known.
@@ -120,12 +139,23 @@ fn other_payloads_keep_their_size() {
     assert_eq!(w.disclosed(inline), Some(3));
 }
 
-/// An invalid file address cannot lend credibility to an app's claimed size.
+/// An address that does not parse cannot lend credibility to an app's claimed size, however
+/// its scheme is spelled or padded.
 #[test]
-fn malformed_file_addresses_show_no_claimed_size() {
+fn addresses_that_do_not_parse_show_no_size() {
     let w = World::new();
-    for uri in ["file://[bad", "FiLe://[bad", "file://host:bad/a.png"] {
+    for uri in [
+        "file://[bad",
+        "FiLe://[bad",
+        "file://host:bad/a.png",
+        " file://[bad",
+        "not an address",
+    ] {
         let payload = Payload::handle(uri, "image/png", Some(5)).unwrap();
-        assert_eq!(w.disclosed(payload), None, "{uri}");
+        assert_eq!(w.disclosed(payload), None, "{uri:?}");
+    }
+    // A deserialized request skips `Payload::handle`, so control characters can reach here.
+    for uri in ["\tfile://[bad", "fi\nle://[bad", "\u{1}file://[bad"] {
+        assert_eq!(w.disclosed(raw_handle(uri, 5)), None, "{uri:?}");
     }
 }

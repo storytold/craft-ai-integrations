@@ -2,31 +2,27 @@
 //!
 //! A `file:` handle carries the size the app claims, and `Disclosure::for_request` (pure, no I/O)
 //! can only repeat it. Here the file is looked at instead: a regular file on this machine shows
-//! its length, and one that cannot be looked at (gone, a folder, another machine's share, not a
-//! valid address) shows no size rather than the claimed one. Other handles and inline data keep
+//! its length, and one that cannot be looked at (gone, a folder, another machine's share) shows
+//! no size rather than the claimed one. An address that does not parse cannot be checked at all,
+//! whatever its scheme looks like, so it shows no size either. Other handles and inline data keep
 //! the size they carry.
+//!
+//! The address is read with the same parser and host rule the uploaders use, so the size shown
+//! is the size of the file that would be read.
 
 use craft_ai_core::{Disclosure, Payload, Request};
 
 /// Replaces the claimed size of every `file:` input in `disclosure` with the measured one.
 pub(crate) fn measure_local_files(disclosure: &mut Disclosure, request: &Request) {
+    // `Disclosure::for_request` makes one item per input, in order.
     for (item, input) in disclosure.items.iter_mut().zip(&request.inputs) {
         let Payload::Handle(handle) = &input.payload else {
             continue;
         };
-        let url = url::Url::parse(&handle.uri).ok();
-        // Even a malformed file address must discard the app's unverified claim.
-        let is_file = url.as_ref().map_or_else(
-            || {
-                handle
-                    .uri
-                    .split_once(':')
-                    .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
-            },
-            |url| url.scheme() == "file",
-        );
-        if is_file {
-            item.bytes = url.as_ref().and_then(local_file_len);
+        match url::Url::parse(&handle.uri) {
+            Ok(url) if url.scheme() == "file" => item.bytes = local_file_len(&url),
+            Ok(_) => {}
+            Err(_) => item.bytes = None,
         }
     }
 }
