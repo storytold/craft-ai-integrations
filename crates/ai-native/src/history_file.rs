@@ -91,11 +91,20 @@ impl HistoryFile {
             if len > 0 && len + line.len() as u64 > self.max_bytes {
                 fs::rename(&self.path, self.rotated_path())?;
             }
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .read(true)
-                .open(&self.path)?;
+            let mut options = OpenOptions::new();
+            options.create(true).append(true).read(true);
+            // Records can hold prompts: the file is the user's alone, whatever the umask, and a
+            // file left readable by an older version is tightened before anything is added.
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&self.path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if file.metadata()?.permissions().mode() & 0o077 != 0 {
+                    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                }
+            }
             // A crash can leave a line with no newline. Starting on a fresh line keeps the next
             // record readable instead of gluing it to the damage.
             if ends_mid_line(&mut file)? {
