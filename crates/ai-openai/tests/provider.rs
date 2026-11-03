@@ -561,3 +561,45 @@ fn prices_in_a_model_list_are_ignored_unless_the_server_is_openrouter() {
         (None, None)
     );
 }
+
+/// The scripted server itself refuses an endless request head instead of rescanning it, and still
+/// reads a delimiter that arrives split across two writes.
+#[test]
+fn the_test_server_bounds_a_request_head() {
+    use std::io::{Read, Write};
+    let server = Server::start(|_| Reply::Json(200, "{}".into()));
+    let addr = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+    let mut hostile = std::net::TcpStream::connect(&addr).unwrap();
+    let line = format!("X-Pad: {}\r\n", "a".repeat(1000));
+    let mut sent = hostile.write_all(b"GET /v1/models HTTP/1.1\r\n").is_ok();
+    for _ in 0..200 {
+        sent &= hostile.write_all(line.as_bytes()).is_ok();
+    }
+    let _ = sent; // the server may close before the last write
+    let mut rest = Vec::new();
+    hostile
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let _ = hostile.read_to_end(&mut rest);
+    assert!(rest.is_empty(), "an oversized head got a reply");
+    assert_eq!(server.count(), 0);
+
+    let mut split = std::net::TcpStream::connect(&addr).unwrap();
+    split
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n\r")
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    split.write_all(b"\n").unwrap();
+    let mut reply = Vec::new();
+    split.read_to_end(&mut reply).unwrap();
+    assert!(
+        reply.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert_eq!(server.count(), 1);
+}
