@@ -173,3 +173,24 @@ fn a_file_far_over_the_cap_is_refused_not_loaded() {
     fs::write(file.path(), vec![b'a'; 1024 + MAX_LINE_BYTES + 1]).unwrap();
     assert!(file.read().is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_history_file_is_private_to_the_user_even_if_it_was_not_before() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jobs.jsonl");
+    let file = HistoryFile::new(&path).with_max_bytes(1024);
+    file.append(&start("a")).unwrap();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), 0o600);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    file.append(&end("a")).unwrap();
+    assert_eq!(mode(&path), 0o600);
+    // Rotation renames the live file, so the rotated copy keeps the private mode too.
+    for i in 0..40 {
+        file.append(&start(&format!("r{i}"))).unwrap();
+    }
+    assert_eq!(mode(&file.rotated_path()), 0o600);
+    assert_eq!(mode(&path), 0o600);
+}
