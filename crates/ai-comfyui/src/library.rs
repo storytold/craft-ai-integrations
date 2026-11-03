@@ -514,7 +514,7 @@ fn file_name(id: &str) -> String {
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, AiError> {
-    let file = fs::File::open(path).map_err(|_| {
+    let file = crate::input::open_plain_file(path).map_err(|_| {
         AiError::new(
             ErrorKind::InvalidRequest,
             "could not open the workflow file",

@@ -2051,6 +2051,7 @@ dependencies = [
  "craft-ai-http",
  "craft-ai-media",
  "craft-ai-native",
+ "libc",
  "png",
  "serde",
  "serde_json",
