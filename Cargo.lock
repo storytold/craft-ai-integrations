@@ -2212,6 +2212,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-features",
  "craft-ai-http",
+ "craft-ai-media",
  "craft-ai-native",
  "serde",
  "serde_json",

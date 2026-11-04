@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 craft-ai-core.workspace = true
     craft-ai-client.workspace = true
+    craft-ai-media.workspace = true
     ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 craft-ai-native.workspace = true
 

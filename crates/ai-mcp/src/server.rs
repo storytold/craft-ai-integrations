@@ -7,19 +7,39 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::mcp::McpState;
+
+/// Maximum number of concurrent connections the server will serve at once. Overflowing peers get a
+/// plain 503 rather than pinning unbounded threads.
+const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+
+/// Hard cap on header bytes before we give up, so a malicious or buggy client cannot make us buffer
+/// an unbounded amount of data while hunting for the end-of-headers marker.
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+
+/// Total wall-clock budget for reading one request's headers. The per-read timeout alone is not
+/// enough if a client trickles bytes just below it.
+const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Hard cap on the raw request body we will allocate, so a huge `Content-Length` cannot blow up memory.
+const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// One parsed HTTP request (method, path, body).
 #[derive(Debug)]
 struct HttpRequest {
     method: String,
     path: String,
+    /// The `Content-Type` header value, if present.
+    content_type: Option<String>,
+    /// The `Origin` header value, if present.
+    origin: Option<String>,
     body: Vec<u8>,
 }
 
@@ -28,17 +48,27 @@ pub fn bind(addr: std::net::SocketAddr) -> Result<TcpListener, std::io::Error> {
     TcpListener::bind(addr)
 }
 
-/// Accept loop: one thread per connection so a slow job never blocks the next request.
+/// Accept loop: one thread per connection so a slow job never blocks the next request. Concurrent
+/// connections are capped at [`MAX_CONCURRENT_CONNECTIONS`]; overflow peers get a plain 503 instead
+/// of pinning unbounded threads.
 pub fn run(listener: TcpListener, state: McpState) {
     let state = Arc::new(state);
-    for stream in listener.incoming() {
-        if let Ok(stream) = stream {
-            let state = Arc::clone(&state);
-            thread::spawn(move || {
-                // A panic inside one connection must not take down the server.
-                let _ = handle_connection(stream, &state);
-            });
+    let active = Arc::new(AtomicUsize::new(0));
+    for result in listener.incoming() {
+        let Ok(mut stream) = result else { continue; };
+        // Reject overflow before spawning so we never exceed the cap.
+        if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONCURRENT_CONNECTIONS {
+            active.fetch_sub(1, Ordering::SeqCst);
+            let _ = send_response(&mut stream, 503, "Service Unavailable", &Value::Null);
+            continue;
         }
+        let state = Arc::clone(&state);
+        let counter = Arc::clone(&active);
+        thread::spawn(move || {
+            // A panic inside one connection must not take down the server.
+            let _ = handle_connection(stream, &state);
+            counter.fetch_sub(1, Ordering::SeqCst);
+        });
     }
 }
 
@@ -54,8 +84,20 @@ fn handle_connection(mut stream: TcpStream, state: &McpState) -> Result<(), Stri
     };
 
     // Only POST /mcp is a valid MCP endpoint; everything else gets a plain 405.
-    if req.method != "POST" || !req.path.starts_with("/mcp") {
+    if req.method != "POST" || !is_mcp_path(&req.path) {
         return send_response(&mut stream, 405, "Method Not Allowed", &Value::Null);
+    }
+
+    // Reject anything that is not JSON before it can reach a tool call: the MCP spec advertises
+    // `application/json` and we refuse to guess at other encodings.
+    if !is_json_content_type(req.content_type.as_deref()) {
+        return send_response(&mut stream, 415, "Unsupported Media Type", &Value::Null);
+    }
+
+    // Reject any request carrying an `Origin` header — a browser-style cross-origin caller is not a
+    // trusted local MCP client and must never reach our tools.
+    if req.origin.is_some() {
+        return send_response(&mut stream, 403, "Forbidden", &Value::Null);
     }
 
     let body = match serde_json::from_slice::<Value>(&req.body) {
@@ -63,8 +105,23 @@ fn handle_connection(mut stream: TcpStream, state: &McpState) -> Result<(), Stri
         Err(_e) => return send_response(&mut stream, 400, "Bad Request", &Value::Null),
     };
 
-    let response = state.handle(&body);
+    // Notifications (no `id`) get no response per the JSON-RPC spec; close without writing.
+    let Some(response) = state.handle(&body) else {
+        return Ok(());
+    };
     send_response(&mut stream, 200, "OK", &response)
+}
+
+/// True for the exact `/mcp` path, ignoring any query string (e.g. `/mcp?x=1`).
+fn is_mcp_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or(path) == "/mcp"
+}
+
+/// True when `content_type` names JSON (case-insensitive, optional parameters allowed).
+fn is_json_content_type(content_type: Option<&str>) -> bool {
+    content_type
+        .map(|ct| ct.split(';').next().unwrap_or(ct).trim())
+        .is_some_and(|ct| ct.eq_ignore_ascii_case("application/json"))
 }
 
 /// Read a single HTTP request: headers up to the blank line, then the body per `Content-Length`.
@@ -85,17 +142,31 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let path = parts.next().unwrap_or("/").to_string();
 
     let mut content_length: Option<u64> = None;
+    let mut content_type: Option<String> = None;
+    let mut origin: Option<String> = None;
     for line in lines {
         if let Some((key, value)) = split_header(line) {
-            if key.eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse::<u64>().ok();
+            match key.to_ascii_lowercase().as_str() {
+                "content-length" => content_length = value.trim().parse::<u64>().ok(),
+                "content-type" => content_type = Some(value.trim().to_string()),
+                "origin" => origin = Some(value.to_string()),
+                _ => {}
             }
         }
     }
 
+    // Reject a declared body larger than we are willing to allocate before we touch it.
+    let declared = content_length.unwrap_or(0);
+    if declared > MAX_BODY_BYTES as u64 {
+        return Err(format!(
+            "body too large: {} bytes exceeds the {} byte limit",
+            declared, MAX_BODY_BYTES,
+        ));
+    }
+
     // Read the remainder of the body, if any.
     let have = body_so_far.len() as u64;
-    let need = content_length.unwrap_or(0).saturating_sub(have);
+    let need = declared.saturating_sub(have);
     let mut body = body_so_far.to_vec();
     if need > 0 {
         let mut chunk = vec![0u8; need as usize];
@@ -110,18 +181,27 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         body.extend_from_slice(&chunk);
     }
 
-    Ok(HttpRequest { method, path, body })
+    Ok(HttpRequest { method, path, content_type, origin, body })
 }
 
-/// Read bytes until the header block ends (`\r\n\r\n`). Returns everything seen so far.
+/// Read bytes until the header block ends (`\r\n\r\n`). Returns everything seen so far. Bounded by
+/// [`MAX_HEADER_BYTES`] and [`HEADER_READ_TIMEOUT`] so a client cannot make us buffer unbounded data
+/// or pin a thread for an arbitrary time.
 fn read_until_header_end(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
+    let start = Instant::now();
     loop {
+        if Instant::now().duration_since(start) > HEADER_READ_TIMEOUT {
+            return Err("timed out waiting for request headers".into());
+        }
         let mut chunk = vec![0u8; 4096];
         match stream.read(&mut chunk) {
             Ok(0) => return Err("connection closed before headers complete".into()),
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > MAX_HEADER_BYTES {
+                    return Err("request headers too large".into());
+                }
                 if has_header_end(&buf) {
                     break;
                 }
@@ -133,7 +213,7 @@ fn read_until_header_end(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
 }
 
 fn has_header_end(buf: &[u8]) -> bool {
-    buf.windows(4).any(|w| w == [b'\r', b'\n', b'\r', b'\n'])
+    buf.windows(4).any(|w| w == b"\r\n\r\n")
 }
 
 /// Index just past the first `\r\n\r\n` (where the body begins), or `None`.
@@ -232,7 +312,7 @@ mod tests {
         );
         assert!(resp.starts_with("HTTP/1.1 200 OK"));
         assert!(resp.contains("\"protocolVersion\""));
-        assert!(resp.contains("2025-03-07"));
+        assert!(resp.contains("2025-06-18"));
     }
 
     #[test]

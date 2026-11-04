@@ -10,19 +10,27 @@
 use std::time::Duration;
 
 use craft_ai_client::{AiClient, RoleStatus};
+use craft_ai_media::sniff;
 use craft_ai_core::{
-    ConsentLedger, InputRole, Payload, Request, Role,
+    ConsentLedger, InputRole, JobState, Payload, PayloadKind, Request, Role,
     job::{Event, Output},
 };
 use craft_ai_features::Feature;
 use serde_json::Value;
 
+/// An inline media asset returned by a job (bytes + MIME type), surfaced as MCP image content.
+#[derive(Debug, Clone)]
+pub struct Media {
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}
+
 /// The outcome of routing one MCP tool call.
 #[derive(Debug, Clone)]
 pub enum ToolCallResult {
-    /// The job ran to completion. `text` holds human-readable output lines (text results and a
-    /// summary of any media the provider returned).
-    Succeeded { text: Vec<String> },
+    /// The job ran to completion. `text` holds human-readable output lines; `media` holds any
+    /// inline image assets (bytes + MIME type) returned by the provider.
+    Succeeded { text: Vec<String>, media: Vec<Media> },
     /// The tool is not usable yet. `reason` is safe to show verbatim and points at what is missing
     /// (no model chosen, key absent, file gone) — this is the "prompt to install" signal.
     Unavailable { reason: String },
@@ -77,7 +85,7 @@ pub fn route_tool(
     }
 
     // 2. Build a request from the caller's arguments.
-    let request = match build_request(&feature, &args) {
+    let request = match build_request(feature, &args) {
         Ok(r) => r,
         Err(e) => return ToolCallResult::Failed { message: e },
     };
@@ -114,8 +122,20 @@ pub fn route_tool(
         }
     };
     match job.wait(Duration::from_millis(100), timeout) {
-        Ok(finished) => ToolCallResult::Succeeded {
-            text: extract_text(&finished.events),
+        Ok(finished) => match finished.state {
+            JobState::Succeeded => ToolCallResult::Succeeded {
+                text: extract_text(&finished.events),
+                media: extract_media(&finished.events),
+            },
+            JobState::Failed { error } => ToolCallResult::Failed {
+                message: error.message,
+            },
+            JobState::Cancelled => ToolCallResult::Failed {
+                message: "the job was cancelled".into(),
+            },
+            _ => ToolCallResult::Failed {
+                message: "the job did not finish in a supported state".into(),
+            },
         },
         Err(e) => ToolCallResult::Failed {
             message: e.to_string(),
@@ -180,7 +200,7 @@ fn source_payload(args: &Value, feature_id: &str) -> Result<Payload, String> {
         return read_inline(path);
     }
     if let Some(b64) = args.get("source_base64").and_then(|v| v.as_str()) {
-        return decode_inline(b64, "image/png");
+        return decode_inline(b64);
     }
     Err(format!(
         "'{feature_id}' needs a source image (pass `source_path` or `source_base64`)"
@@ -192,61 +212,50 @@ fn mask_payload(args: &Value, feature_id: &str) -> Result<Payload, String> {
         return read_inline(path);
     }
     if let Some(b64) = args.get("mask_base64").and_then(|v| v.as_str()) {
-        return decode_inline(b64, "image/png");
+        return decode_inline(b64);
     }
     Err(format!(
         "'{feature_id}' needs a mask (pass `mask_path` or `mask_base64`)"
     ))
 }
 
+/// The media type of `data`, sniffed from its first bytes rather than trusted from a label. Falls
+/// back to PNG when the bytes are unrecognised, so legacy callers that only ever sent PNGs keep
+/// working while real JPEG/GIF/etc. inputs get their true type.
+fn sniff_type(data: &[u8]) -> &'static str {
+    let head = data.get(..sniff::HEAD_LEN).unwrap_or(data);
+    sniff::media_type(head)
+        .map(|(m, _)| m)
+        .unwrap_or("image/png")
+}
+
 fn read_inline(path: &str) -> Result<Payload, String> {
+    // Reject oversized files before allocating their full contents — a client-supplied path must
+    // not let us stream an unbounded blob into memory.
+    let meta = std::fs::metadata(path)
+        .map_err(|e| format!("cannot stat source file '{path}': {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("source file '{path}' is not a regular file"));
+    }
+    let size = meta.len();
+    if size > craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES {
+        return Err(format!(
+            "source file '{path}' is {} bytes, larger than the {} byte inline limit",
+            size,
+            craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES,
+        ));
+    }
     let data = std::fs::read(path).map_err(|e| format!("cannot read source file '{path}': {e}"))?;
-    Payload::inline("image/png", data).map_err(|e| e.to_string())
+    Payload::inline(sniff_type(&data), data).map_err(|e| e.to_string())
 }
 
-fn decode_inline(b64: &str, media_type: &str) -> Result<Payload, String> {
-    let data = base64_decode(b64).ok_or_else(|| format!("bad base64 for source"))?;
-    Payload::inline(media_type, data).map_err(|e| e.to_string())
-}
-
-/// Minimal standard-base64 decode (no external dependency). Returns `None` on bad input.
-fn base64_decode(input: &str) -> Option<Vec<u8>> {
-    let alphabet = |c: u8| match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
-        b'+' => Some(62),
-        b'/' => Some(63),
-        _ => None,
-    };
-    let mut out = Vec::new();
-    let mut buf: [u8; 4] = [0; 4];
-    let mut n = 0usize;
-    for ch in input.chars() {
-        if ch == '=' || ch.is_whitespace() {
-            continue;
-        }
-        match alphabet(ch as u8) {
-            Some(v) => {
-                buf[n] = v;
-                n += 1;
-                if n == 4 {
-                    out.push((buf[0] << 2) | (buf[1] >> 4));
-                    out.push(((buf[1] & 0xF) << 4) | (buf[2] >> 2));
-                    out.push(((buf[2] & 3) << 6) | buf[3]);
-                    n = 0;
-                }
-            }
-            None => return None,
-        }
-    }
-    if n == 2 {
-        out.push((buf[0] << 2) | (buf[1] >> 4));
-    } else if n == 3 {
-        out.push((buf[0] << 2) | (buf[1] >> 4));
-        out.push(((buf[1] & 0xF) << 4) | (buf[2] >> 2));
-    }
-    Some(out)
+fn decode_inline(b64: &str) -> Result<Payload, String> {
+    // Strip whitespace (a client may wrap the base64 across lines), then use the strict core
+    // decoder so malformed input is rejected rather than silently mangled.
+    let compact = b64.chars().filter(|c| !c.is_ascii_whitespace()).collect::<String>();
+    let data = craft_ai_core::payload::base64_decode(&compact)
+        .ok_or_else(|| "bad base64 for source".to_string())?;
+    Payload::inline(sniff_type(&data), data).map_err(|e| e.to_string())
 }
 
 /// Human-readable lines from a finished job: text outputs verbatim, media outputs summarised.
@@ -268,7 +277,27 @@ fn extract_text(events: &[Event]) -> Vec<String> {
         .collect()
 }
 
-/// A small helper so callers can build a `Role` from a catalogue id without re-reading the list.
+/// Inline image assets from a finished job, in order. Only `Payload::Inline` payloads whose sniffed
+/// kind is an image are collected; text and handle outputs are left to [`extract_text`].
+fn extract_media(events: &[Event]) -> Vec<Media> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Output(Output { payload, .. }) => match payload {
+                Payload::Inline { media_type, data } if media_type.kind() == PayloadKind::Image => {
+                    Some(Media {
+                        mime_type: media_type.as_str().to_string(),
+                        data: data.clone(),
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// A small helper so callers can build a [`Role`] from a catalogue id without re-reading the list.
 pub fn role_for(feature_id: &str) -> Option<Role> {
     craft_ai_features::builtin()
         .iter()
@@ -282,9 +311,8 @@ mod tests {
 
     fn feature(id: &str) -> Feature {
         craft_ai_features::builtin()
-            .iter()
+            .into_iter()
             .find(|f| f.id == id)
-            .map(|f| f.clone())
             .unwrap()
     }
 
@@ -313,7 +341,7 @@ mod tests {
     #[test]
     fn build_request_maps_source_and_mask_for_inpaint() {
         // A tiny PNG-ish blob; the media type is what matters for the mapping test.
-        let b64 = base64_encode_inline(b"\x89PNG\x0d\x0a\x1a\x0a");
+        let b64 = craft_ai_core::payload::base64_encode(b"\x89PNG\x0d\x0a\x1a\x0a");
         let mut m = serde_json::Map::new();
         m.insert("source_base64".into(), Value::String(b64.clone()));
         m.insert("mask_base64".into(), Value::String(b64));
@@ -334,8 +362,8 @@ mod tests {
     #[test]
     fn base64_roundtrips() {
         let data: Vec<u8> = (0..16).map(|i| i as u8).collect();
-        let enc = base64_encode_inline(&data);
-        assert_eq!(base64_decode(&enc), Some(data));
+        let enc = craft_ai_core::payload::base64_encode(&data);
+        assert_eq!(craft_ai_core::payload::base64_decode(&enc), Some(data));
     }
 
     #[test]
@@ -344,24 +372,4 @@ mod tests {
         assert!(role_for("not-a-tool").is_none());
     }
 
-    /// Local helper mirroring `payload::base64_encode` so tests can build inputs without a dep.
-    fn base64_encode_inline(data: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::with_capacity(data.len().div_ceil(3).saturating_mul(4));
-        for chunk in data.chunks(3) {
-            let b0 = u32::from(chunk.first().copied().unwrap_or(0));
-            let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
-            let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
-            let n = (b0 << 16) | (b1 << 8) | b2;
-            for shift in [18u32, 12, 6, 0].into_iter().take(chunk.len() + 1) {
-                let idx = ((n >> shift) & 63) as usize;
-                out.push(ALPHABET.get(idx).copied().map_or('?', char::from));
-            }
-            for _ in chunk.len()..3 {
-                out.push('=');
-            }
-        }
-        out
-    }
 }

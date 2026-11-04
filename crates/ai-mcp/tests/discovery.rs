@@ -20,7 +20,6 @@ fn serve_json_once(json: &str) -> String {
                     Ok(_) => {
                         if buf.len() >= 4 && &buf[buf.len() - 4..] == b"\r\n\r\n" {
                             break;
-                        } else {
                         }
                     }
                     Err(_) => break,

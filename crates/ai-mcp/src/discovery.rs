@@ -1,8 +1,8 @@
 //! Dynamic discovery of Craft apps across the storytold org's public repositories.
 //!
-//! The shared catalogue is the source of truth for *which* tools exist. This module watches the
-//! org's public repos to surface apps that have landed but are not yet listed in the catalogue,
-//! so a new app (or tool it offers) shows up without editing this crate.
+//! The shared catalogue is the source of truth for *which* tools exist. This module fetches the
+//! org's public repos so newly landed apps can be noticed; it does not itself surface them to MCP
+//! hosts — `tools/list` reflects only the shared catalogue until a new app is added there.
 
 use std::io::Read;
 use std::time::Duration;
@@ -39,7 +39,7 @@ pub fn fetch_org_repos(org: &str) -> Result<Vec<OrgRepo>, String> {
 pub fn fetch_from(url: &str) -> Result<Vec<OrgRepo>, String> {
     let config = ureq::Agent::config_builder()
         .tls_config(craft_ai_http::tls_config())
-        .proxy(craft_ai_http::proxy_for(&url))
+        .proxy(craft_ai_http::proxy_for(url))
         .http_status_as_error(false)
         .max_redirects(0)
         .timeout_connect(Some(Duration::from_secs(15)))

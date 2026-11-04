@@ -1,10 +1,10 @@
-//! Bridge that exposes Craft AI tools to MCP clients (LM Studio / Bionic), with dynamic
-//! discovery of new apps and tools across the storytold org's public repositories.
+//! Bridge that exposes Craft AI tools to MCP clients (LM Studio / Bionic) over streamable HTTP at
+//! `/mcp`. The shared catalogue ([`craft_ai_features::builtin`]) is the source of truth for which
+//! tools exist and where they appear, and `tools/list` reflects exactly that catalogue.
 //!
-//! The shared catalogue ([`craft_ai_features::builtin`]) is the source of truth for which tools
-//! exist and where they appear. [`discovery`] watches the org's public repos to surface apps that
-//! have landed but are not yet listed in the catalogue, so a new app (or tool it offers) shows up
-//! without editing this crate.
+//! [`discovery`] is a helper that fetches the org's public repositories from GitHub so newly landed
+//! apps can be noticed. It is not yet wired into `tools/list`, so a new app does not show up to MCP
+//! hosts until it is added to the shared catalogue.
 
 pub mod catalogue;
 pub mod discovery;

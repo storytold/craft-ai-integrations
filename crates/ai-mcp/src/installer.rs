@@ -59,11 +59,14 @@ pub fn mcp_server_entry(port: u16) -> Value {
 
 /// Merge this bridge's entry into an existing `ng-mcp.json` file (creating it if absent).
 /// Other servers are preserved. Idempotent: re-running updates the same entry in place and never
-/// duplicates it. If there is no `servers` list yet, one is created.
+/// duplicates it. If there is no `servers` list yet, one is created. A missing file starts fresh;
+/// any other read failure, invalid JSON, a non-object root, or a non-array `servers` value returns
+/// an error and leaves the file unchanged.
 pub fn install_mcp_server(path: &Path, port: u16) -> Result<(), String> {
     let raw = match fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => "{}".to_string(), // file missing -> start fresh
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".to_string(), // file missing -> start fresh
+        Err(e) => return Err(format!("could not read {}: {e}", path.display())),
     };
     let mut doc: Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
@@ -76,11 +79,11 @@ pub fn install_mcp_server(path: &Path, port: u16) -> Result<(), String> {
     // Take the existing servers out as a Vec, modify it, and put it back. This avoids fighting
     // serde_json's immutable-by-default API for in-place array mutation. If there is no servers
     // list yet (fresh file), start from an empty one.
-    let mut servers: Vec<Value> = doc
-        .get("servers")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().cloned().collect())
-        .unwrap_or_default();
+    let mut servers: Vec<Value> = match doc.get("servers") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(a)) => a.clone(),
+        Some(_) => return Err("existing ng-mcp.json `servers` must be an array".into()),
+    };
 
     // Replace an existing entry with the same id, or append a new one.
     if let Some(pos) = servers
@@ -227,6 +230,21 @@ mod tests {
         fs::write(&path, "not json at all").unwrap();
         let err = install_mcp_server(&path, 12345).expect_err("should refuse invalid JSON");
         assert!(err.contains("not valid JSON"));
+    }
+
+    #[test]
+    fn install_mcp_server_refuses_non_array_servers() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("ng-mcp.json");
+        // A `servers` value that is an object, not an array.
+        let bad = "{\"servers\":{\"id\":\"github\",\"name\":\"GitHub\"}}";
+        fs::write(&path, bad).unwrap();
+        let err = install_mcp_server(&path, 12345)
+            .expect_err("should refuse a non-array `servers` value");
+        assert!(err.contains("`servers` must be an array"));
+
+        // The file must be left unchanged.
+        assert_eq!(fs::read_to_string(&path).unwrap(), bad);
     }
 
     #[test]

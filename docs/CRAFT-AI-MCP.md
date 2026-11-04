@@ -24,8 +24,8 @@ plan → consent → start → wait).
 | `mcp.rs` | Protocol layer only. Maps MCP `initialize` / `tools/list` / `ping` / `tools/call` onto the shared catalogue and the router. Knows nothing about sockets or HTTP. Builds JSON Schemas for tool inputs from each feature's declared inputs. |
 | `router.rs` | The heart of the bridge. Turns one MCP `tools/call` into a Craft AI job: looks up the feature, checks `AiClient::status` (the plain-language "what is missing" signal), builds the request from JSON args, plans it, honors consent, then starts and waits on the job. Returns `Succeeded` / `Unavailable` / `NeedsConsent` / `Failed`. |
 | `catalogue.rs` | Normalizes the shared `craft_ai_features::builtin()` catalogue into flat `ToolDescriptor`s (id, title, summary, capability, per-app status) that the MCP server lists. |
-| `discovery.rs` | Watches the `storytold` org's public GitHub repos to surface apps that have landed but are not yet in the shared catalogue — so a new app shows up without editing this crate. Bounded reads (4 MiB), archived repos excluded, name must contain "craft". |
-| `installer.rs` | Two installers: (1) merges this bridge's entry into Bionic's `ng-mcp.json` (idempotent, preserves other servers); (2) generates one `SKILL.md` folder per built-in feature for installation through Bionic's own `skill.install` tool. |
+| `discovery.rs` | Fetches the `storytold` org's public GitHub repos so newly landed apps can be noticed; not yet wired into `tools/list`, so a new app does not reach MCP hosts until it is added to the shared catalogue. Bounded reads (4 MiB), archived repos excluded, name must contain "craft". |
+| `installer.rs` | Two installers: (1) merges this bridge's entry into Bionic's `ng-mcp.json` (idempotent; preserves other servers — a missing file is created fresh, but an unreadable existing file, invalid JSON, a non-object root, or a non-array `servers` value returns an error and leaves the file unchanged); (2) generates one `SKILL.md` folder per built-in feature for installation through Bionic's own `skill.install` tool. |
 
 ## Running the bridge
 
