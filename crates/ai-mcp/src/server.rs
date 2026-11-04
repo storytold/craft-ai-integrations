@@ -28,8 +28,10 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// enough if a client trickles bytes just below it.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Hard cap on the raw request body we will allocate, so a huge `Content-Length` cannot blow up memory.
-const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+/// Hard cap on the raw request body we will allocate, so a huge `Content-Length` cannot blow up
+/// memory. Sized above the largest permitted inline image once base64-encoded (a 32 MiB raw
+/// payload is ~43 MiB in base64) plus JSON overhead, while still bounding any single request.
+const MAX_BODY_BYTES: usize = 96 * 1024 * 1024;
 
 /// One parsed HTTP request (method, path, body).
 #[derive(Debug)]

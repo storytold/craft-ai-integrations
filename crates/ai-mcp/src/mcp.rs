@@ -360,16 +360,22 @@ mod tests {
         let state = McpState::new(test_client());
         // Non-conforming client: name/arguments at the top level instead of under `params`.
         // We still route to the named tool rather than treating it as unknown.
-        let req = serde_json::json!({
+        let lenient_req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
             "name": "generate-image",
             "arguments": { "prompt": "a cat" }
         });
-        let resp = state.handle(&req).unwrap();
-        // Known tool with no model bound -> error tool result, not a JSON-RPC error.
-        assert_eq!(resp["result"]["isError"], true);
+        let lenient_resp = state.handle(&lenient_req).unwrap();
+
+        // The same call in the standard wire format (params under `params`) must produce an
+        // identical result — proving the lenient path routes to the named tool rather than any
+        // arbitrary error.
+        let std_req = call_req("generate-image", json!({ "prompt": "a cat" }));
+        let std_resp = state.handle(&std_req).unwrap();
+
+        assert_eq!(lenient_resp["result"], std_resp["result"]);
     }
 
     /// Tiny helper so tests read like the wire format.

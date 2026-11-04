@@ -61,7 +61,8 @@ pub fn mcp_server_entry(port: u16) -> Value {
 /// Other servers are preserved. Idempotent: re-running updates the same entry in place and never
 /// duplicates it. If there is no `servers` list yet, one is created. A missing file starts fresh;
 /// any other read failure, invalid JSON, a non-object root, or a non-array `servers` value returns
-/// an error and leaves the file unchanged.
+/// an error and leaves the file unchanged. The final write is atomic (temp file + rename), so Bionic
+/// never observes a half-written file.
 pub fn install_mcp_server(path: &Path, port: u16) -> Result<(), String> {
     let raw = match fs::read_to_string(path) {
         Ok(t) => t,
@@ -98,8 +99,22 @@ pub fn install_mcp_server(path: &Path, port: u16) -> Result<(), String> {
     doc["servers"] = Value::Array(servers);
 
     let out = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
-    fs::write(path, format!("{out}\n"))
-        .map_err(|e| format!("could not write {}: {e}", path.display()))
+    // Atomic replace: serialize to a temp file in the same directory, then rename over the target.
+    // The original stays intact until the rename succeeds, so an interrupted write never leaves a
+    // half-written ng-mcp.json (Bionic would reject every server in it). Preserve the target's
+    // permissions so any process that created it keeps access after the swap.
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, format!("{out}\n"))
+        .map_err(|e| format!("could not write temp {}: {e}", tmp.display()))?;
+    // Preserve the target's permissions on Unix (no-op elsewhere; NTFS ignores these bits).
+    #[cfg(unix)]
+    if let Ok(meta) = fs::metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode();
+        fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode)).ok();
+    }
+    fs::rename(&tmp, path)
+        .map_err(|e| format!("could not replace {}: {e}", path.display()))
 }
 
 /// Human-readable list of the JSON argument fields a feature accepts (mirrors `input_schema`).

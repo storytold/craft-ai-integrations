@@ -12,6 +12,11 @@ use serde::Deserialize;
 /// Largest response body read, in bytes. The org repos list is small; this bounds a hostile reply.
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
+/// Maximum number of pages fetched when following GitHub's `Link` header (`rel="next"`), so an
+/// org with more than 100 repositories returns the complete list rather than just the first page.
+/// Each page carries at most 100 repos (GitHub's per_page cap), so this bounds memory and requests.
+const MAX_PAGES: usize = 5;
+
 /// A repository as returned by the GitHub API.
 #[derive(Debug, Deserialize)]
 pub struct OrgRepo {
@@ -34,8 +39,10 @@ pub fn fetch_org_repos(org: &str) -> Result<Vec<OrgRepo>, String> {
     fetch_from(&url)
 }
 
-/// Fetches repositories from an explicit URL. The public [`fetch_org_repos`] is a convenience
-/// wrapper for the GitHub org endpoint; this form lets tests point at a scripted localhost server.
+/// Fetches repositories from an explicit URL, following GitHub's `Link` header (`rel="next"`)
+/// up to [`MAX_PAGES`] pages so an org with more than 100 repositories returns the complete list.
+/// The public [`fetch_org_repos`] is a convenience wrapper for the GitHub org endpoint; this form
+/// lets tests point at a scripted localhost server.
 pub fn fetch_from(url: &str) -> Result<Vec<OrgRepo>, String> {
     let config = ureq::Agent::config_builder()
         .tls_config(craft_ai_http::tls_config())
@@ -47,13 +54,41 @@ pub fn fetch_from(url: &str) -> Result<Vec<OrgRepo>, String> {
         .user_agent("craft-ai-mcp/0.1")
         .build();
     let agent = ureq::Agent::new_with_config(config);
-    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("GitHub returned HTTP {}", resp.status()));
+
+    let mut repos: Vec<OrgRepo> = Vec::new();
+    let mut current_url = url.to_string();
+    for _ in 0..MAX_PAGES {
+        let resp = agent.get(&current_url).call().map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("GitHub returned HTTP {}", resp.status()));
+        }
+        // Extract the next-page link before consuming the body.
+        let next = next_page_url(resp.headers().get("link").and_then(|v| v.to_str().ok()));
+        let bytes = read_capped(resp.into_body().into_reader(), MAX_BODY)?;
+        let page: Vec<OrgRepo> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        repos.extend(page);
+        current_url = match next {
+            Some(u) => u,
+            None => break,
+        };
     }
-    let bytes = read_capped(resp.into_body().into_reader(), MAX_BODY)?;
-    let repos: Vec<OrgRepo> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     Ok(repos)
+}
+
+/// The `rel="next"` URL from a GitHub `Link` header, if present. A header may list several
+/// comma-separated entries; only the one with `rel="next"` is followed.
+fn next_page_url(link_header: Option<&str>) -> Option<String> {
+    link_header?
+        .split(',')
+        .map(|part| part.trim())
+        .find_map(|part| {
+            if !part.contains("rel=\"next\"") && !part.contains("rel='next'") {
+                return None;
+            }
+            let start = part.find('<')? + 1;
+            let end = part.find('>')?;
+            Some(part[start..end].to_string())
+        })
 }
 
 /// Reads at most `max` bytes from a response body; more than that is an error rather than a
