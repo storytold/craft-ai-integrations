@@ -2193,7 +2193,6 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
- "fantastico-sdk",
  "serde_json",
  "ureq 3.4.2",
 ]
@@ -3860,15 +3859,6 @@ dependencies = [
  "bit-set 0.8.0",
  "regex-automata",
  "regex-syntax",
-]
-
-[[package]]
-name = "fantastico-sdk"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76044968b184c817d8d1aa67f5f827cda2972eb366d19606222df021fa1265be"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]

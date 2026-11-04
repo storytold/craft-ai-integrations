@@ -4,6 +4,7 @@ Do not import the runner here: it executes immediately. Each case breaks one saf
 the focused runtime test that must fail, so a compile error never counts as evidence.
 """
 SRC = 'crates/ai-fantastico/src/'
+ACCOUNT = SRC + 'account.rs'
 CHAT = SRC + 'chat.rs'
 ERRORS = SRC + 'errors.rs'
 JOBS = SRC + 'jobs.rs'
@@ -71,4 +72,46 @@ FA = [
     ('cut-stream-accepted', STREAM,
      'if a.finish_reason.is_none() {', 'if false {',
      P, 'lib', 'a_stream_cut_short_is_refused_and_a_finished_one_kept'),
+    # The model's provider gets the runtime key, never the account key.
+    ('account-key-sent-to-the-model', ACCOUNT,
+     'format!("Bearer {}", secret.expose()),', 'format!("Bearer {}", self.key.expose()),',
+     P, 'lib', 'mints_once_and_each_key_goes_only_where_it_belongs'),
+    # A key comes with the address it is spent at; there is no address of the adapter's own.
+    ('key-address-may-be-empty', ACCOUNT,
+     '.filter(|u| !u.is_empty())', '.filter(|_| true)',
+     P, 'lib', 'a_key_without_an_address_is_refused_with_no_fallback'),
+    # A key that expires within a minute is replaced before it is used.
+    ('expiring-key-reused', ACCOUNT,
+     '.is_some_and(|k| k.expires_at_ms.saturating_sub(now_ms()) > EXPIRY_SKEW_MS)',
+     '.is_some_and(|k| k.expires_at_ms.saturating_sub(now_ms()) > 0)',
+     P, 'lib', 'an_expiring_key_is_replaced'),
+    # A replacement key is minted in the conversation's activity session.
+    ('session-left-off-a-later-mint', ACCOUNT,
+     'body.insert("activitySessionId".into(), json!(s));', 'let _ = s;',
+     P, 'lib', 'the_session_and_product_go_to_every_mint'),
+    # Only a rejected key is replaced: a moderation block or a spent rate limit costs no new key.
+    ('any-refusal-reminted', ACCOUNT,
+     'if !first.is_remintable() {', 'if false {',
+     P, 'lib', 'moderation_is_not_reminted_and_keeps_its_name'),
+    # Only a failure where nothing was generated is sent again: a 502 may have been answered.
+    ('any-failure-retried', ACCOUNT,
+     'if p.is_transient() && retries < RETRIES => p,', 'if retries < RETRIES => p,',
+     P, 'lib', 'rate_limits_are_retried_with_backoff_then_named'),
+    # The account's own chat fields never override what the request writes.
+    ('chat-defaults-win', ACCOUNT,
+     'body.extend(request.iter().map(|(k, v)| (k.clone(), v.clone())));',
+     'body = request.iter().map(|(k, v)| (k.clone(), v.clone())).chain(body).collect();',
+     P, 'lib', 'chat_defaults_are_merged_under_what_the_request_writes'),
+    # A `max_tokens` the request sets is never replaced by the cap's.
+    ('explicit-max-tokens-replaced', ACCOUNT,
+     'if !explicit_max {', 'if true {',
+     P, 'lib', 'max_tokens_follows_the_key_limit_unless_the_request_sets_it'),
+    # Each request to the provider ends within the budget.
+    ('request-outlasts-the-budget', ACCOUNT,
+     'request.timeout = left.min(PROVIDER_TIMEOUT);', 'request.timeout = PROVIDER_TIMEOUT;',
+     P, 'lib', 'the_budget_bounds_each_request_and_the_waits'),
+    # No wait between retries runs past the budget.
+    ('sleep-past-the-budget', ACCOUNT,
+     'if Instant::now() + delay > deadline {', 'if false {',
+     P, 'lib', 'the_budget_bounds_each_request_and_the_waits'),
 ]

@@ -3,14 +3,16 @@
 //! Submit validates and builds the request on the caller's thread, so a bad request fails before
 //! anything is sent, then hands it to a worker that writes into a [`JobCell`]. Polls read the cell.
 //!
-//! While a worker waits on the SDK, the transport under the SDK runs on that same thread, so the
-//! worker names its cell in a thread-local [`with_sink`] and streamed text goes straight into it.
+//! While a worker waits on the account client, the transport under it runs on that same thread,
+//! so the worker names its cell in a thread-local [`with_sink`] and streamed text goes straight
+//! into it.
 //!
 //! Cancelling marks the job `Cancelled` at once and discards whatever the worker produces later.
 //! A streamed reply is also closed at its next line, which ends the provider's work. A reply that
 //! is not streamed cannot be interrupted mid-flight; its worker finishes and is discarded, within
-//! the SDK's time budget. A cancelled worker sends nothing further, and it keeps its place under the
-//! connection's cap until it has finished, so cancelling never lets more workers run than the cap.
+//! the request's time budget. A cancelled worker sends nothing further, and it keeps its place
+//! under the connection's cap until it has finished, so cancelling never lets more workers run
+//! than the cap.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

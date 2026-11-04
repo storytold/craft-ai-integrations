@@ -15,14 +15,16 @@ use craft_ai_core::{
     AiError, CapabilityId, ErrorKind, InputRole, JobId, ModelId, Payload, Provider, Request,
     SecretString,
 };
-use craft_ai_fantastico::{FantasticoConfig, FantasticoProvider, Wire, WireResponse};
-use fantastico_sdk::{HttpRequest, Method};
+use craft_ai_fantastico::{
+    FantasticoConfig, FantasticoProvider, HttpRequest, Method, Wire, WireResponse,
+};
+
 use serde_json::{Value, json};
 
 const ACCOUNT_KEY: &str = "ck-fant-account-needle";
 const RUNTIME_KEY: &str = "rk-runtime-needle";
 const BASE: &str = "https://fantastico.cc/api";
-/// The model call, wherever the SDK sends it: which provider serves it is the account's business.
+/// The model call, wherever the account sends it: which provider serves it is the account's business.
 const CHAT: &str = "/chat/completions";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -131,6 +133,23 @@ impl Wire for Fake {
                     {"id": "black-forest-labs/flux", "architecture": {"output_modalities": ["image"]}}
                 ]}),
             ));
+        }
+        let credit = json!({"remainingUsd": 4.5, "totalRemainingUsd": "9.5", "lowBalance": false});
+        if req.url == format!("{BASE}/edge/config") {
+            if self.mint_refused {
+                return Ok(json_reply(
+                    401,
+                    json!({"message": format!("Unknown key {ACCOUNT_KEY}"), "type": "INVALID_CONTO_KEY"}),
+                ));
+            }
+            return Ok(json_reply(
+                200,
+                json!({"contoId": "conto-7", "status": "active",
+                       "model": "anthropic/claude-sonnet-5", "balance": credit}),
+            ));
+        }
+        if req.url == format!("{BASE}/edge/balance") {
+            return Ok(json_reply(200, credit));
         }
         if req.url.starts_with(BASE) || !req.url.ends_with(CHAT) {
             return Ok(json_reply(404, json!({"message": "no such route"})));
@@ -338,6 +357,32 @@ fn an_empty_account_is_a_quota_error_without_the_key_in_it() {
     assert_eq!(kind, ErrorKind::Quota);
     assert!(!message.contains("needle"));
     assert!(events.is_empty());
+}
+
+#[test]
+fn the_account_and_its_credit_are_read_without_minting() {
+    let fake = Fake::new(Chat::Text);
+    let p = provider(&fake);
+    let account = p.account().unwrap();
+    assert_eq!(
+        (account.account_id.as_str(), account.model.as_deref()),
+        ("conto-7", Some("anthropic/claude-sonnet-5"))
+    );
+    assert_eq!(account.balance.unwrap().total_remaining_usd, Some(9.5));
+    assert_eq!(p.balance().unwrap().remaining_usd, 4.5);
+    assert_eq!(fake.mints.load(Ordering::SeqCst), 0);
+    assert!(
+        fake.log
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, auth)| auth == &format!("Bearer {ACCOUNT_KEY}"))
+    );
+
+    // A key the account service doesn't know is an `Auth` error, and the key it echoed is gone.
+    let e = provider(&Fake::refusing_mints()).account().unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Auth);
+    assert!(!e.message.contains("needle"), "{}", e.message);
 }
 
 #[test]

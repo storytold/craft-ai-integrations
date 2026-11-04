@@ -131,7 +131,7 @@ impl ProviderFactory {
         f.register(craft_ai_fantastico::PROVIDER_NAME, move |c, s| {
             let mut cfg = craft_ai_fantastico::config_for(c, s)?;
             if let Some((connect, request)) = timeouts {
-                // Each HTTP request is bounded, and so is the SDK's retrying around them.
+                // Each HTTP request is bounded, and so is the adapter's retrying around them.
                 cfg.connect_timeout = Some(connect);
                 cfg.request_timeout = Some(request);
                 cfg.budget = request;

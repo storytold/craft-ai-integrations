@@ -2,8 +2,8 @@
 //! non-streamed request would have got.
 //!
 //! Every piece of message text goes to `on_text` as it arrives. Tool calls arrive in pieces keyed
-//! by `index` and are assembled. An `error` event becomes the body, so the SDK classifies it as it
-//! would a `200` carrying an error. `stop` is asked before every line: when it says yes, reading
+//! by `index` and are assembled. An `error` event becomes the body, so the account client classifies it
+//! as it would a `200` carrying an error. `stop` is asked before every line: when it says yes, reading
 //! ends at once with an error, which closes the connection and so ends the provider's work.
 
 use std::io::{BufRead, Read};

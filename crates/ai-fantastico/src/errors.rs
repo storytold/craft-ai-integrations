@@ -2,9 +2,33 @@
 //! ask for a key, a top-up, patience or a different request.
 
 use craft_ai_core::{AiError, ErrorKind, SecretString};
-use fantastico_sdk::Error;
 
-/// The kind of failure an SDK error is.
+/// A failure as FANTASTICO's side reports it, before it becomes an [`AiError`].
+///
+/// `code` says who answered and what it means: a code of the account service (such as
+/// `INVALID_CONTO_KEY` or `ALLOWANCE_EXHAUSTED`), `PROVIDER_<TYPE>` when the model's provider
+/// classified its refusal, or one of this crate's for a refusal decided before any request (such as
+/// `UNKNOWN_CREDENTIAL`). `status` is the matching HTTP status. The same status can come from
+/// different senders with opposite remedies (a `403` from the account service is an account
+/// problem, from the provider a moderation block), so the kind is decided on `code` first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Error {
+    pub message: String,
+    pub code: String,
+    pub status: u16,
+}
+
+impl Error {
+    pub fn new(message: impl Into<String>, code: &str, status: u16) -> Self {
+        Self {
+            message: message.into(),
+            code: code.to_owned(),
+            status,
+        }
+    }
+}
+
+/// The kind of failure an error is.
 pub(crate) fn kind_of(e: &Error) -> ErrorKind {
     match e.code.as_str() {
         "UNKNOWN_CREDENTIAL" | "INVALID_CONTO_KEY" | "INVALID_API_KEY" | "KEY_REVOKED" => {

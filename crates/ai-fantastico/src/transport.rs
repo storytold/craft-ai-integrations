@@ -1,27 +1,117 @@
-//! HTTP: the wire everything travels on, and the SDK transport on top of it that streams.
+//! HTTP: the wire everything travels on, and the transport on top of it that streams.
 //!
-//! `fantastico-sdk` sends every request through a [`Transport`] and reads replies whole. Ours
-//! keeps that contract and adds streaming underneath: for a chat request with `"stream": true`
-//! answered as server-sent events, it hands each piece of text to the job the calling thread is
-//! working for (see [`crate::jobs::with_sink`]) and gives the SDK back the JSON a non-streamed
-//! reply would carry. The SDK never knows.
+//! The account client (`crate::account`) sends every request through a [`Transport`] and reads
+//! replies whole. The transport adds streaming underneath: for a chat request with
+//! `"stream": true` answered as server-sent events, it hands each piece of text to the job the
+//! calling thread is working for (see [`crate::jobs::with_sink`]) and gives the client back the
+//! JSON a non-streamed reply would carry, so retrying and classifying a reply work the same way
+//! for both.
 //!
 //! The [`Wire`] below the transport is replaceable, which is how the tests run without a network.
 //! The real one, [`UreqWire`], takes the Craft AI layer's TLS and proxy rules from `craft-ai-http`
 //! and never follows a redirect, so neither key can be forwarded to another host.
 
+use std::fmt;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fantastico_sdk::{HttpRequest, HttpResponse, Method, Transport};
 use serde_json::Value;
 
 use crate::jobs;
 use crate::stream;
 
-/// A whole reply larger than this is refused rather than read into memory (the SDK's own cap).
+/// A whole reply larger than this is refused rather than read into memory.
 pub(crate) const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The HTTP methods FANTASTICO is called with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Method {
+    Get,
+    /// With a JSON body.
+    Post,
+}
+
+/// One request, as handed to a [`Wire`]. Its `Debug` output hides the `Authorization` header, so
+/// a request can be logged safely.
+#[derive(Clone)]
+pub struct HttpRequest {
+    pub method: Method,
+    /// The absolute URL.
+    pub url: String,
+    /// Header names and values, in order.
+    pub headers: Vec<(String, String)>,
+    /// The JSON body, for `POST`.
+    pub body: Option<String>,
+    /// The time the whole request may take.
+    pub timeout: Duration,
+}
+
+impl HttpRequest {
+    /// The value of header `name`, compared case-insensitively.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header(&self.headers, name)
+    }
+}
+
+impl fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let headers: Vec<(&str, &str)> = self
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                let shown = if k.eq_ignore_ascii_case("authorization") {
+                    "Bearer ***"
+                } else {
+                    v.as_str()
+                };
+                (k.as_str(), shown)
+            })
+            .collect();
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("headers", &headers)
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// A reply read whole.
+#[derive(Clone, Debug)]
+pub(crate) struct HttpResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl HttpResponse {
+    /// Whether the status is in the `2xx` range.
+    pub fn ok(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The value of header `name`, compared case-insensitively: servers spell headers such as
+    /// `Retry-After` in different cases.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header(&self.headers, name)
+    }
+
+    /// The body as JSON: an empty body reads as `{}`, a body that isn't JSON as `None`.
+    pub fn json(&self) -> Option<Value> {
+        if self.body.trim().is_empty() {
+            return Some(Value::Object(serde_json::Map::new()));
+        }
+        serde_json::from_str(&self.body).ok()
+    }
+}
 
 /// A reply as it comes off the wire: the body is read by the caller, as fast as it arrives.
 pub struct WireResponse {
@@ -41,7 +131,7 @@ pub trait Wire: Send + Sync {
 /// The real wire: blocking `ureq` with the platform's certificate check and no redirects.
 pub struct UreqWire {
     agent: ureq::Agent,
-    /// The longest any one request may take, over the time the SDK gives it.
+    /// The longest any one request may take, over the time the account client gives it.
     request_cap: Option<Duration>,
 }
 
@@ -52,8 +142,8 @@ impl Default for UreqWire {
 }
 
 impl UreqWire {
-    /// `connect` bounds connecting; `request` caps each request, whose own time the SDK sets (the
-    /// shorter of the two wins). `None` leaves the SDK's times as they are.
+    /// `connect` bounds connecting; `request` caps each request, whose own time the account client
+    /// sets (the shorter of the two wins). `None` leaves the client's times as they are.
     pub fn with_timeouts(connect: Option<Duration>, request: Option<Duration>) -> Self {
         let config = ureq::Agent::config_builder()
             .tls_config(craft_ai_http::tls_config())
@@ -100,9 +190,6 @@ impl Wire for UreqWire {
         let url = request.url.as_str();
         let result = match request.method {
             Method::Get => with_headers(self.agent.get(url), request, self.request_cap).call(),
-            Method::Delete => {
-                with_headers(self.agent.delete(url), request, self.request_cap).call()
-            }
             Method::Post => with_headers(self.agent.post(url), request, self.request_cap)
                 .send(request.body.as_deref().unwrap_or("")),
         };
@@ -127,12 +214,12 @@ impl Wire for UreqWire {
     }
 }
 
-/// The SDK's transport: whole replies as it expects, streaming underneath when asked.
-pub(crate) struct SdkTransport {
+/// The account client's transport: whole replies, streaming underneath when asked.
+pub(crate) struct Transport {
     wire: Arc<dyn Wire>,
 }
 
-impl SdkTransport {
+impl Transport {
     pub fn new(wire: Arc<dyn Wire>) -> Self {
         Self { wire }
     }
@@ -155,9 +242,12 @@ fn is_event_stream(headers: &[(String, String)]) -> bool {
     })
 }
 
-impl Transport for SdkTransport {
-    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, String> {
-        // A job that has ended starts nothing more: the SDK treats this as final, without retrying.
+impl Transport {
+    /// Sends `request` and reads the reply whole. `Err` is a transport failure (DNS, TLS,
+    /// connection, timeout, an oversized reply) as text; an HTTP error status is a reply.
+    pub fn send(&self, request: &HttpRequest) -> Result<HttpResponse, String> {
+        // A job that has ended starts nothing more: the client treats this as final, without
+        // retrying.
         if jobs::sink_stopped() {
             return Err("the job has ended".into());
         }
@@ -167,7 +257,7 @@ impl Transport for SdkTransport {
             body,
         } = self.wire.send(request)?;
         // Streamed only when asked and answered as a stream: an error status or a plain JSON
-        // reply is read whole, as the SDK expects.
+        // reply is read whole.
         if !(wants_stream(request) && (200..300).contains(&status) && is_event_stream(&headers)) {
             let mut text = String::new();
             let read = body
@@ -256,7 +346,7 @@ mod tests {
 
     #[test]
     fn an_error_status_is_read_whole_even_when_a_stream_was_asked_for() {
-        let t = SdkTransport::new(Arc::new(Canned(
+        let t = Transport::new(Arc::new(Canned(
             429,
             "text/event-stream",
             r#"{"error":"slow"}"#,
@@ -269,7 +359,7 @@ mod tests {
 
     #[test]
     fn a_stream_comes_back_as_one_reply() {
-        let t = SdkTransport::new(Arc::new(Canned(
+        let t = Transport::new(Arc::new(Canned(
             200,
             "text/event-stream",
             "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n",

@@ -11,9 +11,6 @@ publish = false
 [dependencies]
 craft-ai-core.workspace = true
 craft-ai-http.workspace = true
-# Mints the account's runtime keys, fills in `max_tokens`, retries and classifies failures. Its own
-# transport is left out: requests go through ours, which streams and takes the layer's TLS rule.
-fantastico-sdk = { version = "=0.2.3", default-features = false }
 serde_json.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 

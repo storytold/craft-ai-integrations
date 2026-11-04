@@ -2,11 +2,12 @@
 //!
 //! [FANTASTICO](https://fantastico.cc) holds one prepaid credit with spending caps and fronts every
 //! major LLM (Claude, GPT, Gemini, Llama…). Its account key cannot be sent to a model directly:
-//! `fantastico-sdk` trades it for a short-lived, capped runtime key and sends the chat request
-//! straight to the provider behind the account, at the address the account service gives with the
-//! key, so the account service never sees a prompt. That
-//! exchange (and its renewal, and `max_tokens` fitted to the cap) is why FANTASTICO needs this
-//! adapter rather than a custom OpenAI-compatible connection or a declarative spec.
+//! the adapter trades it for a short-lived, capped runtime key and sends the chat request straight
+//! to the provider behind the account, at the address the account service gives with the key, so
+//! the account service never sees a prompt. That exchange (and its renewal, and `max_tokens`
+//! fitted to the cap) is why FANTASTICO needs this adapter rather than a custom OpenAI-compatible
+//! connection or a declarative spec. It is written here, on `craft-ai-http`, with no client
+//! library of FANTASTICO's own.
 //!
 //! | Capability | Notes |
 //! |---|---|
@@ -34,7 +35,7 @@
 //!
 //! A replacement built this way doesn't keep the factory's timeouts: on
 //! `ProviderFactory::probing()` the connection test loses its 20-second cap, and each request takes
-//! the SDK's own time (30 s for the account service, 90 s for the model).
+//! the adapter's own time (30 s for the account service, 90 s for the model).
 //!
 //! Or build one directly:
 //!
@@ -50,7 +51,8 @@
 //! # Safety properties
 //!
 //! - The account key goes only to the account service; the runtime key only to the provider the
-//!   SDK names. Redirects are never followed. Both keys stay out of `Debug` output and errors.
+//!   account service names with it. Redirects are never followed. Both keys stay out of `Debug`
+//!   output and errors.
 //! - Every call takes the Craft AI layer's TLS and proxy rules (`craft-ai-http`).
 //! - Only listed request params are forwarded, so a param can never steer the URL, a key, the
 //!   model or the account (see the `chat` module).
@@ -65,28 +67,31 @@
     clippy::unreachable
 )]
 
+mod account;
 mod chat;
 mod errors;
 mod jobs;
 mod models;
+mod provider_error;
 mod stream;
+mod time;
 mod transport;
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use crate::account::{Account, DEFAULT_BASE_URL, Options};
+pub use crate::account::{AccountInfo, Balance};
+pub use crate::chat::{COMPLETION, TURN};
+use crate::jobs::Registry;
+use crate::transport::Transport;
+pub use crate::transport::{HttpRequest, Method, UreqWire, Wire, WireResponse};
 use craft_ai_core::endpoint::Endpoint;
 use craft_ai_core::payload::Limits;
 use craft_ai_core::{
     AiError, Connection, ErrorKind, JobId, JobSnapshot, ModelId, ModelInfo, Provider, Request,
     SecretString,
 };
-use fantastico_sdk::{Fantastico, Options};
-
-pub use crate::chat::{COMPLETION, TURN};
-use crate::jobs::Registry;
-use crate::transport::SdkTransport;
-pub use crate::transport::{UreqWire, Wire, WireResponse};
 
 /// The provider name a connection is saved under, and the adapter is registered under.
 pub const PROVIDER_NAME: &str = "fantastico";
@@ -104,11 +109,11 @@ pub struct FantasticoConfig {
     pub product: Option<String>,
     /// Use these models instead of asking the account service.
     pub models: Option<Vec<ModelInfo>>,
-    /// The longest one request may take, retries included (the SDK's retry schedule).
+    /// The longest one request may take, retries and the waits between them included.
     pub budget: Duration,
     /// The longest connecting may take; `None`: the HTTP stack's default.
     pub connect_timeout: Option<Duration>,
-    /// The longest any single HTTP request may take; `None`: the SDK's own per-request times
+    /// The longest any single HTTP request may take; `None`: the adapter's own per-request times
     /// (30 s for the account service, 90 s for the model).
     pub request_timeout: Option<Duration>,
     /// Jobs that may run at once on this connection. Each running job holds its own runtime key,
@@ -159,27 +164,27 @@ impl FantasticoConfig {
     }
 }
 
-/// SDK clients waiting for work. A client keeps its runtime key between jobs, so a key is minted
-/// once per concurrent job slot rather than once per request.
+/// Account clients waiting for work. A client keeps its runtime key between jobs, so a key is
+/// minted once per concurrent job slot rather than once per request.
 struct Pool {
     key: SecretString,
     options: Options,
     wire: Arc<dyn Wire>,
-    free: Mutex<Vec<Fantastico>>,
+    free: Mutex<Vec<Account>>,
     keep: usize,
 }
 
 impl Pool {
-    fn fresh(&self) -> Result<Fantastico, AiError> {
-        Fantastico::with_transport(
-            self.key.expose(),
+    fn fresh(&self) -> Result<Account, AiError> {
+        Account::new(
+            self.key.clone(),
             self.options.clone(),
-            Box::new(SdkTransport::new(Arc::clone(&self.wire))),
+            Transport::new(Arc::clone(&self.wire)),
         )
         .map_err(|e| errors::to_ai(&e, &self.key))
     }
 
-    fn take(&self) -> Result<Fantastico, AiError> {
+    fn take(&self) -> Result<Account, AiError> {
         let spare = self
             .free
             .lock()
@@ -191,7 +196,7 @@ impl Pool {
         }
     }
 
-    fn give_back(&self, client: Fantastico) {
+    fn give_back(&self, client: Account) {
         let mut free = self.free.lock().unwrap_or_else(PoisonError::into_inner);
         if free.len() < self.keep {
             free.push(client);
@@ -224,10 +229,10 @@ impl FantasticoProvider {
     /// double.
     pub fn with_wire(config: FantasticoConfig, wire: Arc<dyn Wire>) -> Result<Self, AiError> {
         let mut options = Options {
-            title: config.title,
+            base_url: DEFAULT_BASE_URL.to_owned(),
             product: config.product,
+            title: config.title,
             budget: config.budget,
-            ..Options::default()
         };
         if let Some(url) = config.base_url {
             let base = url.trim().trim_end_matches('/').to_owned();
@@ -248,8 +253,8 @@ impl FantasticoProvider {
             free: Mutex::new(Vec::new()),
             keep,
         };
-        // The SDK checks the key's shape without sending anything: refuse a wrong key now, and
-        // keep the client for the first job.
+        // The key's shape is checked without sending anything: refuse a wrong key now, and keep
+        // the client for the first job.
         let first = pool.fresh()?;
         pool.give_back(first);
         Ok(Self {
@@ -258,6 +263,27 @@ impl FantasticoProvider {
             limits: Limits::default(),
             registry: Registry::new(keep),
         })
+    }
+
+    /// The account behind the key: its identifier, state, suggested model and credit. Account keys
+    /// only; nothing is minted or spent, so this is how an app checks a key a person pasted.
+    pub fn account(&self) -> Result<AccountInfo, AiError> {
+        self.with_client(|c| c.info())
+    }
+
+    /// The account's credit. Account keys only; nothing is minted or spent.
+    pub fn balance(&self) -> Result<Balance, AiError> {
+        self.with_client(|c| c.balance())
+    }
+
+    fn with_client<T>(
+        &self,
+        call: impl FnOnce(&Account) -> Result<T, errors::Error>,
+    ) -> Result<T, AiError> {
+        let client = self.pool.take()?;
+        let result = call(&client);
+        self.pool.give_back(client);
+        result.map_err(|e| errors::to_ai(&e, &self.pool.key))
     }
 
     fn model_info(&self, id: &ModelId) -> Option<ModelInfo> {
@@ -275,10 +301,7 @@ impl Provider for FantasticoProvider {
         if let Some(list) = &self.models {
             return Ok(list.clone());
         }
-        let client = self.pool.take()?;
-        let listed = client.models();
-        self.pool.give_back(client);
-        let entries = listed.map_err(|e| errors::to_ai(&e, &self.pool.key))?;
+        let entries = self.with_client(Account::models)?;
         Ok(models::from_list(&entries))
     }
 
