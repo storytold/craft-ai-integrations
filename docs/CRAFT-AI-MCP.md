@@ -140,7 +140,7 @@ folders into the global skills directory by hand — see the skill-management gu
 
   ```sh
   printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}\n' \
-    | C:\Programs\WordCraft\wordcraft-cli.exe mcp
+    | 'C:\Programs\WordCraft\wordcraft-cli.exe' mcp
   ```
 
   A healthy server replies with a `result` containing `protocolVersion`, `capabilities.tools`, and
@@ -167,6 +167,9 @@ folders into the global skills directory by hand — see the skill-management gu
 - **Click/reference inputs not expressible.** App-specific inputs (e.g. a selection tool's clicks)
   cannot be passed through plain JSON args in v1; the router rejects them with a clear message.
 - **Localhost only.** The bridge binds `127.0.0.1`; it is not intended to be exposed on a network.
+- **Bionic rejects the whole `ng-mcp.json` if any single entry is schema-invalid.** It does not skip bad entries; one malformed server (e.g. a `streamableHttp` entry missing its required `auth` block) causes *all* servers to fail to load. Validate each entry against Bionic's expectations before adding it.
+- **`ng-mcp.json` must match Bionic's native serialization: no UTF-8 BOM, LF line endings, 2-space indent.** A leading BOM or CRLF/reformatted whitespace makes Bionic reject the entire file (zero servers load). Regenerate with `json.dumps(obj, indent=2)` written as LF to be safe.
+- **`streamableHttp` entries require an `auth` field (`type: "bearerToken"`).** The local ArtCraft unified bridge currently has no auth and is therefore not loadable by Bionic; it needs a valid (or placeholder) bearer-token block — and its `http://` localhost URL may also need review — before it can be added as a 20th entry.
 
 ## Security notes
 
