@@ -7,8 +7,8 @@ use std::time::Duration;
 use craft_ai_client::{AiClient, ProviderFactory, RoleStatus, SampleReport, TestStart, ToolDesk};
 use craft_ai_core::job::{Event, Output};
 use craft_ai_core::{
-    AiError, Connection, ConnectionId, ErrorKind, JobId, JobSnapshot, JobState, ModelId, ModelInfo,
-    Payload, Provider, Request, Role, SecretRef, SecretString, StoreFile,
+    AiError, Connection, ConnectionId, Disclosure, ErrorKind, JobId, JobSnapshot, JobState,
+    ModelId, ModelInfo, Payload, Provider, Request, Role, SecretRef, SecretString, StoreFile,
 };
 use craft_ai_native::ConsentFile;
 use craft_ai_native::secrets::{MemoryStore, SecretStore};
@@ -273,8 +273,12 @@ fn a_choice_that_stops_holding_says_why_and_stays_visible() {
 }
 
 /// Runs the sample for tool `id` to its end; `None` when it stopped to ask for agreement.
-fn run(w: &World, id: &str, agreed: bool) -> Result<Option<SampleReport>, AiError> {
-    Ok(match w.desk.start_test(&tool(id), sample(id), agreed)? {
+fn run(
+    w: &World,
+    id: &str,
+    reviewed: Option<&Disclosure>,
+) -> Result<Option<SampleReport>, AiError> {
+    Ok(match w.desk.start_test(&tool(id), sample(id), reviewed)? {
         TestStart::Started(job) => Some(ToolDesk::finish(&tool(id), &job, Duration::from_secs(5))),
         TestStart::NeedsConsent { .. } => None,
     })
@@ -296,7 +300,7 @@ fn a_local_sample_runs_at_once_and_passes_when_the_right_kind_of_thing_comes_bac
         &["gpt-image-1"],
     )]);
     bound(&w, "good-local");
-    match run(&w, "generate-image", false).unwrap().unwrap() {
+    match run(&w, "generate-image", None).unwrap().unwrap() {
         SampleReport::Passed { summary, .. } => assert!(summary.contains("image"), "{summary}"),
         other => panic!("{other:?}"),
     }
@@ -313,9 +317,9 @@ fn a_remote_sample_waits_for_agreement_and_builds_nothing_until_then() {
     )]);
     bound(&w, "good-remote");
     let before = w.builds.load(Ordering::SeqCst);
-    match w
+    let shown = match w
         .desk
-        .start_test(&tool("generate-image"), sample("generate-image"), false)
+        .start_test(&tool("generate-image"), sample("generate-image"), None)
         .unwrap()
     {
         TestStart::NeedsConsent {
@@ -326,9 +330,10 @@ fn a_remote_sample_waits_for_agreement_and_builds_nothing_until_then() {
             assert_eq!(disclosure.destination, "https://api.example.com");
             assert_eq!(connection_label, "Connection good-remote");
             assert_eq!(billing, craft_ai_core::Billing::Metered);
+            disclosure
         }
         TestStart::Started(_) => panic!("sent before the person agreed"),
-    }
+    };
     assert_eq!(
         w.builds.load(Ordering::SeqCst),
         before,
@@ -337,12 +342,12 @@ fn a_remote_sample_waits_for_agreement_and_builds_nothing_until_then() {
     assert!(!w.consent.path().exists(), "nothing recorded");
     // Agreeing runs it and records the agreement, so the next sample needs no question.
     assert!(matches!(
-        run(&w, "generate-image", true).unwrap().unwrap(),
+        run(&w, "generate-image", Some(&shown)).unwrap().unwrap(),
         SampleReport::Passed { .. }
     ));
     assert!(w.consent.path().exists());
     assert!(matches!(
-        run(&w, "generate-image", false).unwrap().unwrap(),
+        run(&w, "generate-image", None).unwrap().unwrap(),
         SampleReport::Passed { .. }
     ));
 }
@@ -357,7 +362,7 @@ fn a_model_that_answers_wrongly_or_not_at_all_fails_the_check() {
     ] {
         let w = world(vec![connection(conn, false, true, &["gpt-image-1"])]);
         bound(&w, conn);
-        match run(&w, "generate-image", false).unwrap().unwrap() {
+        match run(&w, "generate-image", None).unwrap().unwrap() {
             SampleReport::Failed { message } => {
                 assert!(message.contains(expect), "{conn}: {message}")
             }
@@ -376,7 +381,7 @@ fn a_sample_with_no_choice_made_is_refused_before_anything_is_sent() {
         &["gpt-image-1"],
     )]);
     let before = w.builds.load(Ordering::SeqCst);
-    let err = run(&w, "generate-image", true).err().unwrap();
+    let err = run(&w, "generate-image", None).err().unwrap();
     assert_eq!(err.kind, ErrorKind::Unsupported);
     assert_eq!(w.builds.load(Ordering::SeqCst), before);
 }
