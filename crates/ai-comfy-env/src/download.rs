@@ -76,6 +76,37 @@ impl Default for DownloadConfig {
     }
 }
 
+/// Opens the part file without following a link at its name. A fresh start removes what was there
+/// and creates the file exclusively, which never follows a link; a resume opens the existing file
+/// with `O_NOFOLLOW` on Unix. Either way the handle must be a plain file with one name, so the
+/// bytes cannot land in a file elsewhere.
+fn open_part(part: &Path, append: bool) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    if append {
+        options.append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+    } else {
+        match std::fs::remove_file(part) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        options.write(true).create_new(true);
+    }
+    let file = options.open(part)?;
+    let meta = file.metadata()?;
+    #[cfg(unix)]
+    let single = std::os::unix::fs::MetadataExt::nlink(&meta) == 1;
+    #[cfg(not(unix))]
+    let single = true;
+    if !meta.is_file() || !single {
+        return Err(std::io::Error::other(
+            "the download file is not a plain file",
+        ));
+    }
+    Ok(file)
+}
+
 /// Downloads recipe files.
 pub struct Downloader {
     agent: ureq::Agent,
@@ -225,7 +256,19 @@ impl Downloader {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Attempt, AiError> {
-        let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
+        // Anything at the part name that is not a plain file (a link someone planted, say) is
+        // removed, never followed: only the entry goes, not what it points at.
+        if std::fs::symlink_metadata(part).is_ok_and(|m| !m.file_type().is_file()) {
+            std::fs::remove_file(part).map_err(|_| {
+                AiError::new(
+                    ErrorKind::Internal,
+                    "could not clear what is in the way of the download file",
+                )
+            })?;
+        }
+        let mut have = std::fs::symlink_metadata(part)
+            .map(|m| m.len())
+            .unwrap_or(0);
         if have > file.size_bytes {
             // A part bigger than the promised file can only be cleared, never resumed;
             // and a part that cannot be cleared either must fail, not start over on
@@ -303,12 +346,7 @@ impl Downloader {
             ));
         }
         let start = if append { have } else { 0 };
-        let mut out = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(append)
-            .truncate(!append)
-            .open(part)
+        let mut out = open_part(part, append)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not open the download file"))?;
         self.copy(response, &mut out, start, file.size_bytes, cancel, progress)
     }

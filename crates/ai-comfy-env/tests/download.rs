@@ -693,3 +693,34 @@ fn a_source_that_redirects_forever_is_given_up_on() {
         "the first request and five redirects, no more"
     );
 }
+
+/// A link planted at the part-file name is replaced, never written through: the file it points at
+/// is left as it was and the download still lands correctly.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_part_name_is_not_followed() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    for victim_len in [6, 100] {
+        std::fs::write(&victim, vec![b'v'; victim_len]).unwrap();
+        let part = dir.path().join("m.safetensors.part");
+        let _ = std::fs::remove_file(&part);
+        std::os::unix::fs::symlink(&victim, &part).unwrap();
+        let _ = std::fs::remove_file(dir.path().join("m.safetensors"));
+        let file = model(&data, &format!("{}/m", origin(&server)));
+        let path = run(
+            &downloader(),
+            &file,
+            dir.path(),
+            None,
+            &AtomicBool::new(false),
+        )
+        .0
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), data);
+        assert_eq!(std::fs::read(&victim).unwrap(), vec![b'v'; victim_len]);
+    }
+}
