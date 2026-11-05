@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const MAX_GRAPH_BYTES: usize = 1024 * 1024;
+/// The most nodes an imported graph may have.
+pub(crate) const MAX_GRAPH_NODES: usize = 2048;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Binding {
@@ -68,7 +70,7 @@ impl Workflow {
             .as_object()
             .ok_or_else(|| AiError::invalid("API workflow must be a node map"))?;
         if nodes.is_empty()
-            || nodes.len() > 2048
+            || nodes.len() > MAX_GRAPH_NODES
             || !nodes
                 .keys()
                 .all(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
