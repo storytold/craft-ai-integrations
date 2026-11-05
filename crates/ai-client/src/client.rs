@@ -409,14 +409,18 @@ impl AiClient {
         }
     }
 
-    /// When this connection and model last finished a real job, from request history if it is on.
+    /// When this connection and model last finished a real job at the connection's current address,
+    /// from request history if it is on. Editing the address keeps the connection's id, so a job
+    /// sent to the old address does not count.
     fn last_success(&self, connection: &Connection, model: &ModelId) -> Option<u64> {
+        let destination = Disclosure::destination_for(connection);
         self.history()
             .ok()?
             .entries
             .iter()
             .filter(|e| e.start.connection == connection.id.as_str())
             .filter(|e| e.start.model == model.as_str())
+            .filter(|e| e.start.destination == destination)
             .filter_map(|e| e.end.as_ref())
             .filter(|end| end.outcome == Outcome::Done)
             .map(|end| end.at_ms)
