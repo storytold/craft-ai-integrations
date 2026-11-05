@@ -179,9 +179,17 @@ pub(crate) fn is_openrouter(base: &str) -> bool {
         .is_some_and(|host| host == "openrouter.ai")
 }
 
+/// Longest error message passed on, in characters.
+const MAX_ERROR_CHARS: usize = 360;
+
+/// Redacts the key from an error and only then caps its length: capping first could cut a key in
+/// two and leave a prefix that no longer matches it.
 pub(crate) fn scrub(mut e: AiError, key: Option<&SecretString>) -> AiError {
     if let Some(k) = key {
         e.message = redact(&e.message, &[k]);
+    }
+    if e.message.chars().count() > MAX_ERROR_CHARS {
+        e.message = e.message.chars().take(MAX_ERROR_CHARS).collect();
     }
     e
 }
@@ -411,6 +419,19 @@ mod tests {
         assert!(e.message.contains("[redacted]"));
         let long = "x".repeat(5000);
         assert!(map_status(500, None, &body(&long, "x"), None).message.len() < 400);
+    }
+
+    #[test]
+    fn a_key_across_the_length_cap_is_still_redacted() {
+        let key = SecretString::new("sk-live-0123456789abcdef");
+        for at in [280, 300, 330, 350, 355] {
+            let text = format!("{}{}{}", "x".repeat(at), key.expose(), "y".repeat(200));
+            let e = map_status(401, None, &body(&text, "x"), Some(&key));
+            assert!(!e.message.contains("sk-live"), "{at}: {}", e.message);
+            let e = scrub(AiError::new(ErrorKind::Provider, text), Some(&key));
+            assert!(!e.message.contains("sk-live"), "{at}: {}", e.message);
+            assert!(e.message.chars().count() <= MAX_ERROR_CHARS);
+        }
     }
 
     #[test]
