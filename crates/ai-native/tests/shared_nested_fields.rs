@@ -61,16 +61,20 @@ fn newer_file() -> Value {
     })
 }
 
+/// Saves `file` as the shared store in `dir` and returns the store.
 fn saved(dir: &tempfile::TempDir, file: &Value) -> SharedStore {
     let store = SharedStore::new(dir.path().join("connections.json"));
     std::fs::write(store.path(), file.to_string()).unwrap();
     store
 }
 
+/// Reads the shared store back as raw JSON.
 fn on_disk(store: &SharedStore) -> Value {
     serde_json::from_slice(&std::fs::read(store.path()).unwrap()).unwrap()
 }
 
+/// An unrelated write keeps every `from_newer` field, at the top, in each list item and in nested
+/// objects.
 #[test]
 fn a_write_keeps_unknown_fields_at_every_depth() {
     let dir = tempfile::tempdir().unwrap();
@@ -99,6 +103,7 @@ fn a_write_keeps_unknown_fields_at_every_depth() {
     assert_eq!(after["custom_tools"][0]["from_newer"], "tool");
 }
 
+/// Changing a known field of an item keeps that item's unknown field beside the change.
 #[test]
 fn a_kept_binding_keeps_its_unknown_field_when_its_model_changes() {
     let dir = tempfile::tempdir().unwrap();
@@ -114,6 +119,7 @@ fn a_kept_binding_keeps_its_unknown_field_when_its_model_changes() {
     assert_eq!(after["defaults"][0]["from_newer"], "default");
 }
 
+/// Reordering connections and models keeps each item's unknown field with that item.
 #[test]
 fn items_are_matched_by_id_not_by_position() {
     let dir = tempfile::tempdir().unwrap();
@@ -135,6 +141,7 @@ fn items_are_matched_by_id_not_by_position() {
     );
 }
 
+/// Removing items removes their unknown fields too; only what stayed keeps its field.
 #[test]
 fn a_removed_item_takes_its_unknown_fields_with_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -163,6 +170,7 @@ fn a_removed_item_takes_its_unknown_fields_with_it() {
     assert!(text.contains("model m1"), "what stayed keeps its field");
 }
 
+/// A field this build knows and clears stays cleared; the old file does not bring it back.
 #[test]
 fn a_field_this_build_knows_can_still_be_cleared() {
     let dir = tempfile::tempdir().unwrap();
@@ -189,6 +197,7 @@ fn a_field_this_build_knows_can_still_be_cleared() {
     );
 }
 
+/// An item the writer adds gets no unknown fields from anywhere.
 #[test]
 fn a_new_item_is_written_as_given() {
     let dir = tempfile::tempdir().unwrap();
@@ -206,6 +215,7 @@ fn a_new_item_is_written_as_given() {
     assert!(added.get("from_newer").is_none());
 }
 
+/// Two file items with the same role are both left as written, since either could be the source.
 #[test]
 fn an_item_whose_id_appears_twice_is_not_guessed_at() {
     let dir = tempfile::tempdir().unwrap();
@@ -222,6 +232,7 @@ fn an_item_whose_id_appears_twice_is_not_guessed_at() {
     assert!(after["defaults"][1].get("from_newer").is_none());
 }
 
+/// `replace` with the loaded store keeps the unknown fields of the old file.
 #[test]
 fn replace_keeps_unknown_fields_of_items_it_still_holds() {
     let dir = tempfile::tempdir().unwrap();
@@ -236,6 +247,7 @@ fn replace_keeps_unknown_fields_of_items_it_still_holds() {
     );
 }
 
+/// A second write still keeps the fields the first write carried over.
 #[test]
 fn two_writes_in_a_row_keep_the_fields() {
     let dir = tempfile::tempdir().unwrap();

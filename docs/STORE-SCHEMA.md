@@ -24,7 +24,8 @@ unknown fields until that app moves its pin.
 |---|---|---|
 | Add an optional field with `#[serde(default)]` | No | Older builds keep it and ignore it |
 | Add a value to an `open_enum!` type | No | Older builds read it as an unknown value and keep it |
-| Add a list of objects | No, if each item has `id`, `role` or `capability` | Otherwise unknown fields inside those items are not kept |
+| Add a new list field | No | Older builds copy a field they do not know whole, with all its items |
+| Add a field to the items of an existing list | No, if each item has `id`, `role` or `capability` | Otherwise unknown fields inside those items are not kept |
 | Add a required field | Yes | Older builds cannot write a file that newer builds can read |
 | Add a value to a closed enum | Yes | Older builds fail to parse the whole file |
 | Rename a field, or change its type or meaning | Yes | Older builds would keep the old field or misread the new one |

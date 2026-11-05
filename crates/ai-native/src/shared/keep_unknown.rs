@@ -13,8 +13,11 @@
 //!
 //! Invariants: a field in `seen` but not in `written` was removed on purpose and stays removed. A
 //! value in `written` always wins. List items are matched by identity, never by position, so items
-//! can be reordered, and a removed item takes its unknown fields with it. An item whose identity
-//! appears twice, or that has none, is left as written, because there is no safe way to choose.
+//! can be reordered, and a removed item takes its unknown fields with it. The identity comes from
+//! the written item, because a newer build may add a field (an `id` on a binding) that this build
+//! does not write; file items are indexed under every identity field they hold so either side can
+//! be found. An item whose identity appears twice in any of the three lists, or that has none, is
+//! left as written, because there is no safe way to choose.
 
 use std::collections::HashMap;
 
@@ -40,6 +43,8 @@ pub(super) fn carry(file: &Value, seen: &Value, written: &mut Value) {
     }
 }
 
+/// Copies each field of `file` that `seen` lacks into `written`, unless the writer set it, and
+/// recurses into fields all three hold.
 fn carry_fields(
     file: &Map<String, Value>,
     seen: &Map<String, Value>,
@@ -57,13 +62,25 @@ fn carry_fields(
     }
 }
 
+/// Copies unknown fields into each written item from the one file item with the same identity.
+/// Written identities are counted first, so a writer that adds a second item with an identity the
+/// file already holds leaves both as written rather than copying one old item's fields onto two.
 fn carry_items(file: &[Value], seen: &[Value], written: &mut [Value]) {
     let file = unique_by_identity(file);
     let seen = unique_by_identity(seen);
+    let mut written_times: HashMap<(&'static str, String), usize> = HashMap::new();
+    for item in written.iter() {
+        if let Some((field, value)) = identity(item) {
+            *written_times.entry((field, value.to_owned())).or_default() += 1;
+        }
+    }
     for item in written {
         let Some(key) = identity(item) else { continue };
         // The key borrows `item`, so it is copied out before `item` is changed.
         let key = (key.0, key.1.to_owned());
+        if written_times.get(&key) != Some(&1) {
+            continue;
+        }
         let lookup = (key.0, key.1.as_str());
         if let (Some(Some(in_file)), Some(Some(in_seen))) = (file.get(&lookup), seen.get(&lookup)) {
             carry(in_file, in_seen, item);
@@ -71,11 +88,13 @@ fn carry_items(file: &[Value], seen: &[Value], written: &mut [Value]) {
     }
 }
 
-/// Indexes a list by identity in one pass. An identity seen twice maps to `None`.
+/// Indexes a list under every identity field each item holds, in one pass. An identity seen twice
+/// maps to `None`. Indexing every field, not just the first, lets a written item that has only
+/// `role` find a file item a newer build also gave an `id`.
 fn unique_by_identity(items: &[Value]) -> HashMap<Identity<'_>, Option<&Value>> {
     let mut found = HashMap::with_capacity(items.len());
     for item in items {
-        if let Some(key) = identity(item) {
+        for key in identities(item) {
             found
                 .entry(key)
                 .and_modify(|slot| *slot = None)
@@ -85,8 +104,14 @@ fn unique_by_identity(items: &[Value]) -> HashMap<Identity<'_>, Option<&Value>> 
     found
 }
 
-fn identity(item: &Value) -> Option<Identity<'_>> {
+/// Every identity field an item holds as a string, in [`IDENTITY_FIELDS`] order.
+fn identities(item: &Value) -> impl Iterator<Item = Identity<'_>> {
     IDENTITY_FIELDS
         .iter()
-        .find_map(|field| Some((*field, item.get(*field)?.as_str()?)))
+        .filter_map(move |field| Some((*field, item.get(*field)?.as_str()?)))
+}
+
+/// The identity a written item is matched on: the first identity field it holds.
+fn identity(item: &Value) -> Option<Identity<'_>> {
+    identities(item).next()
 }

@@ -164,6 +164,7 @@ impl SharedStore {
         })
     }
 
+    /// Runs `f` while holding the store's file lock, so no other process writes in between.
     fn locked<T>(&self, f: impl FnOnce() -> Result<T, SharedError>) -> Result<T, SharedError> {
         fsutil::with_lock(&self.path, || Ok(f()))?
     }
@@ -222,6 +223,7 @@ impl SharedStore {
     }
 }
 
+/// Serialises a store to a JSON value, reporting a failure as a store syntax error.
 fn to_value(store: &StoreFile) -> Result<Value, SharedError> {
     serde_json::to_value(store).map_err(|e| StoreError::Syntax(e.to_string()).into())
 }
