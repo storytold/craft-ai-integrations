@@ -84,6 +84,19 @@ pub const INPUT: usize = 1008;
 /// Side of the low-resolution masks the model predicts.
 pub const MASK_SIDE: usize = 288;
 const _: () = assert!(MASK_SIDE == tracker::LOW_RES && INPUT == vit::IMAGE);
+/// Most clicks one prediction takes. Each click is a token in the decoder's attention, whose
+/// scores grow with the square of the count, so a direct caller is held to the same limit as a
+/// request.
+pub const MAX_CLICKS: usize = 32;
+
+/// Refuses an empty click list or one longer than [`MAX_CLICKS`].
+fn check_clicks(clicks: &[Click]) -> Result<()> {
+    match clicks.len() {
+        0 => Err(Error::Model("no clicks".into())),
+        n if n > MAX_CLICKS => Err(Error::Model(format!("at most {MAX_CLICKS} clicks"))),
+        _ => Ok(()),
+    }
+}
 
 /// The files of a model directory.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
@@ -216,9 +229,7 @@ impl Sam3 {
 
     /// Segment one object from clicks (positions normalized to the image, 0..1).
     pub fn segment_clicks(&mut self, enc: &mut Encoded, clicks: &[Click]) -> Result<Prediction> {
-        if clicks.is_empty() {
-            return Err(Error::Model("no clicks".into()));
-        }
+        check_clicks(clicks)?;
         let (neck, tracker) = self.tracker_parts()?;
         if enc.tracker.is_none() {
             let levels = neck.forward(&enc.backbone, 3)?;
@@ -300,3 +311,20 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 pub use detector::Output as DetectorOutput;
+
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+
+    #[test]
+    fn a_direct_caller_gets_the_same_click_limit_as_a_request() {
+        let click = Click {
+            x: 0.5,
+            y: 0.5,
+            positive: true,
+        };
+        assert!(check_clicks(&[]).is_err());
+        assert!(check_clicks(&vec![click; MAX_CLICKS]).is_ok());
+        assert!(check_clicks(&vec![click; MAX_CLICKS + 1]).is_err());
+    }
+}

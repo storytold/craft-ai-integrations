@@ -20,7 +20,9 @@ together, whenever burn-onnx or Burn is bumped, a patch changes, or the source f
 test in the engine crate fails if the two disagree.
 """
 import hashlib
+import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -64,13 +66,31 @@ def pins():
     return {n: (int(s.replace('_', '')), h) for n, s, h in found}
 
 
-def check_source(folder, name, size, sha):
-    """Refuses a file that is not the exact published export the patches were written for."""
+def check_source(folder, name, size, sha, into):
+    """Copies the exact published export the patches were written for into the folder `into` and
+    returns the copy, which is what the converter reads. The source is opened once, must be a
+    regular file, and is read no further than one byte past its pinned size, so a pipe or device
+    cannot run on, and the file cannot be swapped between this check and the conversion."""
     path = folder / f'{name}.onnx'
-    data = path.read_bytes()
-    if len(data) != size or hashlib.sha256(data).hexdigest() != sha:
+    copy = Path(into) / f'{name}.onnx'
+    digest, seen = hashlib.sha256(), 0
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_BINARY', 0))
+        with os.fdopen(fd, 'rb') as src, open(copy, 'xb') as out:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                fail(f'{path} is not a regular file')
+            while seen <= size:
+                chunk = src.read(min(1 << 20, size + 1 - seen))
+                if not chunk:
+                    break
+                seen += len(chunk)
+                digest.update(chunk)
+                out.write(chunk)
+    except OSError as error:
+        fail(f'{path} could not be read ({type(error).__name__})')
+    if seen != size or digest.hexdigest() != sha:
         fail(f'{path} is not the pinned SAM 2.1 tiny export (size or SHA-256 differ)')
-    return path
+    return copy
 
 
 def emit(onnx, out_dir):
@@ -252,7 +272,7 @@ def build(folder):
     with tempfile.TemporaryDirectory() as tmp:
         for name in ('encoder', 'decoder'):
             size, sha = known[name]
-            onnx = check_source(folder, name, size, sha)
+            onnx = check_source(folder, name, size, sha, tmp)
             files.update(render(name, patch(name, emit(onnx, Path(tmp) / name))))
         for rel, body in files.items():
             path = Path(tmp) / 'out' / rel

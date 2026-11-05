@@ -585,3 +585,18 @@ fn a_graph_over_the_node_limit_is_refused_before_its_output_is_inferred() {
     assert_eq!(err.kind, craft_ai_core::ErrorKind::InvalidRequest);
     assert!(err.message.contains("too large"), "{}", err.message);
 }
+
+/// A pipe offered as a workflow file is refused at once instead of blocking the import.
+#[cfg(unix)]
+#[test]
+fn a_pipe_offered_as_a_workflow_is_refused_without_blocking() {
+    let (lib, dir) = library();
+    let file = dir.path().join("pipe.json");
+    let made = std::process::Command::new("mkfifo").arg(&file).status();
+    if !made.is_ok_and(|s| s.success()) {
+        eprintln!("skipped: mkfifo is not available");
+        return;
+    }
+    let err = lib.import_file(&file).unwrap_err();
+    assert!(err.message.contains("could not open"), "message was: {err}");
+}
