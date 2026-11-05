@@ -41,6 +41,12 @@ pub struct RouteQuery<'a> {
     pub model: &'a ModelId,
     pub capability: &'a CapabilityId,
     pub inputs: &'a [InputRole],
+    /// How many results the request asks for. Status and the picker ask about one.
+    pub outputs: u32,
+    /// Whether the request asks for incremental results. Status and the picker ask about none.
+    pub stream: bool,
+    /// Whether the request carries options (`params`). Status and the picker ask about none.
+    pub has_options: bool,
 }
 
 /// An adapter's own answer. It must not read a key, build a provider, or contact anything.
@@ -69,8 +75,9 @@ fn unsupported() -> RouteSupport {
 }
 
 /// The answer for an adapter that serves a fixed list of models and refuses anything else. Each
-/// input role is counted against the listed model's limit, because `submit` validates the request
-/// against the list, not against what the saved connection declares.
+/// input role is counted against the listed model's limit, and outputs and streaming are checked
+/// against it too, because `submit` validates the request against the list, not against what the
+/// saved connection declares. Options are refused: none of these adapters maps them yet.
 pub(crate) fn against_list(models: &[ModelInfo], query: &RouteQuery<'_>) -> RouteSupport {
     let Some(spec) = models
         .iter()
@@ -87,7 +94,9 @@ pub(crate) fn against_list(models: &[ModelInfo], query: &RouteQuery<'_>) -> Rout
         .iter()
         .all(|(role, n)| spec.accepts.get(*role).is_some_and(|max| n <= max));
     let complete = spec.requires.iter().all(|i| query.inputs.contains(i));
-    if accepted && complete {
+    let outputs = (1..=spec.max_outputs).contains(&query.outputs);
+    let stream = !query.stream || spec.features.streaming;
+    if accepted && complete && outputs && stream && !query.has_options {
         RouteSupport::Supported
     } else {
         unsupported()
@@ -121,9 +130,13 @@ pub(crate) fn list_check(models: Vec<ModelInfo>) -> Arc<SupportFn> {
     Arc::new(move |query| against_list(&models, query))
 }
 
-/// Vertex express serves one model, for one job, from a prompt alone.
+/// Vertex express serves one model, for one job, from a prompt alone, with one output, no
+/// streaming and no options.
 pub(crate) fn vertex_check(query: &RouteQuery<'_>) -> RouteSupport {
-    let only_a_prompt = query.inputs == [InputRole::Prompt];
+    let only_a_prompt = query.inputs == [InputRole::Prompt]
+        && query.outputs == 1
+        && !query.stream
+        && !query.has_options;
     if query.model.as_str() == craft_ai_vertex::MODEL
         && query.capability.as_str() == "image.generate"
         && only_a_prompt

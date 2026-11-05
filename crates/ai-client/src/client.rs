@@ -358,7 +358,8 @@ impl AiClient {
         })
     }
 
-    /// What this build's adapter says about one request path. Reads no key and contacts nothing.
+    /// What this build's adapter says about a tool's path, asked as status and the picker ask it:
+    /// one output, no streaming and no options. Reads no key and contacts nothing.
     pub(crate) fn route_support(
         &self,
         connection: &Connection,
@@ -371,6 +372,9 @@ impl AiClient {
             model,
             capability,
             inputs,
+            outputs: 1,
+            stream: false,
+            has_options: false,
         })
     }
 
@@ -427,12 +431,14 @@ impl AiClient {
             .max()
     }
 
-    /// Whether the adapter would refuse this model for `role`, so it must not be offered.
+    /// Whether this app cannot run this model for `role`, so it must not be offered here: this
+    /// build has no adapter for the connection, or the adapter would refuse it.
     fn known_unsupported(&self, role: &Role, connection: &Connection, model: &ModelId) -> bool {
-        matches!(
-            self.route_support(connection, model, &role.capability, &role.inputs),
-            RouteSupport::Unsupported { .. }
-        )
+        !self.factory.knows(&connection.provider)
+            || matches!(
+                self.route_support(connection, model, &role.capability, &role.inputs),
+                RouteSupport::Unsupported { .. }
+            )
     }
 
     /// Every model that could fill `role`, for a picker. One the adapter would refuse is left out.
@@ -537,6 +543,10 @@ impl AiClient {
             )
             .map_err(|e| AiError::invalid(e.to_string()))
             .and_then(|resolved| {
+                // This app's own choice must be one it can run, unlike the suite default.
+                if !self.factory.knows(&resolved.connection.provider) {
+                    return Err(AiError::unsupported(NO_ADAPTER));
+                }
                 match self.route_support(resolved.connection, model, &role.capability, &role.inputs)
                 {
                     RouteSupport::Unsupported { reason } => Err(AiError::unsupported(reason)),
