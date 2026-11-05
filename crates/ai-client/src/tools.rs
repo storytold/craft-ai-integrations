@@ -26,6 +26,7 @@ mod sample;
 
 use crate::client::{AiClient, Choice, Job, RoleStatus};
 use crate::popup::MissingModel;
+use crate::route_support::RouteSupport;
 
 /// What the launcher shows for one tool.
 #[derive(Clone, Debug)]
@@ -166,16 +167,27 @@ impl ToolDesk {
             model: model.clone(),
         };
         // Check inside the same store lock as the write: another app may change the tool or
-        // connection between an unlocked read and the update.
-        self.shared.update(|store| {
+        // connection between an unlocked read and the update. A provider this build has no adapter
+        // for is allowed here on purpose: this is the suite default, and the launcher may set up a
+        // model that only some apps can run. An app's own `bind` refuses it. `try_update` writes nothing when the
+        // check refuses, so a refusal leaves the file as it was.
+        self.shared.try_update(|store| {
             if only_if_unchosen && store.defaults.iter().any(|b| b.role == role.id) {
                 return Ok::<bool, AiError>(false);
             }
             store
                 .check_tool(role)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
-            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+            let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
+            if let RouteSupport::Unsupported { reason } = self.client.route_support(
+                resolved.connection,
+                model,
+                &role.capability,
+                &role.inputs,
+            ) {
+                return Err(AiError::unsupported(reason));
+            }
             set_default(store, binding);
             Ok(true)
         })?
