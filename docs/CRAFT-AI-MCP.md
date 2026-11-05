@@ -114,6 +114,40 @@ To add a new app: drop its entry into `ng-mcp.json` using the same shape. No cod
 for the bridge itself — it lists whatever is in the shared catalogue, and discovery flags apps that
 are on GitHub but not yet catalogued.
 
+## Keeping the bridge running (Windows)
+
+Unlike the per-app stdio CLIs, which Bionic spawns on demand, the unified HTTP bridge is a **long-running process** that must already be listening when Bionic connects to `http://127.0.0.1:12345/mcp`. If it is not running, the "Craft AI" entry appears in the MCP list but cannot connect. Two helpers keep it alive with no manual effort:
+
+### Launcher script - `start-craft-ai-mcp.bat`
+
+Lives next to the binary at `C:\Programs\craft-ai-integrations\start-craft-ai-mcp.bat`. It is idempotent: if something is already listening on port 12345 it exits quietly (no-op); otherwise it starts `craft-ai-mcp.exe` in a minimized window. Safe to double-click repeatedly.
+
+### Logon scheduled task - `CraftAI-MCP-Bridge`
+
+A current-user Task Scheduler entry that runs the launcher at every interactive logon, so the bridge auto-starts after a reboot with no admin rights:
+
+```powershell
+$action   = New-ScheduledTaskAction -Execute 'C:\Programs\craft-ai-integrations\start-craft-ai-mcp.bat'
+$trigger  = New-ScheduledTaskTrigger -AtLogOn
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName 'CraftAI-MCP-Bridge' -Action $action -Trigger $trigger -Principal $principal
+```
+
+Remove it with `Unregister-ScheduledTask -TaskName 'CraftAI-MCP-Bridge' -Confirm:$false`.
+
+### Verifying it is up
+
+```sh
+# Windows: a LISTENING socket on 127.0.0.1:12345 means the bridge is running
+netstat -ano | findstr ":12345"
+
+# Optional deeper check - MCP initialize handshake (expect protocolVersion, serverInfo,
+# and capabilities.tools in the result):
+curl -s -X POST http://127.0.0.1:12345/mcp -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+```
+
+Once the bridge is running, **restart Bionic** so it re-reads `ng-mcp.json` and connects to the Craft AI entry.
+
 ## Dynamic discovery of new apps
 
 `discovery.rs::fetch_org_repos("storytold")` pulls the org's public repos from the GitHub API and
