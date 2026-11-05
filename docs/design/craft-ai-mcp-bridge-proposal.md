@@ -109,18 +109,36 @@ but default to the canonical location so a person's real setup is used.
 Consequence: the bridge can now *see* whether a model/connection is bound; if not, it reports "what is
 missing" (the intended prompt-to-install signal) instead of silently failing.
 
-### 4. Start-up / trust boundary ("looks like malware")
+### 4. Start-up & registration: user-initiated chat install ("looks like malware")
 
-Remove the auto-start and minimized-window pattern from this PR:
+Replace the auto-start / minimized-window pattern with a **user-initiated, copy-paste install prompt** —
+the same shape NVIDIA uses for agent-driven MCP onboarding. The user pastes the prompt into Bionic /
+LM Studio; the agent then (a) starts the bridge if it is not already running, and (b) adds/verifies the
+`Craft AI` entry in `ng-mcp.json`. Because the human initiated it, there is no hidden logon task and the
+consent to run a local process + register an MCP server is explicit.
 
-- **Drop the logon scheduled task** and the `start-craft-ai-mcp.bat` minimized launch. The bridge should
-  be started deliberately, not hidden at logon.
-- Prefer one of: (a) a normal foreground process the user starts when they want MCP tools; (b) Bionic's
-  own lifecycle starting/stopping it, if Bionic supports launching long-running MCP servers; or (c) a
-  clearly-named, non-minimized launcher run on purpose.
-- **Document the trust boundary explicitly** in README/docs: what the process does, where it listens,
-  what data it can access, and how to stop/uninstall it. Transparency is the antidote to "looks like
-  malware."
+**Copy-paste prompt** (shipped in the repo README / PR description so users can grab it):
+
+```text
+Add a Streamable HTTP MCP server named "Craft AI" at http://127.0.0.1:12345/mcp to my user-level Bionic
+MCP configuration (ng-mcp.json). First, if the Craft AI bridge is not already running on that port, start
+it from C:\\Programs\\craft-ai-integrations\\target\\debug\\craft-ai-mcp.exe — a local-only process listening
+on 127.0.0.1. Then add or verify this entry in ng-mcp.json:
+{ "id": "c55a52b4-6eca-44ac-926c-f67cceac9f1f", "name": "Craft AI", "description": "Craft AI image and
+video tools exposed as MCP.", "enabled": true, "connection": { "type": "streamableHttp",
+"url": "http://127.0.0.1:12345/mcp", "headers": {}, "auth": { "type": "none" } } }
+If you cannot configure MCP servers directly, show me where to add it manually. Afterward, restart Bionic
+so it reconnects.
+```
+
+- **Drop the logon scheduled task** and the `start-craft-ai-mcp.bat` minimized launch from this PR. The
+  bridge is only ever started when the user pastes the prompt (or runs the binary on purpose).
+- **Document the trust boundary explicitly** in README/docs: what the process does, where it listens
+  (`127.0.0.1` only), what data it can access, and how to stop/uninstall it (stop the process / remove
+  the `Craft AI` entry from `ng-mcp.json`). Transparency is the antidote to "looks like malware."
+- **Verified on this machine:** adding the entry to `~/.lmstudio/apps/bionic/.internal/ng-mcp.json` and
+  restarting Bionic makes the Craft AI MCP appear and connect (bridge running, `tools/list` returns all
+  built-in tools).
 
 ## What this does NOT do
 
@@ -134,7 +152,9 @@ Remove the auto-start and minimized-window pattern from this PR:
 1. **Consent mechanism:** MCP `consent/grant` tools (§1) vs. requiring approval in the app/launcher UI?
    I propose the MCP tools — they fit the host model and keep the human in the loop.
 2. **Auth level:** localhost-only + fail-closed consent now, bearer token later — acceptable, or day-one?
-3. **Start-up:** remove auto-start entirely, or integrate with Bionic's lifecycle?
+3. **Start-up / registration:** user-initiated chat install (copy-paste prompt, §4) as the recommended
+   flow — agree? (Validated on a real Bionic install.) Future: integrate with Bionic's own lifecycle if
+   it supports launching long-running MCP servers.
 4. **Alignment with craft-libs#248:** which parts of that draft should this adopt vs. diverge from?
 
 ## Next steps
