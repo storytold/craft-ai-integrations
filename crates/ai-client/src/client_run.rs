@@ -9,7 +9,7 @@ use craft_ai_native::secrets::secret_for;
 
 use super::{AiClient, Job, NO_ADAPTER, Plan};
 use crate::history;
-use crate::route_support::RouteSupport;
+use crate::route_support::{RouteQuery, RouteSupport};
 
 impl AiClient {
     /// Resolves the role and checks the request. Sends nothing and reads no key.
@@ -85,8 +85,8 @@ impl AiClient {
         }
     }
 
-    /// Refuses a request the adapter has said it would refuse. The inputs are this request's, not
-    /// the role's, because that is what would be sent.
+    /// Refuses a request the adapter has said it would refuse. The inputs, outputs, streaming and
+    /// options are this request's, not the role's, because that is what would be sent.
     fn refuse_unsupported_route(
         &self,
         connection: &Connection,
@@ -94,7 +94,16 @@ impl AiClient {
         request: &Request,
     ) -> Result<(), AiError> {
         let inputs: Vec<_> = request.inputs.iter().map(|i| i.role.clone()).collect();
-        match self.route_support(connection, model, &request.capability, &inputs) {
+        let query = RouteQuery {
+            connection,
+            model,
+            capability: &request.capability,
+            inputs: &inputs,
+            outputs: request.outputs,
+            stream: request.stream,
+            has_options: !request.params.is_empty(),
+        };
+        match self.factory.route_support(&query) {
             RouteSupport::Unsupported { reason } => Err(AiError::unsupported(reason)),
             RouteSupport::Supported | RouteSupport::Untested => Ok(()),
         }

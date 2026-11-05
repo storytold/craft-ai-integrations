@@ -9,6 +9,7 @@ use craft_ai_core::{
 use craft_ai_native::secrets::MemoryStore;
 use craft_ai_native::shared::SharedStore;
 
+/// The built-in select-subject tool.
 fn role() -> Role {
     craft_ai_features::builtin()
         .into_iter()
@@ -18,6 +19,7 @@ fn role() -> Role {
         .unwrap()
 }
 
+/// A local, free connection `id` using `provider`, with `model` taking every input the tool has.
 fn connection(id: &str, provider: &str, model: &str, endpoint: Option<&str>) -> Connection {
     let r = role();
     let mut spec = CapabilitySpec::new(r.capability);
@@ -43,6 +45,7 @@ struct World {
     shared: SharedStore,
 }
 impl World {
+    /// A store with a ComfyUI connection (`comfy`) and a Candle one (`native`), and nothing chosen.
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let shared = SharedStore::new(dir.path().join("connections.json"));
@@ -62,6 +65,7 @@ impl World {
             .unwrap();
         Self { _dir: dir, shared }
     }
+    /// A client for `app` whose build has no Candle or Burn adapter.
     fn client(&self, app: &str) -> AiClient {
         AiClient::new(
             AppId::new(app).unwrap(),
@@ -70,6 +74,7 @@ impl World {
         )
         .with_factory(without_engines())
     }
+    /// Makes `model` on `connection` the suite default, as the launcher does.
     fn choose(&self, connection: &str, model: &str) {
         ToolDesk::new(self.client("launcher"), self.shared.clone(), None)
             .choose(
@@ -81,6 +86,8 @@ impl World {
     }
 }
 
+/// Every app reads the exact connection, engine, model and address chosen, and nothing is saved
+/// per app.
 #[test]
 fn every_app_reads_the_exact_selected_local_backend_and_model() {
     let w = World::new();
@@ -103,6 +110,8 @@ fn every_app_reads_the_exact_selected_local_backend_and_model() {
     assert!(w.shared.load().unwrap().apps.is_empty());
 }
 
+/// An app without the chosen engine's adapter does not report the tool ready, and its picker
+/// offers no setup button that could install one.
 #[test]
 fn a_selected_native_model_without_an_adapter_is_not_reported_ready() {
     let w = World::new();
@@ -131,6 +140,7 @@ fn a_selected_native_model_without_an_adapter_is_not_reported_ready() {
     }
 }
 
+/// A chosen native model gives no ComfyUI address, so an app cannot send it to a server instead.
 #[test]
 fn an_endpoint_cannot_masquerade_as_a_different_selected_backend() {
     let w = World::new();
@@ -142,6 +152,8 @@ fn an_endpoint_cannot_masquerade_as_a_different_selected_backend() {
     );
 }
 
+/// A choice whose connection was removed is an error, not an unbound route that would let the app
+/// fall back to a hard-coded one.
 #[test]
 fn a_broken_choice_is_an_error_not_an_unbound_local_route() {
     let w = World::new();
@@ -160,17 +172,29 @@ fn a_broken_choice_is_an_error_not_an_unbound_local_route() {
     );
 }
 
+/// One app's own choice changes that app's local route only; another app keeps the suite default.
 #[test]
 fn an_app_override_changes_only_that_apps_local_route() {
     let w = World::new();
     w.choose("comfy", "sam3-node");
-    w.client("lightcraft")
-        .bind(
-            &role(),
-            &ConnectionId::new("native").unwrap(),
-            &ModelId::new("sam3-official").unwrap(),
-        )
-        .unwrap();
+    // An app binds only a model its own build can run, so this LightCraft has a Candle adapter. The
+    // stand-in is never built: binding and reading the route do not build a provider.
+    let mut with_candle = without_engines();
+    with_candle.register("candle", |_, _| {
+        panic!("binding and reading the route must not build a provider")
+    });
+    AiClient::new(
+        AppId::new("lightcraft").unwrap(),
+        w.shared.clone(),
+        Arc::new(MemoryStore::new()),
+    )
+    .with_factory(with_candle)
+    .bind(
+        &role(),
+        &ConnectionId::new("native").unwrap(),
+        &ModelId::new("sam3-official").unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         w.client("lightcraft")
             .local_route_for(&role())
@@ -189,6 +213,7 @@ fn an_app_override_changes_only_that_apps_local_route() {
     );
 }
 
+/// A choice that runs online is an error, not a local route.
 #[test]
 fn a_remote_choice_is_not_exposed_as_a_local_route() {
     let w = World::new();

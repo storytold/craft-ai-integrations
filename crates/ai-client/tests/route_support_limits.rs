@@ -9,6 +9,7 @@ use craft_ai_client::{ProviderFactory, RouteSupport};
 use craft_ai_core::model::InputRole;
 use craft_ai_core::{ConsentLedger, ErrorKind, ModelId, Payload};
 use craft_ai_native::HistoryFile;
+use craft_ai_native::shared::SharedStore;
 use serde_json::json;
 
 #[path = "support/route_fixture.rs"]
@@ -252,4 +253,107 @@ fn a_refused_choice_does_not_rewrite_the_store() {
     );
     assert_eq!(refused.unwrap_err().kind, ErrorKind::Unsupported);
     assert_eq!(std::fs::read(shared.path()).unwrap(), before);
+}
+
+/// Merges `extra` into the first saved model's capability, for limits `saved_at` does not set.
+fn declare(shared: &SharedStore, extra: serde_json::Value) {
+    let mut file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(shared.path()).unwrap()).unwrap();
+    let spec = &mut file["connections"][0]["models"][0]["capabilities"][0];
+    for (key, value) in extra.as_object().unwrap() {
+        spec[key] = value.clone();
+    }
+    std::fs::write(shared.path(), file.to_string()).unwrap();
+}
+
+/// Options, more outputs and streaming are refused at plan when the listed model refuses them, even
+/// though the saved spec allows them: the adapter checks its own list when it submits.
+#[test]
+fn options_outputs_and_streaming_the_listed_model_refuses_are_refused_at_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let cap = "image.generate";
+    let shared = saved_at(
+        &dir,
+        "artcraft-omni",
+        LOOPBACK,
+        "nano_banana",
+        cap,
+        json!({"prompt": 1}),
+    );
+    declare(
+        &shared,
+        json!({"max_outputs": 2, "features": {"streaming": true}}),
+    );
+    let reads = Arc::new(AtomicUsize::new(0));
+    let c = counted_client(shared, ProviderFactory::standard(), reads.clone());
+    assert!(c.plan(&role_for(cap), request_for(cap)).is_ok());
+    for (what, request) in [
+        ("options", request_for(cap).with_param("seed", json!(7))),
+        ("two outputs", request_for(cap).with_outputs(2)),
+        ("streaming", request_for(cap).streaming()),
+    ] {
+        let refused = c.plan(&role_for(cap), request).unwrap_err();
+        assert_eq!(refused.kind, ErrorKind::Unsupported, "{what}");
+    }
+    assert_eq!(reads.load(Ordering::SeqCst), 0, "no key was read");
+}
+
+/// Vertex express takes one output and no options, so an option is refused at plan.
+#[test]
+fn vertex_refuses_options_at_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let cap = "image.generate";
+    let shared = saved_at(
+        &dir,
+        "vertex-express",
+        LOOPBACK,
+        "gemini-2.5-flash-image",
+        cap,
+        json!({"prompt": 1}),
+    );
+    let c = client(shared, ProviderFactory::standard());
+    assert!(c.plan(&role_for(cap), request_for(cap)).is_ok());
+    let with_option = request_for(cap).with_param("seed", json!(7));
+    let refused = c.plan(&role_for(cap), with_option).unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::Unsupported);
+}
+
+/// A provider this app has no adapter for is not offered or bound for this app, but the suite
+/// default can still be set: the launcher may set up a model that only some apps can run.
+#[test]
+fn a_provider_with_no_adapter_is_refused_for_this_app_but_the_suite_default_stays_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let cap = "image.generate";
+    let shared = saved_at(
+        &dir,
+        "not-installed",
+        LOOPBACK,
+        "any",
+        cap,
+        json!({"prompt": 1}),
+    );
+    let c = client(shared.clone(), ProviderFactory::standard());
+    assert!(c.choices(&role()).unwrap().is_empty());
+    assert!(c.picks(&role()).unwrap().is_empty());
+    let before = std::fs::read(shared.path()).unwrap();
+    let refused = c
+        .bind(
+            &role(),
+            &"one".parse().unwrap(),
+            &ModelId::new("other").unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::Unsupported);
+    assert_eq!(std::fs::read(shared.path()).unwrap(), before);
+
+    let desk = craft_ai_client::ToolDesk::new(c, shared.clone(), None);
+    desk.choose(
+        &role(),
+        &"one".parse().unwrap(),
+        &ModelId::new("other").unwrap(),
+    )
+    .unwrap();
+    let after: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(shared.path()).unwrap()).unwrap();
+    assert_eq!(after["defaults"][0]["model"], "other");
 }

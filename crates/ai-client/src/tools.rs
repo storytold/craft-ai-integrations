@@ -167,7 +167,9 @@ impl ToolDesk {
             model: model.clone(),
         };
         // Check inside the same store lock as the write: another app may change the tool or
-        // connection between an unlocked read and the update. `try_update` writes nothing when the
+        // connection between an unlocked read and the update. A provider this build has no adapter
+        // for is allowed here on purpose: this is the suite default, and the launcher may set up a
+        // model that only some apps can run. An app's own `bind` refuses it. `try_update` writes nothing when the
         // check refuses, so a refusal leaves the file as it was.
         self.shared.try_update(|store| {
             if only_if_unchosen && store.defaults.iter().any(|b| b.role == role.id) {
