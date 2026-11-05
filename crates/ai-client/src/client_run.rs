@@ -2,7 +2,9 @@
 use std::sync::Arc;
 
 use craft_ai_core::payload::Limits;
-use craft_ai_core::{AiError, ConsentLedger, Disclosure, ErrorKind, Provider, Request, Role};
+use craft_ai_core::{
+    AiError, Connection, ConsentLedger, Disclosure, ErrorKind, ModelId, Provider, Request, Role,
+};
 use craft_ai_native::secrets::secret_for;
 
 use super::{AiClient, Job, NO_ADAPTER, Plan};
@@ -27,17 +29,8 @@ impl AiClient {
         if !self.factory.knows(&resolved.connection.provider) {
             return Err(AiError::unsupported(NO_ADAPTER));
         }
-        // The same for a pairing the adapter would refuse. The inputs are this request's, not the
-        // role's, because that is what would be sent. The chosen model is left as it is.
-        let inputs: Vec<_> = request.inputs.iter().map(|i| i.role.clone()).collect();
-        if let RouteSupport::Unsupported { reason } = self.route_support(
-            resolved.connection,
-            &resolved.model.id,
-            &request.capability,
-            &inputs,
-        ) {
-            return Err(AiError::unsupported(reason));
-        }
+        // The same for a pairing the adapter would refuse. The chosen model is left as it is.
+        self.refuse_unsupported_route(resolved.connection, &resolved.model.id, &request)?;
         let mut disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
         crate::disclosed_size::measure_local_files(&mut disclosure, &request);
         Ok(Plan {
@@ -92,12 +85,30 @@ impl AiClient {
         }
     }
 
+    /// Refuses a request the adapter has said it would refuse. The inputs are this request's, not
+    /// the role's, because that is what would be sent.
+    fn refuse_unsupported_route(
+        &self,
+        connection: &Connection,
+        model: &ModelId,
+        request: &Request,
+    ) -> Result<(), AiError> {
+        let inputs: Vec<_> = request.inputs.iter().map(|i| i.role.clone()).collect();
+        match self.route_support(connection, model, &request.capability, &inputs) {
+            RouteSupport::Unsupported { reason } => Err(AiError::unsupported(reason)),
+            RouteSupport::Supported | RouteSupport::Untested => Ok(()),
+        }
+    }
+
     /// Reads the key and builds the adapter.
     fn prepare(&self, plan: &Plan) -> Result<Arc<dyn Provider>, AiError> {
         // Without an adapter there is nothing to give the key to, so do not fetch it.
         if !self.factory.knows(&plan.connection.provider) {
             return Err(AiError::unsupported(NO_ADAPTER));
         }
+        // A plan can be made by another client of this app whose build says otherwise, so this
+        // build's own check runs again before the key is read.
+        self.refuse_unsupported_route(&plan.connection, &plan.model, &plan.request)?;
         let secret = secret_for(&*self.secrets, &plan.connection)?;
         self.factory.build(&plan.connection, secret)
     }

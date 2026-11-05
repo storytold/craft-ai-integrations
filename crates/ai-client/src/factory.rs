@@ -23,7 +23,9 @@ use craft_ai_sam3::{Sam3Config, Sam3Provider};
 use craft_ai_seedance::{SeedanceConfig, SeedanceProvider};
 use craft_ai_vertex::{VertexConfig, VertexProvider};
 
-use crate::route_support::{RouteQuery, RouteSupport, SupportFn, list_check, vertex_check};
+use crate::route_support::{
+    AddressRule, RouteQuery, RouteSupport, SupportFn, at_address, list_check, vertex_check,
+};
 
 /// Builds a provider for one connection.
 pub type BuildFn =
@@ -82,6 +84,8 @@ impl ProviderFactory {
         Self::built(None, Some(dir.into()))
     }
 
+    /// The standard factory with the given timeouts and ComfyUI workflow library: every built-in
+    /// adapter registered, and the support checks of those that serve a fixed list.
     fn built(
         timeouts: Option<(Duration, Duration)>,
         comfyui_library: Option<std::path::PathBuf>,
@@ -273,6 +277,8 @@ impl ProviderFactory {
         Ok(self)
     }
 
+    /// Registers the ComfyUI adapter, which needs a workflow library and may save outputs to
+    /// `output_dir`.
     fn register_comfyui(
         &mut self,
         comfyui_library: Option<std::path::PathBuf>,
@@ -334,15 +340,28 @@ impl ProviderFactory {
     /// The built-in adapters that serve a fixed list of models say so. Those that take any model
     /// the service offers, and adapters added later, stay untested.
     fn declare_built_in_support(&mut self) {
-        let lists = [
-            ("artcraft-omni", ArtCraftProvider::documented_models()),
-            ("bfl", BflProvider::catalog()),
-            ("seedance", SeedanceProvider::catalog()),
+        let lists: [(&str, Vec<_>, AddressRule); 3] = [
+            (
+                "artcraft-omni",
+                ArtCraftProvider::documented_models(),
+                ArtCraftProvider::address_allowed,
+            ),
+            ("bfl", BflProvider::catalog(), BflProvider::address_allowed),
+            (
+                "seedance",
+                SeedanceProvider::catalog(),
+                SeedanceProvider::address_allowed,
+            ),
         ];
-        for (name, models) in lists {
-            self.support.insert(name.to_owned(), list_check(models));
+        for (name, models, allowed) in lists {
+            self.support
+                .insert(name.to_owned(), at_address(allowed, list_check(models)));
         }
-        self.declare_support("vertex-express", vertex_check);
+        let vertex: Arc<SupportFn> = Arc::new(vertex_check);
+        self.support.insert(
+            "vertex-express".to_owned(),
+            at_address(VertexProvider::address_allowed, vertex),
+        );
     }
 
     pub fn knows(&self, name: &str) -> bool {

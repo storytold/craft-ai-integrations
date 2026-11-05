@@ -12,6 +12,7 @@
 //! what it knows, so a custom adapter is not judged by a built-in's list. Nothing here chooses a
 //! different model. A paid job is never used as a probe.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use craft_ai_core::model::{InputRole, ModelInfo};
@@ -60,13 +61,16 @@ pub struct RouteFacts {
     pub last_success_ms: Option<u64>,
 }
 
+/// The refusal with the reason every built-in list check gives.
 fn unsupported() -> RouteSupport {
     RouteSupport::Unsupported {
         reason: ROUTE_UNSUPPORTED.to_owned(),
     }
 }
 
-/// The answer for an adapter that serves a fixed list of models and refuses anything else.
+/// The answer for an adapter that serves a fixed list of models and refuses anything else. Each
+/// input role is counted against the listed model's limit, because `submit` validates the request
+/// against the list, not against what the saved connection declares.
 pub(crate) fn against_list(models: &[ModelInfo], query: &RouteQuery<'_>) -> RouteSupport {
     let Some(spec) = models
         .iter()
@@ -75,13 +79,41 @@ pub(crate) fn against_list(models: &[ModelInfo], query: &RouteQuery<'_>) -> Rout
     else {
         return unsupported();
     };
-    let accepted = query.inputs.iter().all(|i| spec.accepts.contains_key(i));
+    let mut counts: BTreeMap<&InputRole, u32> = BTreeMap::new();
+    for role in query.inputs {
+        *counts.entry(role).or_insert(0) += 1;
+    }
+    let accepted = counts
+        .iter()
+        .all(|(role, n)| spec.accepts.get(*role).is_some_and(|max| n <= max));
     let complete = spec.requires.iter().all(|i| query.inputs.contains(i));
     if accepted && complete {
         RouteSupport::Supported
     } else {
         unsupported()
     }
+}
+
+/// An adapter's rule for which saved addresses its constructor accepts.
+pub(crate) type AddressRule = fn(&str) -> bool;
+
+/// What a person is told when a built-in adapter would refuse the saved address.
+pub(crate) const ADDRESS_UNSUPPORTED: &str =
+    "This app can't use this connection's address. Check it in Set up AI.";
+
+/// Puts an adapter's address rule in front of `check`, so a connection whose saved address the
+/// adapter refuses when it is built is reported before anyone agrees to send. No address is refused
+/// too, because the built-in adapters need one.
+pub(crate) fn at_address(allowed: AddressRule, check: Arc<SupportFn>) -> Arc<SupportFn> {
+    Arc::new(move |query| {
+        if query.connection.endpoint.as_deref().is_some_and(allowed) {
+            check(query)
+        } else {
+            RouteSupport::Unsupported {
+                reason: ADDRESS_UNSUPPORTED.to_owned(),
+            }
+        }
+    })
 }
 
 /// Wraps a fixed list as a check. The list is read once, so asking every frame costs nothing.
