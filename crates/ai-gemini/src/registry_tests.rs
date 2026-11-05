@@ -93,3 +93,38 @@ fn only_a_delivered_terminal_state_can_be_evicted() {
             .all(|(i, id)| i == 1 || jobs.contains_key(id))
     );
 }
+
+/// Cancelling stops waiting for the answer, not the request: a worker still counts until it exits.
+#[test]
+fn a_cancelled_request_counts_as_running_until_its_worker_exits() {
+    // Connections wait unanswered in this listener's queue, so every worker stays in flight.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1beta", listener.local_addr().unwrap());
+    let p = GeminiProvider::new(GeminiConfig::new(
+        url,
+        SecretString::new("scripted-test-key"),
+    ))
+    .unwrap();
+    let model = ModelId::new(DEFAULT_MODEL).unwrap();
+    for _ in 0..MAX_RUNNING {
+        let id = p.submit(&model, &request()).unwrap();
+        p.cancel(&id).unwrap();
+    }
+    let error = p.submit(&model, &request()).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::RateLimited);
+    assert_eq!(lock(&p.jobs).unwrap().len(), MAX_RUNNING);
+
+    // Closing the listener ends those requests, and each worker gives its place back as it exits.
+    drop(listener);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let new = loop {
+        match p.submit(&model, &request()) {
+            Ok(id) => break id,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("no worker gave its place back: {error:?}"),
+        }
+    };
+    assert!(lock(&p.jobs).unwrap().contains_key(&new));
+}
