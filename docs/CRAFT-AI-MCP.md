@@ -192,10 +192,12 @@ folders into the global skills directory by hand — see the skill-management gu
   updates (they moved to a revision that requires `_meta` but broke the stdio initialize path).
   **Action:** report to the Craft AI team; until fixed, these four will not connect through Bionic's
   stdio MCP. The other 14 stdio CLIs and the unified HTTP bridge are unaffected.
-- **Protocol version negotiation.** The unified bridge advertises `2025-03-07`. Newer servers that
-  require `_meta` (revisions `2025-11-25` / `2026-07-28`) need the client to carry
-  `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` in
-  `_meta` *inside* `params`. Bionic's client must be checked against this; see the issue above.
+- **Protocol version negotiation.** The bridge negotiates on `initialize`: it echoes a client's
+  requested revision when that revision is one the bridge has been tested against (`2025-06-18`,
+  `2025-11-25`), and otherwise falls back to `2025-06-18`. It never advertises an unpublished
+  revision (the previously hardcoded `2025-03-07` was rejected by LM Studio). Revisions that require
+  `_meta` inside `params` (`2025-11-25`, `2026-07-28`) are a client-side concern; Bionic's client
+  must be checked against this.
 - **Secrets are in-memory (v1).** No real keychain yet; remote destinations report "what is missing"
   rather than failing silently.
 - **Click/reference inputs not expressible.** App-specific inputs (e.g. a selection tool's clicks)

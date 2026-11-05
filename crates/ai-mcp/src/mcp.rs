@@ -14,15 +14,30 @@ use serde_json::{Map, Value};
 /// a hung provider does not pin a thread forever. Overridable by the binary (see `main.rs`).
 pub const DEFAULT_JOB_TIMEOUT: Duration = Duration::from_secs(900);
 
-/// A published revision the bridge falls back to when the client does not request one. The
-/// previously hardcoded "2025-03-07" was not a published revision and LM Studio rejected it.
+/// Published MCP protocol revisions this bridge has been tested against. We echo a client's
+/// requested revision only when it is one of these; otherwise we fall back to
+/// [`DEFAULT_PROTOCOL_VERSION`]. Keeping the list small means the bridge never advertises a
+/// revision it has not actually verified, which is what LM Studio and Bionic require (they reject
+/// unpublished revisions such as the previously hardcoded "2025-03-07").
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2025-06-18", "2025-11-25"];
+
+/// The published revision the bridge falls back to when a client does not request one, or requests
+/// one it does not support.
 pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// True for a well-formed `YYYY-MM-DD` protocol-revision string.
+/// True for a well-formed `YYYY-MM-DD` protocol-revision string (digits in every position except
+/// the two hyphens at indices 4 and 7).
 fn is_protocol_version(v: &str) -> bool {
     let b = v.as_bytes();
-    b.len() == 10 && b[4] == b'-' && b[7] == b'-'
-        && (0..b.len()).all(|i| i != 4 && i != 7 && b[i].is_ascii_digit())
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    (0..b.len()).all(|i| i == 4 || i == 7 || b[i].is_ascii_digit())
+}
+
+/// True when `v` is a revision the bridge has been tested against and is safe to advertise.
+fn supported_protocol_version(v: &str) -> bool {
+    SUPPORTED_PROTOCOL_VERSIONS.contains(&v)
 }
 
 /// Everything the transport needs to answer one MCP request.
@@ -92,15 +107,15 @@ impl McpState {
 
     /// `initialize` — negotiate the protocol version and advertise that we expose tools.
     fn initialize(&self, request: &Value) -> Result<Value, String> {
-        // Negotiate: echo the client's requested revision when it is a well-formed date; otherwise
-        // fall back to a published revision the bridge supports. (The old hardcoded "2025-03-07"
-        // was not a published revision and LM Studio rejected it.)
+        // Negotiate: echo the client's requested revision only when it is one the bridge has been
+        // tested against; otherwise fall back to a published revision the bridge supports. (The old
+        // hardcoded "2025-03-07" was not a published revision and LM Studio rejected it.)
         let version = match request
             .get("params")
             .and_then(|p| p.get("protocolVersion"))
             .and_then(|v| v.as_str())
         {
-            Some(v) if is_protocol_version(v) => v.to_string(),
+            Some(v) if is_protocol_version(v) && supported_protocol_version(v) => v.to_string(),
             _ => DEFAULT_PROTOCOL_VERSION.to_string(),
         };
 
@@ -315,6 +330,62 @@ mod tests {
             "2025-06-18"
         );
         assert!(resp["result"]["capabilities"]["tools"].is_object());
+    }
+
+    #[test]
+    fn initialize_echoes_a_supported_requested_version() {
+        let state = McpState::new(test_client());
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25" },
+        });
+        let resp = state.handle(&req).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"].as_str().unwrap(), "2025-11-25");
+    }
+
+    #[test]
+    fn initialize_falls_back_for_an_unsupported_requested_version() {
+        let state = McpState::new(test_client());
+        // A well-formed but unsupported revision must fall back to the default, not be echoed.
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": "2025-03-26" },
+        });
+        let resp = state.handle(&req).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"].as_str().unwrap(), DEFAULT_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn initialize_rejects_a_malformed_version_with_fallback() {
+        let state = McpState::new(test_client());
+        // A malformed (not `YYYY-MM-DD`) revision must fall back to the default.
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": "not-a-date" },
+        });
+        let resp = state.handle(&req).unwrap();
+        assert_eq!(resp["result"]["protocolVersion"].as_str().unwrap(), DEFAULT_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn is_protocol_version_accepts_well_formed_dates() {
+        assert!(is_protocol_version("2025-06-18"));
+        assert!(is_protocol_version("2025-11-25"));
+        assert!(is_protocol_version("2024-11-05"));
+    }
+
+    #[test]
+    fn is_protocol_version_rejects_malformed_dates() {
+        assert!(!is_protocol_version(""));             // empty
+        assert!(!is_protocol_version("2025-06-1"));    // too short
+        assert!(!is_protocol_version("abcd-ef-gh"));   // non-digit positions
+        assert!(!is_protocol_version("2025-06-18x"));  // too long
     }
 
     #[test]
