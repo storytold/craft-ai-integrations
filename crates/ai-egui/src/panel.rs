@@ -358,6 +358,7 @@ mod tests {
             )],
             elapsed: Duration::ZERO,
             probe: None,
+            unavailable_choices: Vec::new(),
         })
     }
 
