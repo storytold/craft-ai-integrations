@@ -36,6 +36,7 @@ pub struct McpState {
 }
 
 impl McpState {
+    /// Build a default state (trusted local host, default job budget).
     pub fn new(client: AiClient) -> Self {
         Self {
             client,

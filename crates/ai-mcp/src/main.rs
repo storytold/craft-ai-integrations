@@ -36,12 +36,18 @@ fn main() {
     // Optionally generate per-tool SKILL.md folders for installation through Bionic's `skill.install`
     // tool. The bridge never writes into Bionic's skills folder itself; it only produces the folders
     // here so a user or script can install them. Set CRAFT_MCP_SKILLS_DIR to enable; failures are
-    // logged but do not stop the server (skills are optional).
+    // logged but do not stop the server (skills are optional). If the requested destination is
+    // Bionic's own skills directory, refuse - writing there would overwrite installed SKILL.md files
+    // without skill.install validation or approval.
     if let Ok(dir_str) = env::var("CRAFT_MCP_SKILLS_DIR") {
         let dir = PathBuf::from(&dir_str);
-        match craft_ai_mcp::installer::write_skills(&dir, &craft_ai_features::builtin()) {
-            Ok(written) => println!("wrote {} skill folders to {}", written.len(), dir.display()),
-            Err(e) => eprintln!("failed to write skills to {}: {e}", dir.display()),
+        if is_bionic_skills_dir(&dir) {
+            eprintln!("refusing to generate skills into Bionic's skills directory ({}) - use a separate staging folder and install via skill.install", dir.display());
+        } else {
+            match craft_ai_mcp::installer::write_skills(&dir, &craft_ai_features::builtin()) {
+                Ok(written) => println!("wrote {} skill folders to {}", written.len(), dir.display()),
+                Err(e) => eprintln!("failed to write skills to {}: {e}", dir.display()),
+            }
         }
     }
 
@@ -74,4 +80,18 @@ fn ensure_parent(path: &Path) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
+}
+
+/// True when `p` resolves inside Bionic's skills directory, where writing generated SKILL.md files
+/// would overwrite installed skills without `skill.install` validation or approval.
+fn is_bionic_skills_dir(p: &Path) -> bool {
+    let canon = match p.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let comps: Vec<_> = canon.components().collect();
+    // True when the resolved path ends in `.lmstudio/skills`, independent of separator style.
+    comps.len() >= 2
+        && comps[comps.len() - 1].as_os_str().to_string_lossy().eq_ignore_ascii_case("skills")
+        && comps[comps.len() - 2].as_os_str().to_string_lossy().eq_ignore_ascii_case(".lmstudio")
 }

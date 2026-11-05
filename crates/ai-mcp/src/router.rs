@@ -43,6 +43,7 @@ pub enum ToolCallResult {
 }
 
 impl ToolCallResult {
+    /// True only for a successful tool call (a `Succeeded` result).
     pub fn is_ok(&self) -> bool {
         matches!(self, Self::Succeeded { .. })
     }

@@ -18,6 +18,8 @@ use craft_ai_core::InputRole;
 use craft_ai_features::Feature;
 use serde_json::{Map, Value};
 
+use tempfile::NamedTempFile;
+
 /// Stable identifier for this server in Bionic's `ng-mcp.json`. Deterministic so repeated installs
 /// update the same entry instead of stacking duplicates (UUID per Bionic's schema).
 pub const SERVER_ID: &str = "c55a52b4-6eca-44ac-926c-f67cceac9f1f";
@@ -99,22 +101,30 @@ pub fn install_mcp_server(path: &Path, port: u16) -> Result<(), String> {
     doc["servers"] = Value::Array(servers);
 
     let out = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
-    // Atomic replace: serialize to a temp file in the same directory, then rename over the target.
-    // The original stays intact until the rename succeeds, so an interrupted write never leaves a
-    // half-written ng-mcp.json (Bionic would reject every server in it). Preserve the target's
-    // permissions so any process that created it keeps access after the swap.
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, format!("{out}\n"))
-        .map_err(|e| format!("could not write temp {}: {e}", tmp.display()))?;
+    // Atomic replace: serialize to a unique temp file in the same directory, then rename over
+    // the target. The original stays intact until the rename succeeds, so an interrupted write never
+    // leaves a half-written ng-mcp.json (Bionic would reject every server in it). A unique name
+    // avoids collisions if two installs race on the same file; the temp file is cleaned up on any
+    // error path and is gone after the rename. Preserve the target's permissions so any process
+    // that created it keeps access after the swap.
+    let tmp = NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
+        .map_err(|e| format!("could not create temp file in {}: {e}", path.display()))?;
+    fs::write(tmp.path(), out.as_bytes())
+        .map_err(|e| format!("could not write temp file: {e}"))?;
     // Preserve the target's permissions on Unix (no-op elsewhere; NTFS ignores these bits).
     #[cfg(unix)]
     if let Ok(meta) = fs::metadata(path) {
         use std::os::unix::fs::PermissionsExt;
         let mode = meta.permissions().mode();
-        fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode)).ok();
+        fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode))
+            .map_err(|e| format!("could not set permissions on temp file: {e}"))?;
     }
-    fs::rename(&tmp, path)
-        .map_err(|e| format!("could not replace {}: {e}", path.display()))
+    // Atomic replace: rename the unique temp file over the target. The original stays intact until
+    // this succeeds, so Bionic never observes a half-written ng-mcp.json. After the rename the
+    // temp path no longer exists, so dropping `tmp` is a no-op (its remove() targets a gone path).
+    fs::rename(tmp.path(), path)
+        .map_err(|e| format!("could not replace {}: {e}", path.display()))?;
+    Ok(())
 }
 
 /// Human-readable list of the JSON argument fields a feature accepts (mirrors `input_schema`).

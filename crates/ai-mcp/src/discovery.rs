@@ -85,9 +85,10 @@ fn next_page_url(link_header: Option<&str>) -> Option<String> {
             if !part.contains("rel=\"next\"") && !part.contains("rel='next'") {
                 return None;
             }
-            let start = part.find('<')? + 1;
-            let end = part.find('>')?;
-            Some(part[start..end].to_string())
+            let lt = part.find('<')?;
+            let start = lt + 1;
+            let gt = part[start..].find('>')?;
+            Some(part[start..start + gt].to_string())
         })
 }
 
