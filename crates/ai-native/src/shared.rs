@@ -5,8 +5,9 @@
 //!
 //! - **Reads** never block on a writer. Writes replace the file atomically, so a reader sees the
 //!   old file or the new one.
-//! - **Writes** go through [`update`](SharedStore::update): lock, read, change, validate, write.
-//!   Two processes updating at once both land. A change that fails validation writes nothing.
+//! - **Writes** go through [`update`](SharedStore::update) or [`try_update`](SharedStore::try_update):
+//!   lock, read, change, validate, write. Two processes updating at once both land. A change that
+//!   fails validation writes nothing; `try_update` also aborts on callback failure.
 //! - **A newer schema is never overwritten.** An older build that meets one refuses to write.
 //! - **Unknown top-level fields survive** a rewrite by an older build of the same schema version,
 //!   so a newer launcher's additions are not silently dropped. (Nested unknown fields are not
@@ -110,6 +111,8 @@ impl SharedStore {
     ///
     /// Nothing is written if reading fails, if the file is a newer schema, or if the changed
     /// store is invalid or too large.
+    /// A `Result` returned by `f` is only a return value here; it does not abort the write.
+    /// Use [`try_update`](Self::try_update) when callback failure must leave the store untouched.
     pub fn update<T>(&self, f: impl FnOnce(&mut StoreFile) -> T) -> Result<T, SharedError> {
         self.locked(|| {
             let (mut store, extras) = self
@@ -118,6 +121,27 @@ impl SharedStore {
             let out = f(&mut store);
             self.write(&store, extras)?;
             Ok(out)
+        })
+    }
+
+    /// Locks, reads and changes the store, writing only when `f` returns `Ok` and validation passes.
+    /// An `Err` from `f` discards all in-memory changes without serialising, writing or creating
+    /// the store file. The outer result holds store/OS errors; the inner result holds the callback
+    /// outcome, so callers can propagate the two separately. The lock covers the read through commit.
+    pub fn try_update<T, E>(
+        &self,
+        f: impl FnOnce(&mut StoreFile) -> Result<T, E>,
+    ) -> Result<Result<T, E>, SharedError> {
+        self.locked(|| {
+            let (mut store, extras) = self
+                .read_raw()?
+                .unwrap_or_else(|| (StoreFile::default(), Map::new()));
+            let out = match f(&mut store) {
+                Ok(out) => out,
+                Err(error) => return Ok(Err(error)),
+            };
+            self.write(&store, extras)?;
+            Ok(Ok(out))
         })
     }
 
