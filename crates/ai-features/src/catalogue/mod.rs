@@ -8,11 +8,13 @@
 use crate::feature::{AppStatus, AppUse, Feature};
 use crate::recipe::CloudOption;
 
+mod deepfilternet3;
 mod florence2;
 mod inspyrenet;
 mod sam21;
 mod sam3;
 use craft_ai_core::{CapabilityId, InputRole};
+use deepfilternet3::deepfilternet3;
 pub use florence2::FLORENCE2_LARGE_DIR;
 use inspyrenet::inspyrenet;
 use sam3::sam3;
@@ -193,7 +195,18 @@ fn try_builtin() -> Option<Vec<Feature>> {
         ),
     ];
 
+    let mut voice = feature(
+        "isolate-voice",
+        "Isolate voice",
+        "Keep the voice in a recording and take out background noise and room sound.",
+        "audio.enhance",
+    )?;
+    voice.inputs = vec![InputRole::Source];
+    voice.uses = uses(&[("SoundCraft", "AudioSuite AI Voice Isolation")]);
+    // One model, built in only (rten), and no hosted route yet.
+    voice.locals = vec![deepfilternet3()];
+
     Some(vec![
-        select, background, remove, fill, expand, extend, image, video,
+        select, background, remove, fill, expand, extend, image, video, voice,
     ])
 }

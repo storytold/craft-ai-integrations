@@ -53,12 +53,12 @@ fn bare() -> Inventory {
     }
 }
 
-/// The catalogue has eight features with unique ids, each with a title, summary and app uses,
+/// The catalogue has nine features with unique ids, each with a title, summary and app uses,
 /// every hosted option names a real preset and no feature claims an app ships it yet.
 #[test]
 fn the_catalogue_is_complete_and_consistent() {
     let all = builtin();
-    assert_eq!(all.len(), 8, "a bad capability id empties the list");
+    assert_eq!(all.len(), 9, "a bad capability id empties the list");
     let ids: HashSet<_> = all.iter().map(|f| f.id.as_str()).collect();
     assert_eq!(ids.len(), all.len());
     let presets: HashSet<_> = PRESETS.iter().map(|p| p.key).collect();
