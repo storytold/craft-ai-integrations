@@ -160,7 +160,10 @@ fn start_checks_the_route_again_before_reading_the_key() {
     });
     let reads = Arc::new(AtomicUsize::new(0));
     let starter = counted_client(shared, refuses, reads.clone());
-    let refused = starter.start(&plan, &ledger).err().expect("refused");
+    // `Job` has no `Debug`, so the refusal is matched rather than unwrapped.
+    let Err(refused) = starter.start(&plan, &ledger) else {
+        panic!("a route this build refuses must not start");
+    };
     assert_eq!(refused.kind, ErrorKind::Unsupported);
     assert_eq!(refused.message, "Not this one.");
     assert_eq!(reads.load(Ordering::SeqCst), 0, "no key was read");
