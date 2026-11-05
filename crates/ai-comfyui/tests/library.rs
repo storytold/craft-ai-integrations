@@ -550,3 +550,18 @@ fn a_spec_with_an_unknown_capability_is_refused() {
     .unwrap_err();
     assert_eq!(err.kind, craft_ai_core::ErrorKind::Unsupported);
 }
+
+/// A pipe offered as a workflow file is refused at once instead of blocking the import.
+#[cfg(unix)]
+#[test]
+fn a_pipe_offered_as_a_workflow_is_refused_without_blocking() {
+    let (lib, dir) = library();
+    let file = dir.path().join("pipe.json");
+    let made = std::process::Command::new("mkfifo").arg(&file).status();
+    if !made.is_ok_and(|s| s.success()) {
+        eprintln!("skipped: mkfifo is not available");
+        return;
+    }
+    let err = lib.import_file(&file).unwrap_err();
+    assert!(err.message.contains("could not open"), "message was: {err}");
+}
