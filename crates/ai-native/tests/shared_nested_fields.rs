@@ -263,3 +263,54 @@ fn two_writes_in_a_row_keep_the_fields() {
         "model m2"
     );
 }
+
+/// A binding a newer build gave an `id` keeps its unknown fields, because this build writes it with
+/// `role` only and the match must use that.
+#[test]
+fn an_item_with_an_unknown_id_is_matched_by_the_identity_this_build_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut file = newer_file();
+    file["defaults"][0]["id"] = json!("binding-7");
+    let store = saved(&dir, &file);
+    store.update(|file| file.model_folders.clear()).unwrap();
+    let after = on_disk(&store);
+    assert_eq!(after["defaults"][0]["id"], "binding-7");
+    assert_eq!(after["defaults"][0]["from_newer"], "default");
+}
+
+/// A writer that adds a second default for a role already in the file leaves both as written:
+/// copying the old item's unknown fields onto either would be a guess.
+#[test]
+fn an_identity_written_twice_is_not_guessed_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = saved(&dir, &newer_file());
+    store
+        .update(|file| {
+            let mut second = file.defaults[0].clone();
+            second.model = "m2".parse().unwrap();
+            file.defaults.push(second);
+        })
+        .unwrap();
+    let after = on_disk(&store);
+    let defaults = after["defaults"].as_array().unwrap();
+    assert_eq!(defaults.len(), 2);
+    assert!(defaults.iter().all(|d| d.get("from_newer").is_none()));
+}
+
+/// When the file holds an identity twice and the writer keeps only one of those items, the kept item
+/// still gets nothing: which old item it came from cannot be told, so copying either would be a guess.
+#[test]
+fn an_identity_the_file_holds_twice_is_not_guessed_at_when_written_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut file = newer_file();
+    file["defaults"] = json!([
+        {"role": "fill", "connection": "one", "model": "m1", "from_newer": "first"},
+        {"role": "fill", "connection": "one", "model": "m2", "from_newer": "second"}
+    ]);
+    let store = saved(&dir, &file);
+    store.update(|file| drop(file.defaults.remove(0))).unwrap();
+    let after = on_disk(&store);
+    assert_eq!(after["defaults"].as_array().unwrap().len(), 1);
+    assert_eq!(after["defaults"][0]["model"], "m2");
+    assert!(after["defaults"][0].get("from_newer").is_none());
+}
