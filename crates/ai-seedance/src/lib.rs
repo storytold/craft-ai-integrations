@@ -75,7 +75,8 @@ impl SeedanceProvider {
             jobs: Mutex::new(HashMap::new()),
         })
     }
-    fn catalog() -> Vec<ModelInfo> {
+    /// The models this adapter serves, and what each can do.
+    pub fn catalog() -> Vec<ModelInfo> {
         match (ModelId::new(MODEL), CapabilityId::parse("video.generate")) {
             (Ok(id), Ok(cap)) => vec![
                 ModelInfo::new(id, "Seedance 2.0").with(

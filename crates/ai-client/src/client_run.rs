@@ -7,6 +7,7 @@ use craft_ai_native::secrets::secret_for;
 
 use super::{AiClient, Job, NO_ADAPTER, Plan};
 use crate::history;
+use crate::route_support::RouteSupport;
 
 impl AiClient {
     /// Resolves the role and checks the request. Sends nothing and reads no key.
@@ -25,6 +26,17 @@ impl AiClient {
         // Refuse here, before anyone is asked to agree to send something this app cannot send.
         if !self.factory.knows(&resolved.connection.provider) {
             return Err(AiError::unsupported(NO_ADAPTER));
+        }
+        // The same for a pairing the adapter would refuse. The inputs are this request's, not the
+        // role's, because that is what would be sent. The chosen model is left as it is.
+        let inputs: Vec<_> = request.inputs.iter().map(|i| i.role.clone()).collect();
+        if let RouteSupport::Unsupported { reason } = self.route_support(
+            resolved.connection,
+            &resolved.model.id,
+            &request.capability,
+            &inputs,
+        ) {
+            return Err(AiError::unsupported(reason));
         }
         let mut disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
         crate::disclosed_size::measure_local_files(&mut disclosure, &request);

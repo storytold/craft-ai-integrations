@@ -73,7 +73,8 @@ impl BflProvider {
             jobs: Mutex::new(HashMap::new()),
         })
     }
-    fn catalog() -> Vec<ModelInfo> {
+    /// The models this adapter serves, and what each can do.
+    pub fn catalog() -> Vec<ModelInfo> {
         [
             ("flux-3-image", "FLUX 3 image", "image.generate"),
             ("flux-3-video", "FLUX 3 video", "video.generate"),

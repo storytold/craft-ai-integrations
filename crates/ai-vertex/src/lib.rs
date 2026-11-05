@@ -20,7 +20,8 @@ use std::{
     time::Duration,
 };
 
-const MODEL: &str = "gemini-2.5-flash-image";
+/// The one model Vertex express serves here.
+pub const MODEL: &str = "gemini-2.5-flash-image";
 #[derive(Clone, Debug)]
 pub struct VertexConfig {
     pub base_url: String,
