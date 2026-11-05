@@ -6,6 +6,9 @@ name a focused runtime test so a compile error can never count as evidence.
 CORE = 'crates/ai-core/src/'
 DRAFT = CORE + 'draft.rs'
 ROLE = CORE + 'role.rs'
+CLIENT = 'crates/ai-client/src/'
+RUN = CLIENT + 'client_run.rs'
+SIZE = CLIENT + 'disclosed_size.rs'
 M = 'craft-ai-core'
 CL = 'craft-ai-client'
 CA = [
@@ -16,6 +19,21 @@ CA = [
      'if reviewed != Some(plan.disclosure()) {',
      'if reviewed.is_none_or(|shown| shown.destination != plan.disclosure().destination) {',
      CL, 'sample_consent', 'changed_payload_asks_again_before_saving_or_building'),
+    ('disclosed-file-size-not-measured', RUN,
+     'crate::disclosed_size::measure_local_files(&mut disclosure, &request);', '',
+     CL, 'disclosed_size', 'a_local_files_size_is_measured_not_taken_from_the_app'),
+    ('unreadable-file-keeps-claimed-size', SIZE,
+     'item.bytes = local_file_len(&url),', 'item.bytes = local_file_len(&url).or(item.bytes),',
+     CL, 'disclosed_size', 'a_local_file_that_cannot_be_read_shows_no_size'),
+    ('unparsed-address-keeps-claimed-size', SIZE,
+     'Err(_) => item.bytes = None,', 'Err(_) => {}',
+     CL, 'disclosed_size', 'addresses_that_do_not_parse_show_no_size'),
+    ('folder-size-disclosed', SIZE,
+     'meta.is_file().then_some(meta.len())', 'Some(meta.len())',
+     CL, 'disclosed_size', 'a_local_file_that_cannot_be_read_shows_no_size'),
+    ('web-handle-size-dropped', SIZE,
+     'Ok(_) => {}', 'Ok(_) => item.bytes = None,',
+     CL, 'disclosed_size', 'other_payloads_keep_their_size'),
     ('late-model-answer-taken', DRAFT,
      'if address.trim() != self.endpoint.trim() {', 'if false {',
      M, 'draft_provenance', 'a_test_that_answers_after_the_address_moved_on'),
@@ -46,10 +64,10 @@ CA = [
     ('app-status-and-plan-ignore-required-input', ROLE,
      'spec.requires.iter().find(|i| !role.inputs.contains(i))', 'spec.requires.iter().find(|_| false)',
      CL, 'required_inputs', 'status_and_plan'),
-    ('start-accepts-another-apps-plan', 'crates/ai-client/src/client_run.rs',
+    ('start-accepts-another-apps-plan', RUN,
      'if plan.disclosure.app != self.app {', 'if false {',
      CL, 'plan_app_scope', 'another_apps_plan_is_refused_before_key_provider_and_history'),
-    ('start-accepts-another-apps-local-plan', 'crates/ai-client/src/client_run.rs',
+    ('start-accepts-another-apps-local-plan', RUN,
      'if plan.disclosure.app != self.app {',
      'if plan.disclosure.locality == craft_ai_core::Locality::Remote && plan.disclosure.app != self.app {',
      CL, 'plan_app_scope', 'another_apps_plan_is_refused_before_key_provider_and_history'),

@@ -26,7 +26,8 @@ impl AiClient {
         if !self.factory.knows(&resolved.connection.provider) {
             return Err(AiError::unsupported(NO_ADAPTER));
         }
-        let disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
+        let mut disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
+        crate::disclosed_size::measure_local_files(&mut disclosure, &request);
         Ok(Plan {
             connection: resolved.connection.clone(),
             model: resolved.model.id.clone(),
