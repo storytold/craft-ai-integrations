@@ -335,9 +335,42 @@ fn a_folder_with_too_many_entries_ends_early_and_says_so() {
         std::fs::create_dir_all(dir.path().join(format!("d{i:02}"))).unwrap();
     }
     std::fs::write(dir.path().join("zz.safetensors"), b"x").unwrap();
-    let scan = scan_with_limits(dir.path(), &[], MAX_FILES, 10).unwrap();
+    let scan = scan_with_limits(dir.path(), &[], MAX_FILES, 10, MAX_SCAN_HEADER_BYTES).unwrap();
     assert!(scan.truncated, "only ten entries were looked at");
-    let full = scan_with_limits(dir.path(), &[], MAX_FILES, 1000).unwrap();
+    let full = scan_with_limits(dir.path(), &[], MAX_FILES, 1000, MAX_SCAN_HEADER_BYTES).unwrap();
     assert!(!full.truncated);
     assert_eq!(full.files.len(), 1);
+}
+
+/// Many links to one header are read only until the scan's header budget is spent; the rest are
+/// left unread and the scan says it stopped early.
+#[test]
+fn links_to_one_header_share_a_single_header_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = safetensors(&["unet.lora_down.weight"]);
+    let header = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    write(dir.path(), "a00.safetensors", &bytes);
+    for i in 1..20 {
+        std::fs::hard_link(
+            dir.path().join("a00.safetensors"),
+            dir.path().join(format!("a{i:02}.safetensors")),
+        )
+        .unwrap();
+    }
+    let scan = scan_with_limits(dir.path(), &[], MAX_FILES, 1000, header * 3).unwrap();
+    let by_header = scan
+        .files
+        .iter()
+        .filter(|f| f.basis == Some(Basis::FileHeader))
+        .count();
+    assert_eq!(by_header, 3);
+    assert_eq!(scan.files.len(), 20);
+    assert!(scan.truncated);
+    let full = scan_with_limits(dir.path(), &[], MAX_FILES, 1000, MAX_SCAN_HEADER_BYTES).unwrap();
+    assert!(
+        full.files
+            .iter()
+            .all(|f| f.basis == Some(Basis::FileHeader))
+    );
+    assert!(!full.truncated);
 }

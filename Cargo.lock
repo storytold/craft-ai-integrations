@@ -1999,7 +1999,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-http",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
  "uuid",
 ]
 
@@ -2010,7 +2010,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-http",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -2071,7 +2071,7 @@ dependencies = [
  "sevenz-rust2",
  "sha2 0.11.1",
  "tempfile",
- "ureq 3.4.2",
+ "ureq 3.5.0",
  "url",
 ]
 
@@ -2085,11 +2085,12 @@ dependencies = [
  "craft-ai-http",
  "craft-ai-media",
  "craft-ai-native",
+ "libc",
  "png",
  "serde",
  "serde_json",
  "tempfile",
- "ureq 3.4.2",
+ "ureq 3.5.0",
  "url",
 ]
 
@@ -2110,7 +2111,7 @@ dependencies = [
  "craft-ai-http",
  "craft-ai-media",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -2201,7 +2202,7 @@ name = "craft-ai-http"
 version = "0.1.0"
 dependencies = [
  "craft-ai-core",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -2228,7 +2229,7 @@ dependencies = [
  "craft-ai-http",
  "serde_json",
  "tempfile",
- "ureq 3.4.2",
+ "ureq 3.5.0",
  "url",
 ]
 
@@ -2255,7 +2256,7 @@ dependencies = [
  "craft-ai-http",
  "serde",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -2265,7 +2266,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-http",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -2275,7 +2276,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-http",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -2285,7 +2286,7 @@ dependencies = [
  "craft-ai-core",
  "craft-ai-http",
  "serde_json",
- "ureq 3.4.2",
+ "ureq 3.5.0",
 ]
 
 [[package]]
@@ -7855,9 +7856,9 @@ dependencies = [
 
 [[package]]
 name = "sevenz-rust2"
-version = "0.24.1"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f0c68c0e8289bfd09e49ef433e8de02c7c464afc1d7f5a275c99749a880e301"
+checksum = "30146010a60b5773ef63f7b0033576c7a0487ecc87a30d97b787ca8e27c85140"
 dependencies = [
  "bzip2 0.6.1",
  "crc32fast",
@@ -8572,7 +8573,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tar",
- "ureq 3.4.2",
+ "ureq 3.5.0",
  "walkdir",
 ]
 
@@ -9061,9 +9062,9 @@ dependencies = [
 
 [[package]]
 name = "ureq"
-version = "3.4.2"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a7ac20be9b7726e0bbdbf974c059676d9acb1cd414961f570a4e8231cacd7fc"
+checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -9078,9 +9079,9 @@ dependencies = [
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f86fd172ccca569e458f61b6bdd6220965a9ef36e672a6852953b51a0e1583be"
+checksum = "841583fc36089d7d59419568ae157f43a5a03a2e5a81ba87c77d1596ef46e922"
 dependencies = [
  "base64 0.23.1",
  "http",
@@ -9135,9 +9136,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.28.0"
+version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
