@@ -26,6 +26,7 @@ mod sample;
 
 use crate::client::{AiClient, Choice, Job, RoleStatus};
 use crate::popup::MissingModel;
+use crate::route_support::RouteSupport;
 
 /// What the launcher shows for one tool.
 #[derive(Clone, Debug)]
@@ -174,8 +175,16 @@ impl ToolDesk {
             store
                 .check_tool(role)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
-            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+            let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
+            if let RouteSupport::Unsupported { reason } = self.client.route_support(
+                resolved.connection,
+                model,
+                &role.capability,
+                &role.inputs,
+            ) {
+                return Err(AiError::unsupported(reason));
+            }
             set_default(store, binding);
             Ok(true)
         })?

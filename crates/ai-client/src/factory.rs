@@ -23,6 +23,8 @@ use craft_ai_sam3::{Sam3Config, Sam3Provider};
 use craft_ai_seedance::{SeedanceConfig, SeedanceProvider};
 use craft_ai_vertex::{VertexConfig, VertexProvider};
 
+use crate::route_support::{RouteQuery, RouteSupport, SupportFn, list_check, vertex_check};
+
 /// Builds a provider for one connection.
 pub type BuildFn =
     dyn Fn(&Connection, Option<SecretString>) -> Result<Arc<dyn Provider>, AiError> + Send + Sync;
@@ -44,6 +46,8 @@ pub struct ProviderFactory {
     builders: HashMap<String, Arc<BuildFn>>,
     /// The card makers an app states its build of an engine can use (see `declare_accelerators`).
     accelerators: HashMap<String, Vec<GpuVendor>>,
+    /// What each adapter says about its own limits (see `route_support`). No entry means untested.
+    support: HashMap<String, Arc<SupportFn>>,
     /// Where the ComfyUI builder reads workflow files; the shared default when `None`.
     comfyui_library: Option<std::path::PathBuf>,
     /// Where the settings files for data-described services are read; the shared default when `None`.
@@ -85,6 +89,7 @@ impl ProviderFactory {
         let mut f = Self {
             builders: HashMap::new(),
             accelerators: HashMap::new(),
+            support: HashMap::new(),
             comfyui_library,
             declarative_specs: None,
             comfyui_output_dir: None,
@@ -184,6 +189,7 @@ impl ProviderFactory {
         );
         f.register_declarative();
         f.register_engines(crate::engines::built_in());
+        f.declare_built_in_support();
         f
     }
 
@@ -199,8 +205,9 @@ impl ProviderFactory {
         + 'static,
     ) {
         let name = name.to_ascii_lowercase();
-        // A different build of the adapter is not the one whose cards were declared.
+        // A different build of the adapter is not the one whose cards or limits were declared.
         self.accelerators.remove(&name);
+        self.support.remove(&name);
         self.builders.insert(name, Arc::new(build));
     }
 
@@ -211,6 +218,7 @@ impl ProviderFactory {
         let name = name.to_ascii_lowercase();
         self.builders.remove(&name);
         self.accelerators.remove(&name);
+        self.support.remove(&name);
     }
 
     /// Points data-described services at a specific folder of settings files (one file per
@@ -301,6 +309,40 @@ impl ProviderFactory {
             }
             Ok(Arc::new(ComfyProvider::new(cfg)?))
         });
+    }
+
+    /// States what the adapter `name` can carry out, for its status to be honest before anyone
+    /// agrees to send anything. The check must not read a key, build a provider or contact anything.
+    /// Call it after [`register`](Self::register), which forgets what was said about the old adapter.
+    pub fn declare_support(
+        &mut self,
+        name: &str,
+        check: impl Fn(&RouteQuery<'_>) -> RouteSupport + Send + Sync + 'static,
+    ) {
+        self.support
+            .insert(name.to_ascii_lowercase(), Arc::new(check));
+    }
+
+    /// What the adapter for this connection says about this request path. An adapter that says
+    /// nothing is [`RouteSupport::Untested`].
+    pub fn route_support(&self, query: &RouteQuery<'_>) -> RouteSupport {
+        self.support
+            .get(&query.connection.provider.to_ascii_lowercase())
+            .map_or(RouteSupport::Untested, |check| check(query))
+    }
+
+    /// The built-in adapters that serve a fixed list of models say so. Those that take any model
+    /// the service offers, and adapters added later, stay untested.
+    fn declare_built_in_support(&mut self) {
+        let lists = [
+            ("artcraft-omni", ArtCraftProvider::documented_models()),
+            ("bfl", BflProvider::catalog()),
+            ("seedance", SeedanceProvider::catalog()),
+        ];
+        for (name, models) in lists {
+            self.support.insert(name.to_owned(), list_check(models));
+        }
+        self.declare_support("vertex-express", vertex_check);
     }
 
     pub fn knows(&self, name: &str) -> bool {
