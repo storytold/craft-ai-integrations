@@ -2,9 +2,12 @@
 //! The runner forwards to the person's existing server and does not install, repair or start it.
 use craft_ai_comfyui::{Sam3Session, sam3};
 
+/// A mask PNG as (width, height, grey pixels).
 fn decoded(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
-    let mut reader = png::Decoder::new(bytes).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
     let frame = reader.next_frame(&mut pixels).unwrap();
     assert_eq!(frame.color_type, png::ColorType::Grayscale);
     pixels.truncate(frame.buffer_size());

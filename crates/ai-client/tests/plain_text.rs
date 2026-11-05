@@ -105,7 +105,7 @@ fn full_world() -> (World, std::path::PathBuf) {
     std::fs::write(&file, b"x").unwrap();
     let f = feature();
     w.desk().enable_local(&f, "http://127.0.0.1:8000").unwrap();
-    w.desk().enable_native(&f, &file).unwrap();
+    w.desk().enable_native_with(&f, "candle", &file).unwrap();
     w.desk().enable_native_with(&f, "burn", &file).unwrap();
     (w, file)
 }

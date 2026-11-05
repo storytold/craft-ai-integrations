@@ -144,6 +144,7 @@ fn a_tool_that_can_run_has_no_popup() {
     assert_eq!(desk.missing_model(&role, &features()).unwrap(), None);
 }
 
+/// A tool with no model chosen gets a popup that says why and lists the real ways to set one up.
 #[test]
 fn a_tool_with_no_model_gets_the_reason_and_the_real_ways_to_set_it_up() {
     let w = World::new(vec![]);
@@ -161,11 +162,13 @@ fn a_tool_with_no_model_gets_the_reason_and_the_real_ways_to_set_it_up() {
         popup.reason
     );
     // The local model, with its size, is offered as a greyed way to set the tool up.
-    let sam3 = &popup.picker.groups[0];
-    assert_eq!(
-        (sam3.title.as_str(), sam3.state),
-        ("SAM 3", GroupState::NotSetUp)
-    );
+    let sam3 = popup
+        .picker
+        .groups
+        .iter()
+        .find(|g| g.title == "SAM 3")
+        .expect("the ComfyUI choice is separate from the built-in engine");
+    assert_eq!(sam3.state, GroupState::NotSetUp);
     assert_eq!(sam3.size_bytes, Some(3_449_860_632));
 }
 

@@ -68,6 +68,9 @@ pub struct EngineOffer {
     /// The card makers this app's build of the engine can use, as the app states. `None` means the
     /// app said nothing: a built-in engine is then [`Pace::Unsure`].
     pub accelerators: Option<Vec<GpuVendor>>,
+    /// The catalogue says this engine is quick enough on the main chip (`NativeRoute::
+    /// fast_on_processor`), so having no graphics card is not a reason to call it slow.
+    pub fast_on_processor: bool,
 }
 
 /// How fast an engine is expected to be here.
@@ -76,6 +79,8 @@ pub struct EngineOffer {
 pub enum Pace {
     /// Expected to use the graphics card.
     Gpu,
+    /// Needs no graphics card: measured quick enough on the computer's main chip.
+    Processor,
     /// The card is one it can drive, but the app has not said its build does.
     Unsure,
     /// Runs on the computer's main chip, which is slow for large models.
@@ -108,14 +113,7 @@ pub fn advise(
         .enumerate()
         .map(|(index, offer)| (index, judge(profile, offer, min_vram_mb)))
         .collect();
-    judged.sort_by_key(|(index, a)| {
-        (
-            !a.usable,
-            a.pace.unwrap_or(Pace::Cpu),
-            a.provider == "comfyui",
-            *index,
-        )
-    });
+    judged.sort_by_key(|(index, a)| (!a.usable, rank(a.pace), a.provider == "comfyui", *index));
     let mut out: Vec<EngineAdvice> = judged.into_iter().map(|(_, a)| a).collect();
     if let Some(first) = out.first_mut().filter(|a| a.usable) {
         first.recommended = true;
@@ -128,6 +126,20 @@ pub fn advise(
     out
 }
 
+/// How engines of different pace are ordered. A graphics-card engine and a processor engine that
+/// was measured quick enough are equals, so between them the order the recipe lists them in
+/// decides: the default engine is the one the recipe puts first, not whichever has a card to use.
+fn rank(pace: Option<Pace>) -> u8 {
+    match pace {
+        Some(Pace::Gpu | Pace::Processor) => 0,
+        Some(Pace::Unsure) => 1,
+        Some(Pace::Cpu) | None => 2,
+    }
+}
+
+/// Judges one engine for this computer: not usable (no adapter, no ComfyUI), or its pace and the
+/// plain sentence that says why. A card the engine can use wins; an engine marked quick on the
+/// main chip is then not called slow; otherwise no card means slow.
 fn judge(profile: &SystemProfile, offer: &EngineOffer, min_vram_mb: Option<u32>) -> EngineAdvice {
     let provider = offer.provider.clone();
     let blocked = |reason: &str| EngineAdvice {
@@ -151,6 +163,13 @@ fn judge(profile: &SystemProfile, offer: &EngineOffer, min_vram_mb: Option<u32>)
         None => gpu_route(&offer.provider, profile.os, g.vendor),
     });
     let (pace, reason) = match gpu {
+        Some(g) if too_small(g, min_vram_mb) && offer.fast_on_processor => (
+            Pace::Processor,
+            format!(
+                "Your graphics card ({}) doesn't have enough memory for this, but it runs well on your computer's main chip.",
+                g.name
+            ),
+        ),
         Some(g) if too_small(g, min_vram_mb) => (
             Pace::Cpu,
             format!(
@@ -172,6 +191,10 @@ fn judge(profile: &SystemProfile, offer: &EngineOffer, min_vram_mb: Option<u32>)
                 "Might use your graphics card ({}), but this app hasn't confirmed it.",
                 g.name
             ),
+        ),
+        None if offer.fast_on_processor => (
+            Pace::Processor,
+            "Runs well on your computer's main chip. It needs no graphics card.".to_owned(),
         ),
         None if profile.gpus.is_empty() => (
             Pace::Cpu,

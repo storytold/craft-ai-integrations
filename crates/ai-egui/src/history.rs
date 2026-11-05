@@ -35,7 +35,6 @@ pub const EMPTY: &str = "No AI jobs have been run yet.";
 pub const NOTHING_MATCHES: &str = "No jobs match these filters.";
 
 const MS_PER_DAY: u64 = 86_400_000;
-const ROW_HEIGHT: f32 = 20.0;
 const LIST_HEIGHT: f32 = 320.0;
 
 /// How far back to look.
@@ -71,7 +70,7 @@ impl Range {
 }
 
 /// Which table to show.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum Tab {
     #[default]
     Jobs,
@@ -127,13 +126,22 @@ impl HistoryViewState {
     }
 }
 
-fn pick(ui: &mut Ui, id: &str, all: &str, options: &[String], current: &mut Option<String>) {
+/// A filter combo: drops a selected value that has left `options` (so a stale filter cannot hide
+/// everything), shows `all` in that case, and gives the control `name` for assistive tech.
+fn pick(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    all: &str,
+    options: &[String],
+    current: &mut Option<String>,
+) {
     // A filter left on a value that has since left the log would hide everything; fall back.
     if current.as_ref().is_some_and(|c| !options.contains(c)) {
         *current = None;
     }
     let shown = current.clone().unwrap_or_else(|| all.to_owned());
-    ComboBox::from_id_salt(id)
+    let combo = ComboBox::from_id_salt(id)
         .selected_text(shown)
         .show_ui(ui, |ui| {
             ui.selectable_value(current, None, all);
@@ -141,6 +149,7 @@ fn pick(ui: &mut Ui, id: &str, all: &str, options: &[String], current: &mut Opti
                 ui.selectable_value(current, Some(option.clone()), option);
             }
         });
+    combo.response.accessible_name(name);
 }
 
 /// Draws the history. `now_ms` is the current Unix time in milliseconds, passed in so the view
@@ -155,10 +164,18 @@ pub fn history_view(
     let app_options = apps(&log.entries);
     let model_options = models(&log.entries);
     ui.horizontal_wrapped(|ui| {
-        pick(ui, "history-app", "All apps", &app_options, &mut state.app);
+        pick(
+            ui,
+            "history-app",
+            "Filter by app",
+            "All apps",
+            &app_options,
+            &mut state.app,
+        );
         pick(
             ui,
             "history-model",
+            "Filter by model",
             "All models",
             &model_options,
             &mut state.model,
@@ -169,7 +186,9 @@ pub fn history_view(
                 for range in Range::ALL {
                     ui.selectable_value(&mut state.range, range, range.label());
                 }
-            });
+            })
+            .response
+            .accessible_name("Date range");
         if ui.button(REFRESH).clicked() {
             action = Some(HistoryAction::Refresh);
         }
@@ -178,7 +197,7 @@ pub fn history_view(
     let filter = state.filter(now_ms);
     let shown = filter.apply(&log.entries);
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (tab, label) in [
             (Tab::Jobs, TAB_JOBS),
             (Tab::Days, TAB_DAYS),
@@ -199,10 +218,13 @@ pub fn history_view(
         ui.add_space(4.0);
         match state.tab {
             Tab::Jobs => {
+                // `show_rows` adds `item_spacing.y` itself, so this is the text height only.
+                let row_height = ui.text_style_height(&egui::TextStyle::Body);
                 ScrollArea::vertical()
+                    .id_salt(("history-list", state.tab))
                     .max_height(LIST_HEIGHT)
                     .auto_shrink([false, true])
-                    .show_rows(ui, ROW_HEIGHT, shown.len(), |ui, range| {
+                    .show_rows(ui, row_height, shown.len(), |ui, range| {
                         for entry in shown.iter().skip(range.start).take(range.len()) {
                             ui.add(
                                 egui::Label::new(words::entry_line(entry, state.offset_minutes))
@@ -213,11 +235,11 @@ pub fn history_view(
             }
             Tab::Days => {
                 let rows = by_day(&shown, state.offset_minutes);
-                grouped(ui, rows.iter().map(|(d, t)| (d.to_string(), t)));
+                grouped(ui, state.tab, rows.iter().map(|(d, t)| (d.to_string(), t)));
             }
             Tab::Months => {
                 let rows = by_month(&shown, state.offset_minutes);
-                grouped(ui, rows.iter().map(|(m, t)| (m.to_string(), t)));
+                grouped(ui, state.tab, rows.iter().map(|(m, t)| (m.to_string(), t)));
             }
         }
     }
@@ -226,7 +248,7 @@ pub fn history_view(
     }
 
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(!shown.is_empty(), egui::Button::new(EXPORT))
             .clicked()
@@ -252,8 +274,11 @@ pub fn history_view(
     action
 }
 
-fn grouped<'a>(ui: &mut Ui, rows: impl Iterator<Item = (String, &'a Totals)>) {
+/// Draws grouped totals in a height-capped scroll area that shrinks to its content. The scroll id includes `tab`, so Jobs and
+/// Days keep separate scroll positions.
+fn grouped<'a>(ui: &mut Ui, tab: Tab, rows: impl Iterator<Item = (String, &'a Totals)>) {
     ScrollArea::vertical()
+        .id_salt(("history-list", tab))
         .max_height(LIST_HEIGHT)
         .auto_shrink([false, true])
         .show(ui, |ui| {

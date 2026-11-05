@@ -1,6 +1,6 @@
 # Suite-wide AI contract for app maintainers
 
-**Status:** provisional. The contract crate (`craft-ai-core`) is under review in `storytold/craft-libs` and is not yet accepted there, and no app mounts the shared flow end to end. See [STATUS.md](STATUS.md) for what is tested and what is open.
+**Status:** the initial contract crate (`craft-ai-core`) has landed in `storytold/craft-libs`. This workspace still carries a local copy with additional consent terms and model folders; its upstream safety fixes are aligned, but the dependency switch has prerequisites in [CORE-SYNC.md](CORE-SYNC.md). No production app adoption is established by the contract merge. See [STATUS.md](STATUS.md) for what is tested and what is open.
 
 ## Ownership boundary
 
@@ -19,6 +19,23 @@ A registered tool is a **declaration**, not installed code. A compatible binding
 3. An app reads the same store and resolves the role with `AiClient::status`, `choices`, `picker`, `plan` and `start` as appropriate. It may localise the label, but **must not reinterpret the same ID's capability or inputs**. Mismatched contracts are rejected during resolution, model listing, picker creation and binding. Apps still own their UI, input conversion and actual execution route.
 
 Concrete API examples and regressions: `crates/ai-client/tests/custom_tools.rs`, `crates/ai-core/tests/custom_tools.rs` and `crates/ai-native/tests/shared_store.rs`. The shared store is `craft_ai_native::shared::SharedStore`; it uses locked atomic updates for registration, binding and removal. Old version-1 JSON files without `custom_tools` still load with an empty list. Secret values belong in the secret store, never in the shared JSON or a tool declaration.
+
+## Optional shared egui widgets
+
+`craft-ai-egui` is a set of theme-neutral widgets, not a required app dependency. No app dependency
+is reproduced in this repository's checkouts. An egui app may adopt it, but must pin the same
+coherent graph and repeat the root patch recipe:
+
+- `storytold/egui` at `6d518fc799681571963842f95b55a6b68431b15a` for the egui family;
+- `storytold/winit` at `a517b3846ee8457d84ee4975110bfda6797c44dc`.
+
+The library keeps `egui` at `default-features = false`. The app supplies fonts, or enables eframe's
+bundled `default_fonts`; the shared widgets do not turn on system-font discovery. kittest `wgpu` and
+`snapshot` are test-only features. Keep one `craft-ai-core` identity: this workspace's local copy
+and `craft-libs/crates/ai-core` are not interchangeable until the [CORE-SYNC](CORE-SYNC.md) work
+lands. The [consumer smoke](../consumer-smoke/README.md) passed its locked check and one draw test with a
+single `craft-ai-core` identity and the pinned egui family; its rendererless root does not exercise
+winit. It is not an app adoption or a native GUI acceptance result.
 
 ## Deliberate limits and next gate
 

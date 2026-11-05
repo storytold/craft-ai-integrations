@@ -227,11 +227,15 @@ pub(crate) fn number(value: &Value) -> Option<f32> {
     value.as_f64().map(|v| v as f32).filter(|v| v.is_finite())
 }
 
+/// Decodes a returned mask PNG to its pixels, refusing one that does not match the source size.
 pub(crate) fn decode(png_bytes: &[u8], width: u32, height: u32) -> Result<Vec<u8>, AiError> {
-    let mut reader = png::Decoder::new(png_bytes)
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png_bytes))
         .read_info()
         .map_err(|_| bad("SAM 3 returned an invalid mask"))?;
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let size = reader
+        .output_buffer_size()
+        .ok_or_else(|| bad("SAM 3 returned an invalid mask"))?;
+    let mut buf = vec![0; size];
     let frame = reader
         .next_frame(&mut buf)
         .map_err(|_| bad("SAM 3 mask pixels are invalid"))?;

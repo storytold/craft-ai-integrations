@@ -8,6 +8,10 @@ use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
 
+/// Fetches the media one output node reports and turns it into a job event.
+/// Only files in ComfyUI's `output` or scratch (`temp`) folders are read, through `/view` with
+/// the same folder type; any other folder, or a name or sub-folder that could escape it, is
+/// refused before any request is made. With `output_dir` the bytes go to a new file there.
 pub(crate) fn fetch(
     http: &Http,
     node: &Value,
@@ -42,7 +46,7 @@ pub(crate) fn fetch(
         .ok_or_else(|| AiError::new(ErrorKind::Provider, "output has no filename"))?;
     let subfolder = file.get("subfolder").and_then(Value::as_str).unwrap_or("");
     let file_type = file.get("type").and_then(Value::as_str).unwrap_or("output");
-    if file_type != "output"
+    if !matches!(file_type, "output" | "temp")
         || !safe_path(filename)
         || (!subfolder.is_empty() && !safe_path(subfolder))
     {
@@ -69,7 +73,7 @@ pub(crate) fn fetch(
         }
     };
     let path = format!(
-        "/view?filename={}&type=output{}",
+        "/view?filename={}&type={file_type}{}",
         encode_query(filename),
         if subfolder.is_empty() {
             String::new()

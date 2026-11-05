@@ -1,10 +1,11 @@
 use craft_ai_core::{InputRole, Payload};
 use craft_ai_features::{builtin, sample_is_costly, sample_request};
 
+/// A PNG as (width, height, pixels).
 fn decode(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();
     (info.width, info.height, buf[..info.buffer_size()].to_vec())
 }

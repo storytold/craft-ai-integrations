@@ -57,7 +57,8 @@ pub struct WorkflowSpec {
     /// When absent, the only node with a plain string `text` input is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<Binding>,
-    /// Required for image.inpaint; maps the uploaded source filename to a LoadImage node.
+    /// Required for image.inpaint and image.segment; maps the uploaded source filename to a
+    /// LoadImage node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Binding>,
     /// Required for image.inpaint; maps the uploaded PNG filename to a LoadImageMask node.
@@ -101,9 +102,27 @@ impl WorkflowSpec {
                     .ok_or_else(|| AiError::invalid("inpainting needs a mask binding"))?,
             );
         }
+        if self.capability == "image.segment" {
+            if self.mask.is_some() {
+                return Err(AiError::invalid("a selection workflow has no mask binding"));
+            }
+            return Workflow::import_segment(
+                if self.id.trim().is_empty() {
+                    "workflow"
+                } else {
+                    self.id.trim()
+                },
+                self.graph.clone(),
+                binding,
+                &output,
+                self.source
+                    .clone()
+                    .ok_or_else(|| AiError::invalid("selecting needs a source binding"))?,
+            );
+        }
         if self.source.is_some() || self.mask.is_some() {
             return Err(AiError::invalid(
-                "source and mask bindings need image.inpaint",
+                "source and mask bindings need image.inpaint, and a source binding image.segment",
             ));
         }
         Workflow::import(

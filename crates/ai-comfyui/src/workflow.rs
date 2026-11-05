@@ -55,10 +55,10 @@ impl Workflow {
             .map_err(|_| AiError::invalid("invalid workflow capability"))?;
         if !matches!(
             capability.as_str(),
-            "image.generate" | "video.generate" | "image.inpaint"
+            "image.generate" | "video.generate" | "image.inpaint" | "image.segment"
         ) {
             return Err(AiError::unsupported(
-                "only image.generate, video.generate and image.inpaint workflows are mapped",
+                "only image.generate, video.generate, image.inpaint and image.segment workflows are mapped",
             ));
         }
         if serde_json::to_vec(&graph).map_or(true, |v| v.len() > MAX_GRAPH_BYTES) {
@@ -110,6 +110,11 @@ impl Workflow {
                 "inpainting needs explicit source and mask bindings",
             ));
         }
+        if capability.as_str() == "image.segment" {
+            return Err(AiError::invalid(
+                "segmenting needs an explicit source binding",
+            ));
+        }
         Ok(Self {
             id,
             capability,
@@ -154,6 +159,35 @@ impl Workflow {
         workflow.source = Some(source);
         workflow.mask = Some(mask);
         Ok(workflow)
+    }
+
+    /// Import a subject-selection graph: a text prompt and one source image in, one mask image out.
+    /// The source must map to a ComfyUI image loader and feed the output, like an inpaint source.
+    pub fn import_segment(
+        id: &str,
+        graph: Value,
+        prompt: Binding,
+        output_node: &str,
+        source: Binding,
+    ) -> Result<Self, AiError> {
+        let mut workflow = Self::import(id, "image.generate", graph, prompt, output_node)?;
+        workflow.check_media_binding(&source, "source")?;
+        for (binding, role) in [(&workflow.prompt, "prompt"), (&source, "source")] {
+            if !workflow.feeds_output(&binding.node) {
+                return Err(AiError::invalid(format!(
+                    "{role} node is not connected to the output"
+                )));
+            }
+        }
+        workflow.capability = CapabilityId::parse("image.segment")
+            .map_err(|_| AiError::invalid("invalid segment capability"))?;
+        workflow.source = Some(source);
+        Ok(workflow)
+    }
+
+    /// Whether a request needs its source (and mask) uploaded before the graph is queued.
+    pub fn needs_uploads(&self) -> bool {
+        self.source.is_some()
     }
 
     fn feeds_output(&self, target: &str) -> bool {
@@ -286,6 +320,7 @@ impl Workflow {
         Ok(())
     }
 
+    /// Describes the model: the capability of this workflow and the inputs it takes.
     pub fn info(&self) -> ModelInfo {
         let mut spec = CapabilitySpec::new(self.capability.clone())
             .accepting(InputRole::Prompt, 1)
@@ -297,19 +332,30 @@ impl Workflow {
                 .accepting(InputRole::Mask, 1)
                 .requiring(InputRole::Mask);
         }
+        if self.capability.as_str() == "image.segment" {
+            spec = spec
+                .accepting(InputRole::Source, 1)
+                .requiring(InputRole::Source);
+        }
         ModelInfo::new(self.id.clone(), self.id.as_str()).with(spec)
     }
 
+    /// The id of this workflow, which is also its model id.
     pub fn id(&self) -> &ModelId {
         &self.id
     }
+    /// The id of the node whose output is the answer.
     pub fn output_node(&self) -> &str {
         &self.output_node
     }
+    /// The capability this workflow serves.
     pub fn capability(&self) -> &CapabilityId {
         &self.capability
     }
 
+    /// Checks the request against the capability, refuses parameters (for a selection workflow with
+    /// words about describing), and checks the prompt is text and each image is a PNG, or a JPEG
+    /// source.
     pub fn validate_request(&self, request: &Request) -> Result<(), AiError> {
         request.validate(
             self.info()
@@ -319,7 +365,11 @@ impl Workflow {
         )?;
         if !request.params.is_empty() {
             return Err(AiError::unsupported(
-                "this workflow has no mapped parameters",
+                if self.capability.as_str() == "image.segment" {
+                    "This workflow selects by describing the subject. To select by clicking or by drawing a box, choose another in Set up AI."
+                } else {
+                    "this workflow has no mapped parameters"
+                },
             ));
         }
         let prompt = request.inputs.iter().find(|i| i.role == InputRole::Prompt);
@@ -353,13 +403,27 @@ impl Workflow {
         Ok(())
     }
 
+    /// The graph for a request that needs no upload. A workflow that needs uploaded files refuses.
     pub fn render(&self, request: &Request) -> Result<Value, AiError> {
-        if self.capability.as_str() == "image.inpaint" {
+        if self.needs_uploads() {
             return Err(AiError::unsupported(
-                "inpainting needs uploaded source and mask files",
+                "this workflow needs uploaded source files",
             ));
         }
-        self.render_mapped(request, None)
+        self.render_mapped(request, &[])
+    }
+
+    /// Substitute the server-returned filename of the uploaded source image (segment workflows).
+    pub fn render_with_source(&self, request: &Request, source: &str) -> Result<Value, AiError> {
+        if self.capability.as_str() != "image.segment" {
+            return Err(AiError::unsupported(
+                "this workflow has no source-only mapping",
+            ));
+        }
+        if !crate::http::safe_upload_name(source) {
+            return Err(AiError::invalid("uploaded filename is not safe"));
+        }
+        self.render_mapped(request, &[(self.source.as_ref(), source)])
     }
 
     /// Substitute only server-returned upload filenames, never caller-supplied paths.
@@ -379,13 +443,17 @@ impl Workflow {
                 return Err(AiError::invalid("uploaded filename is not safe"));
             }
         }
-        self.render_mapped(request, Some((source, mask)))
+        self.render_mapped(
+            request,
+            &[(self.source.as_ref(), source), (self.mask.as_ref(), mask)],
+        )
     }
 
+    /// The graph with the prompt text and each uploaded file name written into its mapped fields.
     fn render_mapped(
         &self,
         request: &Request,
-        uploads: Option<(&str, &str)>,
+        uploads: &[(Option<&Binding>, &str)],
     ) -> Result<Value, AiError> {
         self.validate_request(request)?;
         let Some(Payload::Text { text }) = request
@@ -403,17 +471,14 @@ impl Workflow {
             .and_then(|v| v.get_mut(&self.prompt.input))
             .ok_or_else(|| AiError::invalid("mapped prompt field is missing"))?;
         *field = Value::String(text.clone());
-        if let Some((source, mask)) = uploads {
-            for (binding, filename) in [(self.source.as_ref(), source), (self.mask.as_ref(), mask)]
-            {
-                let binding = binding.ok_or_else(|| AiError::invalid("missing inpaint binding"))?;
-                let field = graph
-                    .get_mut(&binding.node)
-                    .and_then(|v| v.get_mut("inputs"))
-                    .and_then(|v| v.get_mut(&binding.input))
-                    .ok_or_else(|| AiError::invalid("mapped image field is missing"))?;
-                *field = Value::String(filename.to_owned());
-            }
+        for (binding, filename) in uploads {
+            let binding = binding.ok_or_else(|| AiError::invalid("missing image binding"))?;
+            let field = graph
+                .get_mut(&binding.node)
+                .and_then(|v| v.get_mut("inputs"))
+                .and_then(|v| v.get_mut(&binding.input))
+                .ok_or_else(|| AiError::invalid("mapped image field is missing"))?;
+            *field = Value::String((*filename).to_owned());
         }
         Ok(graph)
     }

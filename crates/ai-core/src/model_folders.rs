@@ -197,19 +197,16 @@ pub fn validate_folders(folders: &[ModelFolder]) -> Result<(), FolderError> {
     Ok(())
 }
 
-/// Where a new file of `kind` should be saved: the default folder (else the first folder the
-/// person chose), and inside it the first place already holding that kind, else a sub-folder
-/// named for the kind. Linked folders never receive downloads.
+/// Where a new file of `kind` should be saved: the explicitly chosen default folder,
+/// inside its first place already holding that kind, else a sub-folder named for the kind.
+/// Linked folders and non-default folders never receive downloads.
 pub fn download_target<'a>(
     folders: &'a [ModelFolder],
     kind: &str,
 ) -> Option<(&'a ModelFolder, String)> {
-    let writable = |f: &&ModelFolder| f.origin == FolderOrigin::Chosen;
     let folder = folders
         .iter()
-        .filter(writable)
-        .find(|f| f.default)
-        .or_else(|| folders.iter().find(writable))?;
+        .find(|f| f.origin == FolderOrigin::Chosen && f.default)?;
     let sub = match folder.kinds.get(kind).and_then(|dirs| dirs.first()) {
         Some(mapped) => mapped.clone(),
         // No place yet: the kind names a new sub-folder, so it must be a safe one. A caller passing
@@ -327,6 +324,7 @@ mod tests {
         );
     }
 
+    /// Imported or non-default folders cannot become download targets by fallback.
     #[test]
     fn downloads_go_to_the_default_folder_and_never_to_a_linked_one() {
         let mut linked = folder("comfy", "/c/models");
@@ -335,14 +333,9 @@ mod tests {
         let mut mine = folder("mine", "/m");
         mine.kinds.insert("vae".into(), vec!["weights/vae".into()]);
         let list = [linked, folder("other", "/o"), mine];
-        let (f, sub) = download_target(&list, "vae").unwrap();
-        assert_eq!(
-            f.id, "other",
-            "the default is a linked folder, so the first chosen one is used"
-        );
-        assert_eq!(
-            sub, "vae",
-            "a kind with no place yet gets a sub-folder named for it"
+        assert!(
+            download_target(&list, "vae").is_none(),
+            "a linked default must not select another folder"
         );
         let mut list = list;
         list[2].default = true;
@@ -359,9 +352,12 @@ mod tests {
         );
     }
 
+    /// Reject unsafe kind names even when an explicit download destination exists.
     #[test]
     fn a_kind_that_would_leave_the_folder_is_never_a_place_to_save() {
-        let list = [folder("mine", "/m")];
+        let mut mine = folder("mine", "/m");
+        mine.default = true;
+        let list = [mine];
         for bad in ["..", "../x", "/etc", "a/../b", "C:/x", ""] {
             assert!(download_target(&list, bad).is_none(), "{bad:?}");
         }

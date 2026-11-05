@@ -28,6 +28,7 @@ mod consent;
 mod form;
 mod history;
 pub mod history_text;
+mod native_setup;
 mod panel;
 mod picker;
 mod popup;
@@ -35,11 +36,18 @@ mod progress;
 mod status;
 pub mod text;
 
-pub use consent::{ALLOW, ConsentChoice, DENY, consent_prompt};
+pub use consent::{
+    ALLOW, ConsentChoice, ConsentPromptState, DENY, TimedConsentChoice, consent_prompt,
+    consent_prompt_with_terms, consent_term_label,
+};
 pub use form::{ConnectionFormState, FormEvent, TestLine, connection_form, words};
 pub use history::{
     CLEAR, CLEAR_NO, CLEAR_YES, EMPTY, EXPORT, HistoryAction, HistoryViewState, NOTHING_MATCHES,
     REFRESH, Range, TAB_DAYS, TAB_JOBS, TAB_MONTHS, Tab, history_view,
+};
+pub use native_setup::{
+    ACCEPT_LICENCES, CHECK_FILES, DOWNLOAD_MODEL, NativeSetupAction, USE_MODEL,
+    USE_SUGGESTED_FOLDER, native_model_setup, setup_problem,
 };
 pub use panel::{ConnectionPanel, PanelEvent};
 pub use picker::{

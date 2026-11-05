@@ -34,8 +34,13 @@ impl World {
         Self { dir, shared }
     }
 
+    /// An app client over this world's shared store whose only engines are the ones registered here.
     fn client(&self, app: &str, registry: EngineRegistry) -> AiClient {
         let mut factory = ProviderFactory::standard();
+        // Only the engines a test registers exist, whatever cargo features are on.
+        for built_in in ["rten", "candle", "burn"] {
+            factory.unregister(built_in);
+        }
         factory.register_engines(registry);
         AiClient::new(
             AppId::new(app).unwrap(),
@@ -142,11 +147,25 @@ fn a_registered_engine_declares_its_accelerators_for_engine_advice() {
     let mut registry = EngineRegistry::new();
     registry.register(runner);
     let mut factory = ProviderFactory::standard();
-    assert!(!factory.knows("candle"));
+    // Without the cargo feature, standard() has no built-in engines of its own.
+    assert_eq!(factory.knows("candle"), cfg!(feature = "candle"));
     factory.register_engines(registry);
     assert!(factory.knows("candle") && factory.knows("Candle"));
     assert_eq!(
         factory.accelerators("candle"),
         Some(&[GpuVendor::Nvidia, GpuVendor::Apple][..])
+    );
+}
+
+#[cfg(feature = "candle")]
+#[test]
+fn the_candle_feature_is_the_whole_of_adopting_the_candle_engine() {
+    // No registry, no registration: the cargo feature is all an app turns on.
+    let factory = ProviderFactory::standard();
+    assert!(factory.knows("candle"));
+    // Whether this build can use a graphics card is the engine's own statement, not the app's.
+    assert_eq!(
+        factory.accelerators("candle").map(<[_]>::is_empty),
+        Some(!cfg!(target_os = "macos"))
     );
 }

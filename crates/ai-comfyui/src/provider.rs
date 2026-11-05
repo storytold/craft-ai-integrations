@@ -3,6 +3,7 @@
 use crate::Workflow;
 use crate::http::Http;
 use crate::output;
+use crate::segment_route;
 use craft_ai_core::endpoint::Endpoint;
 use craft_ai_core::job::{JobSnapshot, JobState};
 use craft_ai_core::model::InputRole;
@@ -64,6 +65,7 @@ impl ComfyConfig {
         self.max_upload_bytes = bytes.clamp(1, crate::input::HARD_MAX_UPLOAD_BYTES);
         self
     }
+    /// Adds a workflow the provider can run.
     pub fn with_workflow(mut self, workflow: Workflow) -> Self {
         self.workflows.push(workflow);
         self
@@ -75,8 +77,17 @@ struct Job {
     prompt_id: String,
     output_node: String,
     video: bool,
+    /// The size the mask must be, for an `image.segment` job.
+    segment: Option<segment_route::Size>,
     snapshot: JobSnapshot,
 }
+
+/// Pictures already in ComfyUI's scratch area, newest last, so a second selection on the same
+/// picture does not send it again.
+type Uploads = Vec<(segment_route::CacheKey, String)>;
+
+/// How many pictures the provider remembers having sent.
+const REMEMBERED_UPLOADS: usize = 4;
 
 pub struct ComfyProvider {
     http: Http,
@@ -86,13 +97,17 @@ pub struct ComfyProvider {
     max_upload_bytes: u64,
     targeted_interrupt: bool,
     jobs: Mutex<Vec<Job>>,
+    uploads: Mutex<Uploads>,
 }
 impl std::fmt::Debug for ComfyProvider {
+    /// Prints the name only, so no address or job is written out.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ComfyProvider")
     }
 }
 impl ComfyProvider {
+    /// Builds the provider. It refuses an address that is not a loopback origin without a path, and
+    /// a repeated workflow id.
     pub fn new(config: ComfyConfig) -> Result<Self, AiError> {
         let base = config.base_url.trim_end_matches('/');
         let endpoint =
@@ -125,10 +140,16 @@ impl ComfyProvider {
                 .clamp(1, crate::input::HARD_MAX_UPLOAD_BYTES),
             targeted_interrupt: config.targeted_interrupt,
             jobs: Mutex::new(Vec::new()),
+            uploads: Mutex::new(Vec::new()),
         })
     }
+    /// The jobs this provider holds, with a poisoned lock recovered.
     fn jobs(&self) -> MutexGuard<'_, Vec<Job>> {
         self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// The pictures already sent, with a poisoned lock recovered.
+    fn uploads(&self) -> MutexGuard<'_, Uploads> {
+        self.uploads.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Reads and checks one input image. Nothing is sent yet.
@@ -145,13 +166,70 @@ impl ComfyProvider {
         crate::input::read_image(&input.payload, self.max_upload_bytes)
     }
 
+    /// Sends one image to the scratch area of ComfyUI and returns the name its loader reads.
     fn upload(&self, role: InputRole, image: &crate::input::Image) -> Result<String, AiError> {
         self.http
             .upload_image(role.as_str(), &image.media_type, &image.data)
     }
+
+    /// The scratch name of `image`: the one already sent, or a fresh upload that is remembered.
+    /// The flag says whether an earlier upload was reused.
+    fn scratch_upload(
+        &self,
+        key: segment_route::CacheKey,
+        image: &crate::input::Image,
+    ) -> Result<(String, bool), AiError> {
+        if let Some((_, name)) = self.uploads().iter().find(|(k, _)| *k == key) {
+            return Ok((name.clone(), true));
+        }
+        let name = self.upload(InputRole::Source, image)?;
+        let mut uploads = self.uploads();
+        uploads.push((key, name.clone()));
+        if uploads.len() > REMEMBERED_UPLOADS {
+            uploads.remove(0);
+        }
+        Ok((name, false))
+    }
+
+    /// Queues one `image.segment` graph with the picture `name` in the scratch area.
+    fn queue_segment(
+        &self,
+        workflow: &Workflow,
+        request: &Request,
+        name: &str,
+    ) -> Result<Value, AiError> {
+        let mut graph = workflow.render_with_source(request, name)?;
+        crate::scratch::route_sinks(&mut graph)?;
+        self.http.post("/prompt", &json!({"prompt":graph}))
+    }
+
+    /// Sends the picture once (or reuses the earlier upload), then queues the selection. When a
+    /// reused file has gone, because ComfyUI was restarted and cleared its scratch area, the
+    /// picture is sent again and the job queued once more.
+    fn submit_segment(
+        &self,
+        workflow: &Workflow,
+        request: &Request,
+    ) -> Result<(Value, segment_route::Size), AiError> {
+        let image = self.read_role(request, InputRole::Source)?;
+        let size = segment_route::size_of(&image)?;
+        let key = segment_route::cache_key(&image);
+        let (name, reused) = self.scratch_upload(key, &image)?;
+        let response = match self.queue_segment(workflow, request, &name) {
+            Err(e) if reused && e.kind == ErrorKind::InvalidRequest => {
+                self.uploads().retain(|(k, _)| *k != key);
+                let (name, _) = self.scratch_upload(key, &image)?;
+                self.queue_segment(workflow, request, &name)?
+            }
+            other => other?,
+        };
+        Ok((response, size))
+    }
 }
 
 impl Provider for ComfyProvider {
+    /// Checks the server answers and the nodes each workflow needs are installed, then lists the
+    /// workflows as models.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         self.http.get_json("/system_stats")?;
         let installed = self.http.get_object_info()?;
@@ -163,6 +241,8 @@ impl Provider for ComfyProvider {
             })
             .collect()
     }
+    /// Checks the request and the installed nodes, sends what the workflow needs sent and queues
+    /// the graph. A selection request sends its picture once and records the size its mask must be.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let workflow = self
             .workflows
@@ -170,7 +250,7 @@ impl Provider for ComfyProvider {
             .find(|w| w.id() == model)
             .ok_or_else(|| AiError::unsupported("workflow is not configured"))?;
         workflow.validate_request(request)?;
-        if workflow.capability().as_str() != "image.inpaint" {
+        if !workflow.needs_uploads() {
             // Generation paths can render before any network traffic.
             workflow.render(request)?;
         }
@@ -190,7 +270,17 @@ impl Provider for ComfyProvider {
         }
         let installed = self.http.get_object_info()?;
         workflow.validate_installation(&installed)?;
-        let graph = if workflow.capability().as_str() == "image.inpaint" {
+        let mut segment = None;
+        let queued = if workflow.capability().as_str() == "image.segment" {
+            let (response, size) = self.submit_segment(workflow, request)?;
+            segment = Some(size);
+            Some(response)
+        } else {
+            None
+        };
+        let graph = if queued.is_some() {
+            Value::Null
+        } else if workflow.capability().as_str() == "image.inpaint" {
             // Both are read and checked before either is sent, so a bad mask costs no upload.
             let source = self.read_role(request, InputRole::Source)?;
             let mask = self.read_role(request, InputRole::Mask)?;
@@ -200,7 +290,10 @@ impl Provider for ComfyProvider {
         } else {
             workflow.render(request)?
         };
-        let response = self.http.post("/prompt", &json!({"prompt":graph}))?;
+        let response = match queued {
+            Some(response) => response,
+            None => self.http.post("/prompt", &json!({"prompt":graph}))?,
+        };
         let prompt_id = response
             .get("prompt_id")
             .and_then(Value::as_str)
@@ -225,10 +318,13 @@ impl Provider for ComfyProvider {
             prompt_id: prompt_id.to_owned(),
             output_node: workflow.output_node().to_owned(),
             video: workflow.capability().as_str() == "video.generate",
+            segment,
             snapshot: JobSnapshot::new(JobState::Queued),
         });
         Ok(id)
     }
+    /// Reads the job history and, once done, fetches the output. A selection job answers with a
+    /// checked mask and the shared result, and a failed one forgets the pictures sent.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let mut jobs = self.jobs();
         let job = jobs
@@ -259,19 +355,24 @@ impl Provider for ComfyProvider {
                         "workflow output node returned no media",
                     )
                 })
-                .and_then(|n| {
-                    output::fetch(
+                .and_then(|n| match job.segment {
+                    // A mask is checked before anyone sees it, so it is read inline under the output
+                    // limit and never to the output folder.
+                    Some(size) => output::fetch(&self.http, n, false, None, self.max_output_bytes)
+                        .and_then(|event| segment_route::answer(event, &size)),
+                    None => output::fetch(
                         &self.http,
                         n,
                         job.video,
                         self.output_dir.as_deref(),
                         self.max_output_bytes,
                     )
+                    .map(|event| vec![event]),
                 });
             match result {
-                Ok(event) => {
+                Ok(events) => {
                     job.snapshot.state = JobState::Succeeded;
-                    job.snapshot.events.push(event);
+                    job.snapshot.events.extend(events);
                 }
                 Err(error) => {
                     job.snapshot.state = JobState::Failed { error };
@@ -279,6 +380,11 @@ impl Provider for ComfyProvider {
             }
         } else {
             job.snapshot.state = JobState::Running { percent: None };
+        }
+        if job.segment.is_some() && matches!(job.snapshot.state, JobState::Failed { .. }) {
+            // The picture may be what went wrong (a restart clears the scratch area), whether
+            // ComfyUI reported an error or its mask was refused.
+            self.uploads().clear();
         }
         Ok(JobSnapshot {
             state: job.snapshot.state.clone(),

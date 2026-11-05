@@ -12,8 +12,10 @@ fn source() -> Vec<u8> {
 
 /// The same photograph mirrored left to right: a genuinely different prepared image.
 fn mirrored(png_bytes: &[u8]) -> Vec<u8> {
-    let mut reader = png::Decoder::new(png_bytes).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png_bytes))
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
     let frame = reader.next_frame(&mut pixels).unwrap();
     let (w, h) = (frame.width as usize, frame.height as usize);
     let bytes_per_pixel = frame.buffer_size() / (w * h);

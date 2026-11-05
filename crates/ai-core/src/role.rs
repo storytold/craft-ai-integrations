@@ -22,7 +22,7 @@ pub struct Role {
     pub id: RoleId,
     pub label: String,
     pub capability: CapabilityId,
-    /// Inputs this feature will send, so a model that cannot take them is not offered.
+    /// Inputs this feature will send. A model must accept them and require no others.
     #[serde(default)]
     pub inputs: Vec<InputRole>,
 }
@@ -61,6 +61,10 @@ pub enum ResolveError {
         model: ModelId,
         input: InputRole,
     },
+    InputRequired {
+        model: ModelId,
+        input: InputRole,
+    },
     ToolMismatch(RoleId),
 }
 
@@ -78,6 +82,12 @@ impl std::fmt::Display for ResolveError {
             }
             Self::InputUnsupported { model, input } => {
                 write!(f, "model {model} does not accept a '{input}' input")
+            }
+            Self::InputRequired { model, input } => {
+                write!(
+                    f,
+                    "model {model} requires a '{input}' input that this tool does not provide"
+                )
             }
             Self::ToolMismatch(id) => write!(f, "tool {id} does not match its shared definition"),
         }
@@ -122,6 +132,12 @@ pub fn resolve<'a>(
             input: input.clone(),
         });
     }
+    if let Some(input) = spec.requires.iter().find(|i| !role.inputs.contains(i)) {
+        return Err(ResolveError::InputRequired {
+            model: model.id.clone(),
+            input: input.clone(),
+        });
+    }
     Ok(Resolved {
         connection,
         model,
@@ -129,14 +145,13 @@ pub fn resolve<'a>(
     })
 }
 
-/// What `model` can do for `role`: its spec for the role's capability, if it takes every input the
-/// role sends. `None` means the model cannot fill the role.
+/// What `model` can do for `role`: its spec if it accepts every input the tool sends and
+/// requires no input the tool cannot supply.
 pub fn fits<'a>(role: &Role, model: &'a ModelInfo) -> Option<&'a CapabilitySpec> {
     let spec = model.spec_for(&role.capability)?;
-    role.inputs
-        .iter()
-        .all(|i| spec.accepts.contains_key(i))
-        .then_some(spec)
+    (role.inputs.iter().all(|i| spec.accepts.contains_key(i))
+        && spec.requires.iter().all(|i| role.inputs.contains(i)))
+    .then_some(spec)
 }
 
 /// Every enabled connection's models that could fill `role`. This is the model picker's list.

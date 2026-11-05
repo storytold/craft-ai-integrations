@@ -6,6 +6,7 @@ all-features = true
 [advisories]
 yanked = "deny"
 ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained and arrives through the gemm, pulp and metal crates that candle-core uses. It is a compile-time macro with no known flaw. Remove when candle drops it." },
     { id = "RUSTSEC-2026-0370", reason = "Flagged as unmaintained, not as vulnerable. It arrives only through keyring's Linux secret-service backend (zbus), which this workspace does not control, and no safe upgrade exists yet. Remove when keyring moves to a maintained zbus." },
     { id = "RUSTSEC-2026-0371", reason = "Flagged as unmaintained, not as vulnerable. It arrives only through keyring's Linux secret-service backend (zbus), which this workspace does not control, and no safe upgrade exists yet. Remove when keyring moves to a maintained zbus." },
     { id = "RUSTSEC-2026-0372", reason = "Flagged as unmaintained, not as vulnerable. It arrives only through keyring's Linux secret-service backend (zbus), which this workspace does not control, and no safe upgrade exists yet. Remove when keyring moves to a maintained zbus." },
@@ -34,6 +35,11 @@ allow = [
     "OFL-1.1",
     "Ubuntu-font-1.0",
 ]
+# jpeg-encoder is a dev-dependency of craft-ai-engine-candle that makes the JPEGs its tests read. It
+# carries the Independent JPEG Group licence (permissive, attribution) for its quantisation tables.
+exceptions = [
+    { allow = ["IJG"], crate = "jpeg-encoder" },
+]
 
 [bans]
 multiple-versions = "warn"
@@ -43,3 +49,8 @@ wildcards = "allow"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The workspace pins the reviewed egui-family and winit forks in Cargo.toml.
+allow-git = [
+    "https://github.com/storytold/egui.git",
+    "https://github.com/storytold/winit.git",
+]

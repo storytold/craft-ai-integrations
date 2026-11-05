@@ -36,6 +36,7 @@ fn offers(present: &[&str]) -> Vec<EngineOffer> {
             provider: (*p).to_owned(),
             adapter_present: present.contains(p),
             accelerators: None,
+            fast_on_processor: false,
         })
         .collect()
 }
@@ -57,16 +58,20 @@ fn built(present: &[&str], os: Os) -> Vec<EngineOffer> {
     o
 }
 
+/// The one engine advice recommends, asserting there is at most one.
 fn pick(advice: &[EngineAdvice]) -> Option<&str> {
     let all: Vec<&EngineAdvice> = advice.iter().filter(|a| a.recommended).collect();
     assert!(all.len() <= 1, "at most one engine is recommended");
     all.first().map(|a| a.provider.as_str())
 }
 
+/// The advice for `provider`; panics when there is none.
 fn find<'a>(advice: &'a [EngineAdvice], provider: &str) -> &'a EngineAdvice {
     advice.iter().find(|a| a.provider == provider).unwrap()
 }
 
+/// A Nvidia card on Windows: the first built-in engine in the recipe is recommended over the
+/// ComfyUI server, and every engine is expected to use the card.
 #[test]
 fn nvidia_on_windows_prefers_a_built_in_engine_over_the_comfyui_server() {
     let m = machine(
@@ -89,6 +94,7 @@ fn nvidia_on_windows_prefers_a_built_in_engine_over_the_comfyui_server() {
     );
 }
 
+/// An AMD card on Windows: Burn is recommended, Candle is slow, ComfyUI reaches the card.
 #[test]
 fn an_amd_card_on_windows_gets_burn_and_comfyui_but_not_candle() {
     let m = machine(
@@ -112,6 +118,7 @@ fn an_amd_card_on_windows_gets_burn_and_comfyui_but_not_candle() {
     assert!(comfy.reason.contains("recent AMD"), "{}", comfy.reason);
 }
 
+/// An Intel card gets Burn; Apple silicon gets Candle on its card.
 #[test]
 fn an_intel_card_gets_burn_and_apple_silicon_gets_a_built_in_engine() {
     let intel = machine(
@@ -136,6 +143,7 @@ fn an_intel_card_gets_burn_and_apple_silicon_gets_a_built_in_engine() {
     );
 }
 
+/// With no card the best engine is still recommended, with a slow warning.
 #[test]
 fn no_graphics_card_is_recommended_as_the_best_available_with_a_slow_warning() {
     let m = machine(Os::Linux, vec![], false);
@@ -151,6 +159,7 @@ fn no_graphics_card_is_recommended_as_the_best_available_with_a_slow_warning() {
     assert!(top.reason.contains("it will be slow"), "{}", top.reason);
 }
 
+/// An engine this app has no adapter for is listed, never recommended, and says why.
 #[test]
 fn an_engine_this_app_cannot_run_is_listed_but_never_recommended() {
     let m = machine(
@@ -167,6 +176,7 @@ fn an_engine_this_app_cannot_run_is_listed_but_never_recommended() {
     assert!(advice.iter().skip(1).all(|a| !a.usable));
 }
 
+/// With no usable engine nothing is recommended.
 #[test]
 fn nothing_usable_means_nothing_is_recommended() {
     let m = machine(
@@ -177,6 +187,7 @@ fn nothing_usable_means_nothing_is_recommended() {
     assert_eq!(pick(&advise(&m, &offers(&[]), None)), None);
 }
 
+/// ComfyUI is unusable on a computer without it, even when the app has its adapter.
 #[test]
 fn comfyui_needs_an_install_even_when_the_app_has_its_adapter() {
     let m = machine(
@@ -191,6 +202,7 @@ fn comfyui_needs_an_install_even_when_the_app_has_its_adapter() {
     assert_eq!(pick(&advice), None);
 }
 
+/// ComfyUI alone, installed, is the recommendation.
 #[test]
 fn comfyui_alone_is_recommended_when_it_is_all_there_is() {
     let m = machine(Os::Linux, vec![gpu(GpuVendor::Amd, "Radeon", None)], true);
@@ -199,6 +211,8 @@ fn comfyui_alone_is_recommended_when_it_is_all_there_is() {
     assert_eq!(find(&advice, "comfyui").pace, Some(Pace::Gpu));
 }
 
+/// A card with too little memory makes a card engine slow, without figures in the sentence, and a
+/// card whose memory is unknown is not treated as too small.
 #[test]
 fn too_little_graphics_memory_turns_a_gpu_engine_into_a_slow_one() {
     let m = machine(
@@ -224,6 +238,7 @@ fn too_little_graphics_memory_turns_a_gpu_engine_into_a_slow_one() {
     );
 }
 
+/// An engine that can use the card is advised first, whichever order the offers arrive in.
 #[test]
 fn a_gpu_engine_beats_a_cpu_engine_whatever_the_listing_order() {
     let m = machine(
@@ -236,6 +251,7 @@ fn a_gpu_engine_beats_a_cpu_engine_whatever_the_listing_order() {
     assert_eq!(advice[0].provider, "burn");
 }
 
+/// The first card has no route for the engine, so the second, which has, decides the pace and is named.
 #[test]
 fn the_second_card_counts_when_the_first_has_no_route() {
     let m = machine(
@@ -255,6 +271,7 @@ fn the_second_card_counts_when_the_first_has_no_route() {
     );
 }
 
+/// An engine the table does not know has no graphics route, so a known card engine beats it.
 #[test]
 fn an_unknown_engine_is_never_suggested_over_a_known_gpu_one() {
     assert!(!gpu_route("tract", Os::Windows, GpuVendor::Nvidia));
@@ -270,6 +287,7 @@ fn an_unknown_engine_is_never_suggested_over_a_known_gpu_one() {
             provider: "tract".to_owned(),
             adapter_present: true,
             accelerators: None,
+            fast_on_processor: false,
         },
     );
     let advice = advise(&m, &o, None);

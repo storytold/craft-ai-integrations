@@ -3,3 +3,4 @@
 *.png binary
 *.ico binary
 *.zip binary
+crates/ai-engine-burn/src/model/** linguist-generated=true

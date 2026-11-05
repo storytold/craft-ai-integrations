@@ -3,6 +3,13 @@
 Thanks for helping with the Craft AI layer. `README.md` says what
 the crates are for and `docs/LAYOUT.md` says what lives where. Read both before a larger change.
 
+## Propose an integration
+
+For a vetted built-in model, connection, engine or workflow suggestion, start with
+[Propose an AI integration](docs/PROPOSE-AN-INTEGRATION.md). It creates a checked suggestion and an
+issue draft without changing anyone's custom setup. The [adoption guides](docs/adopting/README.md)
+cover the subsequent implementation.
+
 ## Branches and pull requests
 
 Changes reach `main` through a pull request. Nothing is pushed to it directly.
@@ -37,6 +44,7 @@ docs: add LAYOUT.md
 - **Keep `ai-core` small.** It uses serde only, with no I/O and no async runtime, and it must compile
   for wasm. Desktop-only code belongs in `ai-native`.
 - **No unsafe code.** The workspace forbids it.
+- **Time goes through `chrono`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string.
 - **No secrets in the repo or in logs.** Keys go through the secret stores in `ai-native`.
 - **Do not claim more than was run.** Say plainly what was tested live, what was tested against a
   scripted server, and what is only proposed.

@@ -110,7 +110,7 @@ fn stuck_server(queue_status: u16) -> Server {
     Server::start(move |r| match r.path.as_str() {
         "/object_info" => {
             let mut nodes = json!({"LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-                "MaskToImage":{},"SaveImage":{}});
+                "MaskToImage":{},"PreviewImage":{}});
             for name in NODES {
                 nodes[*name] = json!({});
             }
@@ -118,7 +118,7 @@ fn stuck_server(queue_status: u16) -> Server {
         }
         "/upload/image" => Reply::Json(
             200,
-            json!({"name":"source.png","type":"input","subfolder":""}).to_string(),
+            json!({"name":"source.png","type":"temp","subfolder":""}).to_string(),
         ),
         "/prompt" => {
             let id = if prompts.fetch_add(1, Ordering::SeqCst) == 0 {

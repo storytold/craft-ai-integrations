@@ -23,17 +23,33 @@ pub struct FolderDesk {
     shared: SharedStore,
 }
 
+mod native;
+mod setup;
+pub use native::{NativeFiles, NativeInstall};
+pub use setup::{CheckedNative, NativeSetupPlan};
+
 impl FolderDesk {
     pub fn new(shared: SharedStore) -> Self {
         Self { shared }
     }
 
+    /// Reads the shared folder map without changing the registered folders.
     pub fn list(&self) -> Result<Vec<ModelFolder>, AiError> {
         Ok(self.shared.load()?.model_folders)
     }
 
-    /// Registers a folder the person chose and reads what is in it. The files are not touched.
+    /// Links a folder for discovery without choosing it for downloads.
     pub fn add(&self, path: &Path, label: Option<&str>) -> Result<FolderAdded, AiError> {
+        self.add_inner(path, label, false)
+    }
+
+    /// Registers a scanned folder, optionally choosing it as the first download destination.
+    fn add_inner(
+        &self,
+        path: &Path,
+        label: Option<&str>,
+        choose_if_missing: bool,
+    ) -> Result<FolderAdded, AiError> {
         // The path is stored as text, so one that is not valid text cannot be kept faithfully:
         // refuse it rather than store a different folder from the one chosen.
         let text = path
@@ -64,15 +80,11 @@ impl FolderDesk {
                 ));
             }
             let id = unique_id(&name, &store.model_folders);
-            let default = !store
-                .model_folders
-                .iter()
-                .any(|f| f.default && f.origin == FolderOrigin::Chosen);
             let folder = ModelFolder {
                 id,
                 label: name.clone(),
                 path: text.clone(),
-                default,
+                default: choose_if_missing && !store.model_folders.iter().any(|f| f.default),
                 origin: FolderOrigin::Chosen,
                 kinds: scan.kinds.clone(),
             };
@@ -96,7 +108,48 @@ impl FolderDesk {
         }
         std::fs::create_dir_all(path)
             .map_err(|_| AiError::new(ErrorKind::Internal, "that folder could not be created"))?;
-        self.add(path, label)
+        self.add_inner(path, label, true)
+    }
+
+    /// The folder new downloads go to, made if there is none yet: the folder the suite suggests
+    /// ([`suggested_models_dir`](craft_ai_native::paths::suggested_models_dir)). This is the
+    /// whole of "pick a place" for a person who accepts the suggestion, and it never moves or
+    /// changes a folder they already chose.
+    pub fn ensure_default(&self) -> Result<ModelFolder, AiError> {
+        self.ensure_default_suggesting(craft_ai_native::paths::suggested_models_dir())
+    }
+
+    /// [`ensure_default`](Self::ensure_default) with the computer's suggestion given, or `None`
+    /// when it has none. A folder the person already chose is returned without needing one.
+    fn ensure_default_suggesting(
+        &self,
+        suggested: Option<std::path::PathBuf>,
+    ) -> Result<ModelFolder, AiError> {
+        if let Some(folder) = self.chosen_default()? {
+            return Ok(folder);
+        }
+        let suggested = suggested.ok_or_else(|| {
+            AiError::invalid("this computer gives no place for app files; choose a model folder")
+        })?;
+        Ok(self.add_new(&suggested, Some("ArtCraft models"))?.folder)
+    }
+
+    /// [`ensure_default`](Self::ensure_default) with the suggested folder given. Returns the
+    /// folder a person already made the default as it is. Otherwise `suggested` is made and
+    /// registered. Linked folders are never promoted automatically.
+    pub fn ensure_default_at(&self, suggested: &Path) -> Result<ModelFolder, AiError> {
+        if let Some(folder) = self.chosen_default()? {
+            return Ok(folder);
+        }
+        Ok(self.add_new(suggested, Some("ArtCraft models"))?.folder)
+    }
+
+    /// Returns only an explicitly selected default, never a merely linked folder.
+    fn chosen_default(&self) -> Result<Option<ModelFolder>, AiError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .find(|f| f.origin == FolderOrigin::Chosen && f.default))
     }
 
     /// Reads the folder again, for files added or moved since. Replaces its map.
@@ -127,20 +180,11 @@ impl FolderDesk {
         Ok(())
     }
 
-    /// Forgets the folder. Its files stay where they are. The default moves to the next folder
-    /// the person chose, so downloads still have somewhere to go.
+    /// Forgets the folder without touching its files or choosing a replacement download target.
     pub fn remove(&self, id: &str) -> Result<(), AiError> {
         self.find(id)?;
         self.shared.update(|store| {
             store.model_folders.retain(|f| f.id != id);
-            let has_default = store.model_folders.iter().any(|f| f.default);
-            let next = store
-                .model_folders
-                .iter_mut()
-                .find(|f| f.origin == FolderOrigin::Chosen);
-            if let (false, Some(next)) = (has_default, next) {
-                next.default = true;
-            }
         })?;
         Ok(())
     }
@@ -180,8 +224,13 @@ impl FolderDesk {
 fn scan(path: &Path) -> Result<FolderScan, AiError> {
     let owned: Vec<(String, String, u64)> = craft_ai_features::builtin()
         .into_iter()
-        .filter_map(|f| f.local)
-        .flat_map(|recipe| recipe.models)
+        .flat_map(|f| f.locals)
+        .flat_map(|recipe| {
+            recipe
+                .models
+                .into_iter()
+                .chain(recipe.native.into_iter().flat_map(|route| route.models))
+        })
         .map(|m| (m.folder, m.filename, m.size_bytes))
         .collect();
     let known: Vec<KnownFile<'_>> = owned
@@ -251,6 +300,8 @@ fn unique_id(name: &str, taken: &[ModelFolder]) -> String {
 mod tests {
     use super::*;
 
+    /// Two spellings of one place are the same folder only where the file system ignores case,
+    /// and a trailing separator never makes a different place.
     #[test]
     fn case_matters_only_where_the_file_system_says_so() {
         let upper = same_place_key(Path::new("/No/Such/Models"));
@@ -261,6 +312,20 @@ mod tests {
             lower,
             "a trailing separator never makes a different place"
         );
+    }
+
+    /// With no suggestion from the computer, a folder the person chose is still the default, and
+    /// only a person with no folder at all is told to choose one.
+    #[test]
+    fn a_chosen_folder_needs_no_suggestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let desk = FolderDesk::new(SharedStore::new(dir.path().join("connections.json")));
+        assert!(desk.ensure_default_suggesting(None).is_err());
+        let models = dir.path().join("models");
+        let chosen = desk.add_new(&models, None).unwrap().folder;
+        let found = desk.ensure_default_suggesting(None).unwrap();
+        assert_eq!(found.id, chosen.id);
+        assert!(found.default, "the only chosen folder becomes the default");
     }
 
     #[test]

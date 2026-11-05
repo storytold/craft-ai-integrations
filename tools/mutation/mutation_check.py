@@ -4,9 +4,11 @@ after `sam3_mutation_check.py`.
 Each case breaks one safety rule in the source, runs the one test that should notice, and puts the
 source back. A case is CAUGHT only if the mutated code compiled and the test run failed; a case that
 does not compile counts as NOT CAUGHT (a bad mutant), so every survivor is either a test gap or a
-mutant to fix. Cargo runs serially, targeted with -p, with -j 8.
+mutant to fix. Cargo runs serially, targeted with -p, honouring CARGO_BUILD_JOBS.
 
-Usage: mutation_check.py u1|u3|u4|p4|p10|v1|v2|v3|sd|vx|lc|lr|nr|ct|u2|wf [name-substring]
+Usage: mutation_check.py <group> [name-substring]. The groups are the keys of `GROUPS` below and are
+described in README.md (for example `rt` for the rten engine and `seg` for the selection contract);
+an unknown group lists them all.
 Saved logs pass through scrub.py so no Windows account name is written. Run it from anywhere;
 logs land in tools/mutation/verification/, which is not committed.
 """
@@ -45,6 +47,10 @@ HOSTS = C + 'ai-comfy-env/src/source/hosts.rs'
 FORMAT = C + 'ai-comfy-env/src/source/format.rs'
 SPEC = C + 'ai-comfy-env/src/source/spec.rs'
 DOWNLOAD = C + 'ai-comfy-env/src/download.rs'
+SAM21 = C + 'ai-comfyui/src/sam21_session.rs'
+DETECTOR = C + 'ai-comfyui/src/detector.rs'
+CU = 'craft-ai-comfyui'
+SCAN = C + 'ai-comfy-env/src/scan.rs'
 TRANSPORT = C + 'ai-comfy-env/src/download/transport.rs'
 HF = C + 'ai-comfy-env/src/source/resolve/hf.rs'
 GH = C + 'ai-comfy-env/src/source/resolve/github.rs'
@@ -72,7 +78,7 @@ U1 = [
     ('form-header-dropped', DRAFT, 'enabled: self.enabled,\n            key_header,\n        };', 'enabled: self.enabled,\n            key_header: None,\n        };', M, 'custom_connection', 'named_header_is_kept'),
     ('edit-loses-header', DRAFT, 'key_header: c.key_header.clone().unwrap_or_default(),', 'key_header: String::new(),', M, 'custom_connection', 'named_header_is_kept'),
     ('custom-test-wrong-provider', CUSTOM, 'self.provider.trim() == "openai-compatible"', 'self.provider.trim() == "openai"', M, 'custom_connection', 'starts_from_the_other'),
-    ('custom-billing-assumed-free', DRAFT, 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
+    ('custom-billing-assumed-free', C + 'ai-core/src/draft/presets.rs', 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
     ('named-key-sent-as-bearer', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(_) => ("Authorization".to_owned(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('named-key-value-prefixed', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(name) => (name.clone(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('redirects-followed', HTTP, '.max_redirects(0)', '.max_redirects(5)', O, 'custom', 'redirect_never_carries'),
@@ -185,6 +191,14 @@ U3 = [
     ('folder-unchecked', INSTALL, 'let target_dir = self.comfy.models_dir_for(folder).ok_or(Refusal::Folder)?;', 'let target_dir = self.comfy.base.join("models").join(folder);', E, 'source_install', 'cannot_leave_the_models'),
     ('settings-hosts-not-passed-on', C + 'ai-comfy-env/src/source/settings.rs', 'allowed_hosts: Some(self.download_hosts(kind)),', 'allowed_hosts: None,', E, 'source_install', 'reach_the_downloader'),
     ('registry-overwrites-damage', REGISTRY, 'serde_json::from_str(&text).map_err(|_| unreadable())', 'Ok(serde_json::from_str(&text).unwrap_or_default())', E, 'source_install', 'read_with_care'),
+    ('bundle-path-allows-dot-names', DOWNLOAD, "&& !part.starts_with('.')", '&& true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-depth-unbounded', DOWNLOAD, 'if parts.len() > 3 {', 'if parts.len() > 3000 {', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-path-allows-empty-parts', DOWNLOAD, '!part.is_empty()', 'true', E, 'download', 'file_names_that_could_escape'),
+    ('bundle-parent-link-followed', DOWNLOAD, 'if !actual.starts_with(&root) {', 'if false {', E, 'download', 'links_outside_the_destination'),
+    ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
+    ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
+    ('model-paths-file-size-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {', 'if !meta.is_file() {', E, 'detect', 'a_model_paths_file_that_cannot_be_used_adds_nothing'),
+    ('model-paths-file-cap-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if self.model_dirs.len() < MAX_EXTRA_DIRS && !self.model_dirs.contains(&entry) {', 'if !self.model_dirs.contains(&entry) {', E, 'detect', 'the_folder_cap_counts'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {
@@ -309,7 +323,7 @@ V1 = [
     ('status-reads-one-fixed-app', CLIENT, STATUS_RESOLVE, 'let resolved = match store.resolve(&AppId::new("launcher").unwrap_or_else(|_| self.app.clone()), role) {', CL, 'one_binding', ''),
     ('unbound-reads-as-broken', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(r) => write!(f, \"'{r}' is broken\"),", CL, 'one_binding', ''),
     ('unbound-hides-the-tool', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(_) => write!(f, \"no model is chosen\"),", CL, 'one_binding', ''),
-    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok::<(), AiError>(())', '            let _ = binding;\n            Ok::<(), AiError>(())', CL, 'one_binding', ''),
+    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(true)', '            let _ = binding;\n            Ok(true)', CL, 'one_binding', ''),
 ]
 
 PICK_G = C + 'ai-client/src/picker_groups.rs'
@@ -380,8 +394,8 @@ SD = [
     ('volcengine-address-accepted', SD_LIB, 'base != "' + BYTEPLUS + '"', 'base != "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
     ('query-string-allowed', SD_LIB, "base.contains(['?', '#'])", 'false', SDC, 'provider', ''),
     ('old-model-served', SD_LIB, 'const MODEL: &str = "dreamina-seedance-2-0-260128";', 'const MODEL: &str = "doubao-seedance-2-0-260128";', SDC, 'provider', ''),
-    ('preset-points-at-volcengine', DRAFT_RS, 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
-    ('preset-named-volcengine', DRAFT_RS, 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
+    ('preset-points-at-volcengine', C + 'ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
+    ('preset-named-volcengine', C + 'ai-core/src/draft/presets.rs', 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
 ]
 
 VTX_LIB = C + 'ai-vertex/src/lib.rs'
@@ -399,7 +413,18 @@ LC = [
     ('non-local-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", "if trimmed.contains(['?', '#']) {", CL, 'local', ''),
     ('query-in-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", 'if !endpoint.is_loopback() {', CL, 'local', ''),
     ('trailing-slash-kept', LOCAL_RS, "input.trim_end_matches('/')", "input.trim_end_matches('~')", CL, 'local', ''),
-    ('unrunnable-recipe-accepted', LOCAL_RS, 'feature.local.as_ref().filter(|r| r.usable)', 'feature.local.as_ref().filter(|_| true)', CL, 'local', ''),
+    ('unrunnable-recipe-accepted', LOCAL_RS, '            .comfyui_recipes()\n            .find(|r| r.usable)\n            .ok_or_else', '            .comfyui_recipes()\n            .find(|_| true)\n            .ok_or_else', CL, 'local', ''),
+    ('unrunnable-named-recipe-accepted', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.workflow == workflow)', CL, 'local_recipes', 'cannot_run_yet'),
+    ('named-recipe-name-ignored', LOCAL_RS, '.find(|r| r.workflow == workflow && r.usable)', '.find(|r| r.usable)', CL, 'local_recipes', ''),
+    ('second-recipe-takes-plain-id', LOCAL_RS, '            None => feature\n                .comfyui_recipes()\n                .next()\n                .is_some_and(|first| first.workflow == recipe.workflow),', '            None => true,', CL, 'local_recipes', 'own_connection'),
+    ('recipe-id-shares-runtime-namespace', LOCAL_RS, 'format!("local-{}-recipe-{}", feature.id, recipe.workflow)', 'format!("local-{}-{}", feature.id, recipe.workflow)', CL, 'local_recipes', 'built_in_runtime_never'),
+    ('picker-ignores-which-recipe-is-installed', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || true)', CL, 'local_recipes', 'keeps_the_setup_link'),
+    ('picker-recipe-connection-never-counts', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || false)', CL, 'local_recipes', 'setup_link'),
+    ('other-adapter-connection-replaced', LOCAL_RS, 'Some(existing) if existing.provider != connection.provider => {', 'Some(existing) if false => {', CL, 'local_recipes', 'never_replaces'),
+    ('advice-from-first-recipe-only', C + 'ai-client/src/engine.rs', 'feature.first_usable_recipe() else', 'feature.locals.first().filter(|r| r.usable) else', CL, 'local_recipes', 'engine_advice_follows'),
+    ('runtime-from-first-recipe-only', LOCAL_RS, '            .iter()\n            .find(|r| r.usable)\n            .and_then(|r| r.native.first())', '            .first()\n            .and_then(|r| r.native.first())', CL, 'local_recipes', 'built_in_runtime_comes_from'),
+    ('plans-reuse-first-recipe', C + 'ai-features/src/plan.rs', '.map(|recipe| plan_recipe(feature, recipe, inventory))', '.map(|_| plan(feature, inventory))', FE, 'recipes', ''),
+    ('options-share-one-recipe-id', C + 'ai-features/src/options.rs', 'id: format!("local:{}:{}", feature.id, recipe.workflow),', 'id: format!("local:{}", feature.id),', FE, 'recipes', 'own_setup_option'),
     ('replaces-a-choice-made', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if true {', CL, 'local', ''),
     ('never-binds', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if false {', CL, 'local', ''),
     ('moved-address-kept-old', LOCAL_RS, 'Some(existing) => *existing = connection,', 'Some(_) => {}', CL, 'local', ''),
@@ -416,24 +441,24 @@ LR = [
     ('broken-choice-looks-unbound', LOCAL_RS, 'Err(error) => return Err(AiError::unsupported(error.to_string())),', 'Err(_error) => return Ok(None),', CL, 'local_routes', 'a_broken_choice'),
     ('remote-route-leaked', LOCAL_RS, 'if resolved.connection.locality != Locality::Local {', 'if false {', CL, 'local_routes', 'a_remote_choice'),
     ('native-route-treated-as-comfyui', LOCAL_RS, 'if route.provider != "comfyui" {', 'if false {', CL, 'local_routes', 'an_endpoint_cannot'),
-    ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {', 'if false {', CL, 'local_routes', 'a_selected_native'),
+    ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, 'local_routes', 'a_selected_native'),
     ('picker-offers-uninstalled-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', '} else if !client.has_adapter(&connection.provider) {', '} else if false {', CL, 'local_routes', 'a_selected_native'),
     ('picker-false-setup-for-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', 'state != GroupState::Ready && state != GroupState::NeedsAdapter', 'state != GroupState::Ready', CL, 'local_routes', 'a_selected_native'),
 ]
 
 # nr: the built-in runtime route reads one weights file (ai-client/tests/local_native.rs)
 NR = [
-    ('relative-path-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!safetensors || !path.is_file()', CL, 'local_native', 'relative_path'),
-    ('any-extension-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!path.is_absolute() || !path.is_file()', CL, 'local_native', 'cannot_be_the_weights'),
-    ('missing-file-accepted', LOCAL_RS, '!path.is_absolute() || !safetensors || !path.is_file()', '!path.is_absolute() || !safetensors', CL, 'local_native', 'cannot_be_the_weights'),
-    ('unusable-recipe-accepted', LOCAL_RS, '.filter(|r| r.usable)\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', '.and_then(|r| r.native.iter().find(|n| n.provider == provider))', CL, 'local_native', 'not_ready_to_use'),
+    ('relative-path-accepted', LOCAL_RS, '!path.is_absolute() || !known || !path.is_file()', '!known || !path.is_file()', CL, 'local_native', 'relative_path'),
+    ('any-extension-accepted', LOCAL_RS, '!path.is_absolute() || !known || !path.is_file()', '!path.is_absolute() || !path.is_file()', CL, 'local_native', 'cannot_be_the_weights'),
+    ('missing-file-accepted', LOCAL_RS, '!path.is_absolute() || !known || !path.is_file()', '!path.is_absolute() || !known', CL, 'local_native', 'cannot_be_the_weights'),
+    ('unusable-recipe-accepted', LOCAL_RS, '.engine_recipe(provider)\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', '.locals\n            .first()\n            .and_then(|r| r.native.iter().find(|n| n.provider == provider))', CL, 'local_recipes', 'built_in_runtime_comes_from'),
     ('file-not-given-to-apps', LOCAL_RS, 'file: resolved.model.local_file.clone(),', 'file: None,', CL, 'local_native', 'registered_bound'),
     ('file-not-stored', LOCAL_RS, 'model.local_file = Some(file);', 'model.local_file = None;', CL, 'local_native', 'registered_bound'),
     ('other-backend-file-served', LOCAL_RS, 'if route.provider != provider {', 'if false {', CL, 'local_native', 'comfyui_route_has_no_file'),
     ('vanished-file-served', LOCAL_RS, 'if !path.is_file() {', 'if false {', CL, 'local_native', 'vanished'),
     ('unbound-is-an-error', LOCAL_RS, 'let Some(route) = self.local_route_for(role)? else {\n            return Ok(None);\n        };\n        if route.provider != provider', 'let Some(route) = self.local_route_for(role)? else {\n            return Err(AiError::unsupported("unbound"));\n        };\n        if route.provider != provider', CL, 'local_native', 'nothing_bound'),
     ('native-replaces-a-choice', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if true {', CL, 'local_native', 'left_alone'),
-    ('native-connection-id-shared-with-comfyui', LOCAL_RS, 'format!("local-{}-{}", feature.id, native.provider)', 'format!("local-{}", feature.id)', CL, 'local_native', 'left_alone'),
+    ('native-connection-id-shared-with-comfyui', LOCAL_RS, 'format!("local-{feature}-{provider}")', 'format!("local-{feature}")', CL, 'local_native', 'left_alone'),
 ]
 
 CT_CLIENT = C + 'ai-client/src/client.rs'
@@ -443,16 +468,34 @@ CT_STORE = C + 'ai-core/src/store.rs'
 T = 'custom_tool_conformance'
 # Declared custom tool, two app clients (tests/custom_tool_conformance.rs).
 CT = [
-    ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {', 'if false {', CL, T, 'without_the_adapter'),
+    ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, T, 'without_the_adapter'),
     ('picker-hides-missing-adapter', CT_PICKER, 'RoleStatus::Unavailable { reason } => Some(reason),', 'RoleStatus::Unavailable { reason } => {\n                    let _ = reason;\n                    None\n                }', CL, T, 'without_the_adapter'),
-    ('consent-not-enforced', CT_CLIENT, 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
-    ('request-not-forwarded', CT_CLIENT, 'provider.submit(&plan.model, &plan.request) {', 'provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())) {', CL, T, 'two_apps_run'),
+    ('consent-not-enforced', C + 'ai-client/src/client_run.rs', 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
+    ('request-not-forwarded', C + 'ai-client/src/client_run.rs', 'provider.submit(&plan.model, &plan.request) {', 'provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())) {', CL, T, 'two_apps_run'),
     ('cancel-not-forwarded', CT_CLIENT, 'pub fn cancel(&self) -> Result<(), AiError> {\n        self.provider.cancel(&self.id)', 'pub fn cancel(&self) -> Result<(), AiError> {\n        let _ = &self.provider;\n        Ok(())', CL, T, 'cancelling_one'),
     ('old-store-needs-the-new-field', CT_STORE, '#[serde(default, skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', '#[serde(skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', CL, T, 'before_custom_tools'),
     ('removal-keeps-the-launcher-choice', CT_TOOLS, 'store.defaults.retain(|binding| &binding.role != id);', 'let _ = id;', CL, T, 'before_custom_tools'),
 ]
 
 from mutation_u2 import U2, U2_EQUIVALENT  # noqa: E402
+from mutation_contract import CA  # noqa: E402
+from mutation_scratch import SF, SF_EQUIVALENT  # noqa: E402
+from mutation_catalogue import CG  # noqa: E402
+from mutation_consent import CE, CE_EQUIVALENT  # noqa: E402
+from mutation_native import NF  # noqa: E402
+from mutation_native_setup import NS  # noqa: E402
+from mutation_native_session import NQ  # noqa: E402
+from mutation_native_widget import NW  # noqa: E402
+from mutation_egui import EG_CASES  # noqa: E402
+from mutation_rten import RTEN_CASES  # noqa: E402
+from mutation_generic import GS_CASES  # noqa: E402
+from mutation_generic_mask import GM_CASES  # noqa: E402
+from mutation_generic_uploads import GU_CASES  # noqa: E402
+from mutation_segment import SEG_CASES  # noqa: E402
+from mutation_burn_preparation import BP  # noqa: E402
+from mutation_burn_engine import BE  # noqa: E402
+from mutation_built_in_only import BO  # noqa: E402
+from mutation_first_run import FR  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -500,18 +543,37 @@ WF = [
     ('library-save-overwrites-foreign-workflow', WF_LIBRARY, 'if path.exists() && !stale.iter().any(|existing| existing == &path) {', 'if false && path.exists() && !stale.iter().any(|existing| existing == &path) {', COMFY, 'library', 'another_workflow'),
     ('library-save-ignores-scan-failure', WF_LIBRARY, 'let stale = self.files_storing(&id)?;', 'let stale = self.files_storing(&id).unwrap_or_default();', COMFY, 'library', 'save_refuses_when_the_directory'),
 ]
-GROUPS = {'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
+# s21: SAM 2.1 selects through Florence-2-large; ComfyUI must list that detector before anything is uploaded.
+S21 = [
+    ('detector-check-skipped', SAM21, 'crate::detector::require_detector(&nodes)?;', '', CU, 'sam21_session', ''),
+    ('wrong-detector-asked-for', DETECTOR, 'pub const FLORENCE2_DETECTOR: &str = "Florence-2-large";', 'pub const FLORENCE2_DETECTOR: &str = "Florence-2-base";', CU, 'sam21_session', ''),
+    ('any-listed-detector-accepted', DETECTOR, 'c.as_str() == Some(FLORENCE2_DETECTOR)', 'c.as_str().is_some()', CU, 'sam21_session', ''),
+    ('cpu-run-on-cuda', SAM21, 'Some("cpu") => Ok(("cpu", "fp32")),', 'Some("cpu") => Ok(("cuda", "fp16")),', CU, 'sam21_session', 'uses_the_device'),
+    ('half-precision-off-cuda', SAM21, 'Some("mps") => Ok(("mps", "fp32")),', 'Some("mps") => Ok(("mps", "fp16")),', CU, 'sam21_session', 'uses_the_device'),
+    ('missing-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).or(Some("cuda")) {', CU, 'sam21_session', 'unsupported_device'),
+    ('unknown-device-assumed-cuda', SAM21, 'stats.pointer("/devices/0/type").and_then(Value::as_str) {', 'stats.pointer("/devices/0/type").and_then(Value::as_str).map(|d| if d == "xpu" { "cuda" } else { d }) {', CU, 'sam21_session', 'unsupported_device'),
+    ('result-errors-name-sam3', SAM21, 'e.message.replace("SAM 3", "SAM 2.1")', 'e.message', CU, 'sam21_session', 'not_sam_3'),
+    ('only-the-last-box-kept', SAM21, '"individual_objects":true', '"individual_objects":false', CU, 'sam21_session', 'every_detected_box'),
+    ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
+]
+
+GROUPS = {'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
     'non-local-address-accepted': 'SharedStore::update calls write, which validates every connection; a non-loopback Local endpoint is refused even without the earlier local_address check (local.rs test confirms nothing written)',
-    'input-folder-read': 'a directory cannot be opened on Windows, and where it can be opened reading it fails with the same message; the check exists for pipes and devices, which cannot be made here (not proven on Linux or macOS)',
-    'directory-taken-as-local-file': 'on Windows a directory reports length 0, which the size check also refuses; elsewhere the is_file check is what refuses it',
+    'input-folder-read': 'a folder is also refused by the read that follows, with the same message, so a folder alone does not catch this check going missing; on Windows a folder cannot be opened at all. Only the character-device case in only_plain_local_files_are_read notices, and Windows cannot make one',
+    'directory-taken-as-local-file': 'on Windows a directory reports length 0, which the size check also refuses; on Linux and macOS it reports a real length, so the is_file check is the only refusal',
 }
 EQUIVALENT.update(U2_EQUIVALENT)
-# Both reasons above are about Windows; on Linux and macOS they are observed, not assumed.
+EQUIVALENT.update(SF_EQUIVALENT)
+EQUIVALENT.update(CE_EQUIVALENT)
+# Both reasons above are about Windows; on Linux and macOS both cases are caught. Observed on
+# ubuntu-latest and macos-latest through the Deliberate-bug checks workflow.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
 TIMEOUTS = {}
+# Printed by a test that skips itself because the machine cannot do what it needs.
+SKIP_MARK = 'skipped: this machine does not allow directory links'
 
 
 def main():
@@ -529,9 +591,11 @@ def main():
                 bad.append((name, text.count(old)))
         print('mutations:', len(GROUPS[group]), 'without exactly one target:', bad)
         raise SystemExit(1 if bad else 0)
-    for name, rel, old, new, package, target, test in GROUPS[group]:
-        if only not in name:
-            continue
+    selected = [case for case in GROUPS[group] if only in case[0]]
+    if not selected:
+        # A mistyped filter would otherwise check nothing and still report success.
+        raise SystemExit('no case in ' + group + ' contains ' + repr(only))
+    for name, rel, old, new, package, target, test in selected:
         path = ROOT / rel
         original = path.read_bytes()
         text = original.decode('utf-8').replace('\r\n', '\n')
@@ -541,7 +605,7 @@ def main():
             path.write_bytes(text.replace(old, new).replace('\n', newline).encode('utf-8'))
             # target 'lib' runs the crate's own unit tests instead of an integration test file.
             where = ['--lib'] if target == 'lib' else ['--test', target]
-            command = ['cargo', 'test', '-p', package, *where, test, '-j', '8']
+            command = ['cargo', 'test', '--locked', '-p', package, *where, test, '--', '--nocapture']
             proc = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             timed_out = False
             try:
@@ -556,10 +620,13 @@ def main():
                 log += '\nTIMED OUT: the mutated code made the test hang'
             (OUT / ('mutation-' + name + '.txt')).write_text(scrub(log), encoding='utf-8')
             caught = timed_out or (proc.returncode != 0 and 'test result: FAILED' in log)
+            # A test that skips itself (for example, no directory links here) passes whatever the code does,
+            # so a pass that printed the skip proves nothing and is neither caught nor a survivor.
+            skipped = (not caught) and SKIP_MARK in log
             # Equivalent on Windows only: elsewhere the case is expected to be caught, and a miss there is a finding.
-            equivalent = (not caught) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
-            results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'equivalent': EQUIVALENT[name] if equivalent else None})
-            print(name, 'CAUGHT' if caught else ('EQUIVALENT' if equivalent else 'NOT CAUGHT'), flush=True)
+            equivalent = (not caught) and (not skipped) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
+            results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'skipped': skipped, 'equivalent': EQUIVALENT[name] if equivalent else None})
+            print(name, 'CAUGHT' if caught else ('SKIPPED' if skipped else ('EQUIVALENT' if equivalent else 'NOT CAUGHT')), flush=True)
         finally:
             path.write_bytes(original)
             os.utime(path, None)
@@ -573,9 +640,10 @@ def main():
         merged.update({r['mutation']: r for r in results})
         results = list(merged.values())
     saved.write_text(json.dumps(results, indent=2), encoding='utf-8')
-    survivors = [r['mutation'] for r in results if not r['caught_by_runtime_test'] and not r.get('equivalent')]
+    survivors = [r['mutation'] for r in results if not r['caught_by_runtime_test'] and not r.get('equivalent') and not r.get('skipped')]
+    skipped = [r['mutation'] for r in results if r.get('skipped')]
     equivalent = [r['mutation'] for r in results if r.get('equivalent')]
-    print(json.dumps({'mutations': len(results), 'caught': sum(r['caught_by_runtime_test'] for r in results), 'equivalent': equivalent, 'survivors': survivors}))
+    print(json.dumps({'mutations': len(results), 'caught': sum(r['caught_by_runtime_test'] for r in results), 'equivalent': equivalent, 'skipped': skipped, 'survivors': survivors}))
     if survivors:
         raise SystemExit(1)
 

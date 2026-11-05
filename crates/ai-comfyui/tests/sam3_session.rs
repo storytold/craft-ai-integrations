@@ -21,6 +21,8 @@ fn flat_png(value: u8) -> Vec<u8> {
     bytes
 }
 
+/// Activating the tool uploads the image once; hovering returns previews and a click returns a
+/// mask of the exact source size.
 #[test]
 fn activation_prepares_once_then_hover_previews_and_click_returns_an_exact_mask() {
     let mask = png();
@@ -32,13 +34,13 @@ fn activation_prepares_once_then_hover_previews_and_click_returns_an_exact_mask(
         "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
         "/object_info" => Reply::Json(200, json!({
             "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-            "MaskToImage":{},"SaveImage":{}
+            "MaskToImage":{},"PreviewImage":{}
         }).to_string()),
-        "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
+        "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"temp","subfolder":""}).to_string()),
         "/prompt" => Reply::Json(200,json!({"prompt_id":"abc-123"}).to_string()),
         "/history/abc-123" => Reply::Json(200,json!({"abc-123":{"status":{"completed":true},"outputs":{"5":{"images":[{"filename":"mask.png","type":"output","subfolder":""}]}}}}).to_string()),
         "/sam3/interactive_segment_one" => Reply::Json(200,json!({"num_masks":1,"overlay":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&server_preview)}).to_string()),
-        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",server_mask.len()).into_bytes(),server_mask.clone()].concat()),
+        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",server_mask.len()).into_bytes(),server_mask.clone()].concat()),
         _ => Reply::Json(404,"{}".into()),
     }
     });
@@ -75,6 +77,7 @@ fn activation_prepares_once_then_hover_previews_and_click_returns_an_exact_mask(
     assert_eq!(preview_call.body_json()["node_id"], id.as_str());
 }
 
+/// Several points and a box are sent together in a single queued prompt.
 #[test]
 fn multi_point_and_box_prompts_travel_in_one_prompt() {
     let mask = png();
@@ -84,12 +87,12 @@ fn multi_point_and_box_prompts_travel_in_one_prompt() {
         "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
         "/object_info" => Reply::Json(200, json!({
             "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-            "SAM3Grounding":{},"MaskToImage":{},"SaveImage":{}
+            "SAM3Grounding":{},"MaskToImage":{},"PreviewImage":{}
         }).to_string()),
-        "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
+        "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"temp","subfolder":""}).to_string()),
         "/prompt" => Reply::Json(200,json!({"prompt_id":"abc-123"}).to_string()),
         "/history/abc-123" => Reply::Json(200,json!({"abc-123":{"status":{"completed":true},"outputs":{"5":{"images":[{"filename":"mask.png","type":"output","subfolder":""}]}}}}).to_string()),
-        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",server_mask.len()).into_bytes(),server_mask.clone()].concat()),
+        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",server_mask.len()).into_bytes(),server_mask.clone()].concat()),
         _ => Reply::Json(404,"{}".into()),
     }
     });
@@ -125,6 +128,7 @@ fn multi_point_and_box_prompts_travel_in_one_prompt() {
     assert_eq!(store[0]["positive_boxes"][0]["y2"], 28.0);
 }
 
+/// Text grounding sends the subject text and returns the resulting mask.
 #[test]
 fn grounding_sends_text_and_returns_mask() {
     let mask = png();
@@ -134,12 +138,12 @@ fn grounding_sends_text_and_returns_mask() {
         "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
         "/object_info" => Reply::Json(200, json!({
             "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-            "SAM3Grounding":{},"MaskToImage":{},"SaveImage":{}
+            "SAM3Grounding":{},"MaskToImage":{},"PreviewImage":{}
         }).to_string()),
-        "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
+        "/upload/image" => Reply::Json(200,json!({"name":"source.png","type":"temp","subfolder":""}).to_string()),
         "/prompt" => Reply::Json(200,json!({"prompt_id":"abc-123"}).to_string()),
         "/history/abc-123" => Reply::Json(200,json!({"abc-123":{"status":{"completed":true},"outputs":{"5":{"images":[{"filename":"mask.png","type":"output","subfolder":""}]}}}}).to_string()),
-        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",server_mask.len()).into_bytes(),server_mask.clone()].concat()),
+        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",server_mask.len()).into_bytes(),server_mask.clone()].concat()),
         _ => Reply::Json(404,"{}".into()),
     }
     });
@@ -187,6 +191,7 @@ fn remote_origin_is_never_a_local_sam3_session() {
     assert!(Sam3Session::new("https://example.com").is_err());
 }
 
+/// Live and opt-in: several points select both generated discs.
 #[test]
 #[ignore = "requires a running local ComfyUI; does not start or modify it"]
 fn installed_comfyui_multi_point_selects_both_discs() {
@@ -217,9 +222,11 @@ fn installed_comfyui_multi_point_selects_both_discs() {
         box_: None,
     };
     let selected = session.commit_prompt(&prompt).unwrap();
-    let mut reader = png::Decoder::new(selected.as_slice()).read_info().unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(selected.as_slice()))
+        .read_info()
+        .unwrap();
     assert_eq!((reader.info().width, reader.info().height), (256, 128));
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
     reader.next_frame(&mut pixels).unwrap();
     assert!(pixels[64 * 256 + 40] > 0, "big disc must be selected");
     assert!(
@@ -229,6 +236,7 @@ fn installed_comfyui_multi_point_selects_both_discs() {
     assert_eq!(pixels[10 * 256 + 10], 0, "background must stay unselected");
 }
 
+/// Live and opt-in: prewarm, preview and select work on the installed ComfyUI.
 #[test]
 #[ignore = "requires a running local ComfyUI; does not start or modify it"]
 fn installed_comfyui_prewarms_previews_and_selects_a_disc() {
@@ -258,8 +266,10 @@ fn installed_comfyui_prewarms_previews_and_selects_a_disc() {
     let preview = session.preview(128.0, 128.0).unwrap();
     assert!(preview.starts_with(&[0xff, 0xd8]));
     let selected = session.commit(128.0, 128.0).unwrap();
-    let mut reader = png::Decoder::new(selected.as_slice()).read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let mut reader = png::Decoder::new(std::io::Cursor::new(selected.as_slice()))
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
     let frame = reader.next_frame(&mut pixels).unwrap();
     assert_eq!((frame.width, frame.height), (256, 256));
     assert!(pixels.contains(&0));
@@ -273,12 +283,12 @@ fn grounding_server(mask: Vec<u8>) -> Server {
         "/system_stats" => Reply::Json(200, json!({"system":{"comfyui_version":"0.22.3"}}).to_string()),
         "/object_info" => Reply::Json(200, json!({
             "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-            "SAM3Grounding":{},"MaskToImage":{},"SaveImage":{}
+            "SAM3Grounding":{},"MaskToImage":{},"PreviewImage":{}
         }).to_string()),
-        "/upload/image" => Reply::Json(200, json!({"name":"source.png","type":"input","subfolder":""}).to_string()),
+        "/upload/image" => Reply::Json(200, json!({"name":"source.png","type":"temp","subfolder":""}).to_string()),
         "/prompt" => Reply::Json(200, json!({"prompt_id":"abc-123"}).to_string()),
         "/history/abc-123" => Reply::Json(200, json!({"abc-123":{"status":{"completed":true},"outputs":{"5":{"images":[{"filename":"mask.png","type":"output","subfolder":""}]}}}}).to_string()),
-        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", mask.len()).into_bytes(), mask.clone()].concat()),
+        "/view?filename=mask.png&type=output" => Reply::Raw([format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", mask.len()).into_bytes(), mask.clone()].concat()),
         _ => Reply::Json(404, "{}".into()),
     }
     })

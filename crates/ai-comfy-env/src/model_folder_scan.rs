@@ -157,6 +157,8 @@ pub fn scan_model_folder(root: &Path, known: &[KnownFile<'_>]) -> Result<FolderS
     scan_with_limits(root, known, MAX_FILES, MAX_ENTRIES)
 }
 
+/// Walks `root` and lists its model files and the recipe files named in `known`, within the depth,
+/// file and place limits. Reads only; it never changes a file.
 fn scan_with_limits(
     root: &Path,
     known: &[KnownFile<'_>],
@@ -206,7 +208,12 @@ fn scan_with_limits(
                 }
                 continue;
             }
-            if !meta.is_file() || !is_model_file(&name) {
+            // A built-in runner may also need tokenizer files (.json and .txt). Include only
+            // exact known names and sizes, not every arbitrary file in the person's folder.
+            let is_known = known
+                .iter()
+                .any(|k| k.size == meta.len() && k.filename.eq_ignore_ascii_case(&name));
+            if !meta.is_file() || !(is_model_file(&name) || is_known) {
                 continue;
             }
             if scan.files.len() >= max_files {
@@ -229,7 +236,7 @@ fn scan_with_limits(
                 } else {
                     scan.truncated = true;
                 }
-            } else {
+            } else if basis.is_none() {
                 scan.unrecognised += 1;
             }
             let rel = if sub.is_empty() {
@@ -253,6 +260,9 @@ fn scan_with_limits(
     Ok(scan)
 }
 
+/// Decides a file's kind and why. A name and size listed in `known` wins and is credited to the
+/// recipe; its kind is `None` when the recipe's folder is not a ComfyUI kind (a built-in runtime's
+/// own files). Otherwise the folders, then the tensor names, decide.
 fn classify(
     path: &Path,
     name: &str,
@@ -263,10 +273,10 @@ fn classify(
 ) -> (Option<&'static str>, Option<Basis>) {
     let from_recipe = known
         .iter()
-        .filter(|k| k.size == size && k.filename.eq_ignore_ascii_case(name))
-        .find_map(|k| KINDS.iter().copied().find(|c| *c == k.kind));
-    if let Some(kind) = from_recipe {
-        return (Some(kind), Some(Basis::Recipe));
+        .find(|k| k.size == size && k.filename.eq_ignore_ascii_case(name));
+    if let Some(known) = from_recipe {
+        let kind = KINDS.iter().copied().find(|c| *c == known.kind);
+        return (kind, Some(Basis::Recipe));
     }
     if let Some(kind) = parts
         .iter()

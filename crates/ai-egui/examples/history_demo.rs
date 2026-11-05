@@ -8,6 +8,7 @@
 //! Nothing here deletes or writes the real log. Clear only empties what the window shows, and
 //! Export writes `history-export.csv` into the current directory.
 
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use craft_ai_core::history::{EndRecord, HISTORY_SCHEMA, StartRecord, merge};
@@ -165,9 +166,13 @@ struct Demo {
     log: HistoryLog,
     view: HistoryViewState,
     note: String,
+    /// Actions reported by the view; applied once in `logic`, not in the paint callback.
+    pending: VecDeque<HistoryAction>,
 }
 
 impl Demo {
+    /// Returns sample data unless `real`, where the real log is merged; a missing or unreadable file
+    /// becomes an empty log.
     fn load(real: bool) -> HistoryLog {
         if !real {
             return sample_log(now_ms());
@@ -177,9 +182,47 @@ impl Demo {
             _ => HistoryLog::default(),
         }
     }
+
+    /// Queues an action once. A host that draws twice in one frame reports the same press twice;
+    /// the second copy must not write the export again.
+    fn queue(&mut self, action: HistoryAction) {
+        if !self.pending.contains(&action) {
+            self.pending.push_back(action);
+        }
+    }
+
+    /// Refresh reloads the log, Clear empties only this window's copy, and Export writes
+    /// `history-export.csv` in the current directory.
+    fn apply(&mut self, action: HistoryAction) {
+        match action {
+            HistoryAction::Refresh => {
+                self.log = Self::load(self.real);
+                self.note = "Refreshed.".into();
+            }
+            HistoryAction::Clear => {
+                self.log = HistoryLog::default();
+                self.note = "Cleared in this window only. The file on disk was not touched.".into();
+            }
+            HistoryAction::Export(csv) => {
+                self.note = match std::fs::write("history-export.csv", csv) {
+                    Ok(()) => "Wrote history-export.csv in the current folder.".into(),
+                    Err(e) => format!("Could not write the file: {e}"),
+                };
+            }
+        }
+    }
 }
 
 impl eframe::App for Demo {
+    /// Drains queued history actions outside the paint callback, applying each once.
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        while let Some(action) = self.pending.pop_front() {
+            self.apply(action);
+        }
+    }
+
+    /// Draws the heading, history view and last note, queueing the view's action once and requesting
+    /// another repaint.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading(if self.real {
@@ -188,23 +231,9 @@ impl eframe::App for Demo {
                 "AI history (sample data)"
             });
             ui.add_space(6.0);
-            match history_view(ui, &mut self.view, &self.log, now_ms()) {
-                Some(HistoryAction::Refresh) => {
-                    self.log = Self::load(self.real);
-                    self.note = "Refreshed.".into();
-                }
-                Some(HistoryAction::Clear) => {
-                    self.log = HistoryLog::default();
-                    self.note =
-                        "Cleared in this window only. The file on disk was not touched.".into();
-                }
-                Some(HistoryAction::Export(csv)) => {
-                    self.note = match std::fs::write("history-export.csv", csv) {
-                        Ok(()) => "Wrote history-export.csv in the current folder.".into(),
-                        Err(e) => format!("Could not write the file: {e}"),
-                    };
-                }
-                None => {}
+            if let Some(action) = history_view(ui, &mut self.view, &self.log, now_ms()) {
+                self.queue(action);
+                ui.ctx().request_repaint();
             }
             if !self.note.is_empty() {
                 ui.add_space(6.0);
@@ -214,6 +243,7 @@ impl eframe::App for Demo {
     }
 }
 
+/// Starts the eframe history demo; `--real` selects the real log instead of the sample.
 fn main() -> eframe::Result {
     let real = std::env::args().any(|a| a == "--real");
     let options = eframe::NativeOptions {
@@ -229,6 +259,7 @@ fn main() -> eframe::Result {
                 log: Demo::load(real),
                 view: HistoryViewState::default().with_offset(OFFSET_MINUTES),
                 note: String::new(),
+                pending: VecDeque::new(),
             }))
         }),
     )

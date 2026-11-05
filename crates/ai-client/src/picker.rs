@@ -110,8 +110,8 @@ impl AiClient {
             .check_tool(role)
             .map_err(|e| AiError::invalid(e.to_string()))?;
         let binding = binding_for(&store, self.app(), &role.id);
-        let mut groups = connection_groups(self, &store, role, binding);
-        groups.extend(unset_groups(&store, role, options));
+        let mut groups = connection_groups(self, &store, role, binding, options);
+        groups.extend(unset_groups(self, &store, role, options));
         groups.sort_by_key(|g| g.state);
         let current = binding.map(|b| CurrentChoice {
             connection: b.connection.clone(),

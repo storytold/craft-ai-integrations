@@ -23,9 +23,12 @@ pub fn sized_mask(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// The pixel bytes of a PNG.
 pub fn pixels(bytes: &[u8]) -> Vec<u8> {
-    let mut reader = png::Decoder::new(bytes).read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
     let frame = reader.next_frame(&mut buf).unwrap();
     assert_eq!((frame.width, frame.height), (2, 1));
     assert_eq!(frame.color_type, png::ColorType::Grayscale);
@@ -67,7 +70,7 @@ pub fn server_nodes(
         "/object_info" => {
             let mut nodes = json!({
                 "LoadImage":{},"LoadSAM3Model":{},"SAM3InteractiveCollector":{},
-                "SAM3Grounding":{},"MaskToImage":{},"SaveImage":{}
+                "SAM3Grounding":{},"MaskToImage":{},"PreviewImage":{}
             });
             for name in &extra_nodes {
                 nodes[name.as_str()] = json!({});
@@ -77,7 +80,7 @@ pub fn server_nodes(
         "/upload/image" => Reply::Json(
             200,
             json!({
-                "name":"source.png","type":"input","subfolder":""
+                "name":"source.png","type":"temp","subfolder":""
             })
             .to_string(),
         ),
@@ -107,8 +110,11 @@ pub fn server_nodes(
             .map(|(_, data)| {
                 Reply::Raw(
                     [
-                        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", data.len())
-                            .into_bytes(),
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            data.len()
+                        )
+                        .into_bytes(),
                         data.clone(),
                     ]
                     .concat(),

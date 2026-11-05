@@ -116,6 +116,9 @@ impl Http {
         serde_json::from_slice(&bytes)
             .map_err(|_| AiError::new(ErrorKind::Provider, "ComfyUI returned invalid JSON"))
     }
+    /// Uploads one image to ComfyUI's scratch area (`type=temp`) and returns the name a loader
+    /// should read, tagged ` [temp]`. A reply that says the file landed anywhere else, in a
+    /// sub-folder, or under an unsafe name is refused, so nothing of ours stays in `input/`.
     pub fn upload_image(
         &self,
         role: &str,
@@ -140,7 +143,7 @@ impl Http {
             extension
         );
         let boundary = format!("craft-ai-{nonce}-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-        let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"type\"\r\n\r\ninput\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"{filename}\"\r\nContent-Type: {media_type}\r\n\r\n").into_bytes();
+        let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"type\"\r\n\r\ntemp\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"{filename}\"\r\nContent-Type: {media_type}\r\n\r\n").into_bytes();
         body.extend_from_slice(data);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         let resp = self.check(
@@ -164,7 +167,7 @@ impl Http {
                 "ComfyUI did not name the uploaded image",
             )
         })?;
-        if reply.get("type").and_then(Value::as_str) != Some("input")
+        if reply.get("type").and_then(Value::as_str) != Some("temp")
             || reply.get("subfolder").and_then(Value::as_str) != Some("")
             || !safe_upload_name(name)
         {
@@ -173,11 +176,15 @@ impl Http {
                 "ComfyUI returned an unsafe upload location",
             ));
         }
-        Ok(name.to_owned())
+        // The loader reads this as `name [temp]`: the scratch area, not the user's `input/` folder.
+        Ok(format!("{name}{}", crate::scratch::TEMP_TAG))
     }
 }
 
+/// True when `name` is a plain `.png` or `.jpg` file name that cannot leave its folder.
+/// The ` [temp]` tag added by [`Http::upload_image`] is ignored for the check.
 pub(crate) fn safe_upload_name(name: &str) -> bool {
+    let name = name.strip_suffix(crate::scratch::TEMP_TAG).unwrap_or(name);
     !name.is_empty()
         && name.len() <= 128
         && !name.starts_with('.')

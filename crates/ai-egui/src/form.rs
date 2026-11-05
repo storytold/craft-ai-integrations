@@ -6,7 +6,7 @@
 //! own look can reuse them.
 
 use craft_ai_core::{Connection, ConnectionDraft, DraftError, Field, Locality, PRESETS};
-use egui::{ComboBox, RichText, TextEdit, Ui};
+use egui::{ComboBox, Response, RichText, TextEdit, Ui};
 
 /// The form's sentences.
 pub mod words {
@@ -141,8 +141,8 @@ pub fn connection_form(
         });
         if adding {
             let mut picked = None;
-            ui.horizontal(|ui| {
-                ui.label(words::START_FROM);
+            ui.horizontal_wrapped(|ui| {
+                let label = ui.label(words::START_FROM);
                 let current = PRESETS
                     .iter()
                     .find(|p| state.preset == Some(p.key))
@@ -158,7 +158,9 @@ pub fn connection_form(
                                 picked = Some(i);
                             }
                         }
-                    });
+                    })
+                    .response
+                    .labelled_by(label.id);
             });
             if let Some(note) = PRESETS
                 .iter()
@@ -173,24 +175,31 @@ pub fn connection_form(
         }
 
         let bad = |field: Field| state.error.as_ref().is_some_and(|e| e.field == field);
-        let heading = |ui: &mut Ui, text: &str, field: Field| {
+        let heading = |ui: &mut Ui, text: &str, field: Field| -> Response {
             let t = RichText::new(text);
             ui.label(if bad(field) {
                 t.color(ui.visuals().error_fg_color)
             } else {
                 t
-            });
+            })
         };
 
-        heading(ui, words::NAME, Field::Label);
-        ui.add(TextEdit::singleline(&mut state.draft.label).desired_width(f32::INFINITY));
-        heading(ui, words::ADDRESS, Field::Address);
+        let name_heading = heading(ui, words::NAME, Field::Label);
+        ui.add(
+            TextEdit::singleline(&mut state.draft.label)
+                .id_salt("craft-ai-connection-name")
+                .desired_width(f32::INFINITY),
+        )
+        .labelled_by(name_heading.id);
+        let address_heading = heading(ui, words::ADDRESS, Field::Address);
         let moved = ui
             .add(
                 TextEdit::singleline(&mut state.draft.endpoint)
+                    .id_salt("craft-ai-connection-address")
                     .desired_width(f32::INFINITY)
                     .hint_text("https://\u{2026}"),
             )
+            .labelled_by(address_heading.id)
             .changed();
         let mut edited = moved;
         if let Some(l) = state.draft.locality() {
@@ -204,7 +213,7 @@ pub fn connection_form(
             .checkbox(&mut state.draft.uses_key, words::USES_KEY)
             .changed();
         if state.draft.uses_key {
-            heading(ui, words::KEY, Field::Key);
+            let key_heading = heading(ui, words::KEY, Field::Key);
             let hint = if adding {
                 words::KEY_HINT_NEW
             } else {
@@ -213,10 +222,12 @@ pub fn connection_form(
             edited |= ui
                 .add(
                     TextEdit::singleline(&mut state.draft.key)
+                        .id_salt("craft-ai-connection-key")
                         .password(true)
                         .desired_width(f32::INFINITY)
                         .hint_text(hint),
                 )
+                .labelled_by(key_heading.id)
                 .changed();
         }
         // An earlier test, and the models it found, no longer describe what is typed.
@@ -243,7 +254,7 @@ pub fn connection_form(
             };
             ui.label(RichText::new(line).small().color(colour));
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button(words::SAVE).clicked() {
                 event = Some(FormEvent::Save);
             }

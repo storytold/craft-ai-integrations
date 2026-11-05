@@ -143,6 +143,7 @@ fn the_tensor_names_decide_when_the_folders_say_nothing() {
     );
 }
 
+/// A known file name and size sets the kind, whatever the folder is called; another size does not match.
 #[test]
 fn a_known_name_and_size_wins_over_the_folder_it_sits_in() {
     let dir = tempfile::tempdir().unwrap();
@@ -168,6 +169,46 @@ fn a_known_name_and_size_wins_over_the_folder_it_sits_in() {
         kind_of(&scan, "vae/sam3.safetensors"),
         Some(("vae".into(), Basis::FolderName))
     );
+}
+
+/// A built-in runtime's own files include tokenizer text, which is not a model file. Such a file
+/// is listed only on an exact known name and size, is credited to the recipe, and is neither a
+/// ComfyUI kind nor an unrecognised model. The same name at another size, or any other small text
+/// file, is not listed.
+#[test]
+fn a_known_bundle_file_is_listed_on_an_exact_name_and_size_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, "sam3_transformers/model.safetensors", &[1u8; 12]);
+    write(root, "sam3_transformers/vocab.json", b"{\"a\":1}");
+    write(root, "sam3_transformers/merges.txt", b"a b");
+    write(root, "sam3_transformers/notes.json", b"{\"a\":1}");
+    write(root, "elsewhere/vocab.json", b"{\"a\":1,\"b\":2}");
+    let known = |filename, size| KnownFile {
+        kind: "sam3_transformers",
+        filename,
+        size,
+    };
+    let known = [
+        known("model.safetensors", 12),
+        known("vocab.json", 7),
+        known("merges.txt", 3),
+    ];
+    let scan = scan_model_folder(root, &known).unwrap();
+    let mut listed: Vec<_> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        [
+            "sam3_transformers/merges.txt",
+            "sam3_transformers/model.safetensors",
+            "sam3_transformers/vocab.json"
+        ]
+    );
+    assert!(scan.files.iter().all(|f| f.basis == Some(Basis::Recipe)));
+    assert!(scan.files.iter().all(|f| f.kind.is_none()));
+    assert_eq!(scan.unrecognised, 0);
+    assert!(scan.kinds.is_empty());
 }
 
 #[test]

@@ -50,6 +50,23 @@ pub struct Licence {
     pub note: Option<String>,
 }
 
+/// A part of the workflow that the person should know about, with the terms its publisher states.
+///
+/// This is disclosure only. The text repeats what the publisher says on its own page; nobody here
+/// has checked it, it is not legal advice, and it carries no warranty or indemnity. Whether a part
+/// suits the person's use is their decision, so a component never blocks a download or a run. A
+/// part that does need agreement before its download is a [`ModelFile`] with
+/// [`Licence::accept_required`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Component {
+    /// What it is called, for people: "Florence-2 detector".
+    pub label: String,
+    /// What it does in the workflow, in a few words.
+    pub role: String,
+    /// The terms the publisher declares, with a link to where it says so.
+    pub licence: Licence,
+}
+
 /// One model file a recipe needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelFile {
@@ -72,9 +89,9 @@ pub struct NodePack {
     pub folder_names: Vec<String>,
 }
 
-/// The same model run by an app's own built-in runtime instead of ComfyUI, from the same weights
-/// file. The file is found by the launcher (it is the one in the ComfyUI models folder) and
-/// recorded on the connection; the app that owns the runtime reads it from there. A recipe may
+/// The same model run by a built-in runtime instead of ComfyUI. The launcher finds or downloads
+/// the runtime's files (its own, see [`NativeRoute::models`]) and records the weights file on the
+/// connection; the engine reads it from there. A recipe may
 /// list several runtimes (Candle, Burn); each is its own connection and its own choice.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRoute {
@@ -84,9 +101,49 @@ pub struct NativeRoute {
     pub model: String,
     /// What the person sees next to the ComfyUI route.
     pub label: String,
+    /// The files this runtime reads, when they are not the recipe's own. A runtime ported from
+    /// another framework usually wants that framework's file layout, which is a different file
+    /// from the ComfyUI one. The first `.safetensors` or `.onnx` file here is the weights file
+    /// recorded on the connection; the rest sit beside it. Empty means the recipe's own files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelFile>,
+    /// One plain sentence on what this route cannot do, shown beside it in setup and in the picker
+    /// (a route that selects by clicking says so). `None` when there is nothing to add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Measured quick enough on the computer's main chip, so engine advice does not call it slow
+    /// for lack of a graphics card. A curated statement, stated with its evidence in
+    /// `docs/STATUS.md`; false means nothing was measured.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast_on_processor: bool,
 }
 
-/// Running a feature on this computer through ComfyUI.
+impl NativeRoute {
+    /// The weights file this runtime is given: the first `.safetensors` or `.onnx` file of its
+    /// own files.
+    pub fn weights(&self) -> Option<&ModelFile> {
+        self.models.iter().find(|m| {
+            let name = m.filename.to_ascii_lowercase();
+            name.ends_with(".safetensors") || name.ends_with(".onnx")
+        })
+    }
+
+    /// Whether any of this runtime's files needs the person's agreement before its download
+    /// ([`Licence::accept_required`]). When none does, a download needs no tick box.
+    pub fn needs_agreement(&self) -> bool {
+        self.models.iter().any(|m| m.licence.accept_required)
+    }
+
+    /// Bytes to download for this runtime's own files.
+    pub fn total_bytes(&self) -> u64 {
+        self.models
+            .iter()
+            .fold(0u64, |sum, m| sum.saturating_add(m.size_bytes))
+    }
+}
+
+/// Running a feature on this computer: through ComfyUI, through the built-in runtimes in
+/// [`LocalRecipe::native`], or both.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalRecipe {
     /// What the model is called, for people: "SAM 3".
@@ -94,8 +151,14 @@ pub struct LocalRecipe {
     /// Apps can run it today. False when the files can be downloaded but no workflow runs them yet.
     #[serde(default = "yes")]
     pub usable: bool,
-    /// Id of the workflow template the adapter runs.
+    /// Id of the workflow template the adapter runs. For a recipe ComfyUI does not run, only the
+    /// recipe's id.
     pub workflow: String,
+    /// ComfyUI runs this recipe. False for a model only the built-in runtimes in
+    /// [`LocalRecipe::native`] run: it is then never a ComfyUI setup option, plan or connection,
+    /// and its `models` and `packs` are empty.
+    #[serde(default = "yes")]
+    pub comfyui: bool,
     pub models: Vec<ModelFile>,
     pub packs: Vec<NodePack>,
     /// Graphics memory the workflow needs, when known.
@@ -105,6 +168,10 @@ pub struct LocalRecipe {
     /// one [`ToolDesk::enable_native`] registers; none means the tool has no built-in runtime.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub native: Vec<NativeRoute>,
+    /// Everything else the workflow runs, with the terms each publisher declares, shown before
+    /// the person chooses to use the model. Empty when nobody has reviewed the parts yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<Component>,
 }
 
 fn yes() -> bool {

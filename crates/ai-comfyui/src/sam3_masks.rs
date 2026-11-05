@@ -29,12 +29,16 @@ impl Sam3MaskBatch {
         &self.masks
     }
 
+    /// Whether any returned mask has a selected (non-zero) pixel.
     pub(crate) fn has_pixels(&self) -> Result<bool, AiError> {
         for mask in &self.masks {
-            let mut reader = png::Decoder::new(mask.as_slice())
+            let mut reader = png::Decoder::new(std::io::Cursor::new(mask.as_slice()))
                 .read_info()
                 .map_err(|_| bad("SAM 3 returned an invalid mask"))?;
-            let mut buf = vec![0; reader.output_buffer_size()];
+            let size = reader
+                .output_buffer_size()
+                .ok_or_else(|| bad("SAM 3 returned an invalid mask"))?;
+            let mut buf = vec![0; size];
             let frame = reader
                 .next_frame(&mut buf)
                 .map_err(|_| bad("SAM 3 mask pixels are invalid"))?;
@@ -77,10 +81,13 @@ pub(crate) fn union_masks<'a>(
     let count = usize::try_from(count).map_err(|_| bad("SAM 3 mask dimensions are invalid"))?;
     let mut combined = vec![0u8; count];
     for mask in masks {
-        let mut reader = png::Decoder::new(mask)
+        let mut reader = png::Decoder::new(std::io::Cursor::new(mask))
             .read_info()
             .map_err(|_| bad("SAM 3 returned an invalid mask"))?;
-        let mut buf = vec![0; reader.output_buffer_size()];
+        let size = reader
+            .output_buffer_size()
+            .ok_or_else(|| bad("SAM 3 returned an invalid mask"))?;
+        let mut buf = vec![0; size];
         let frame = reader
             .next_frame(&mut buf)
             .map_err(|_| bad("SAM 3 mask pixels are invalid"))?;
@@ -103,6 +110,7 @@ pub(crate) fn union_masks<'a>(
     Ok(bytes)
 }
 
+/// Fetches the masks a finished prompt produced, as PNG bytes.
 pub(crate) fn fetch(
     http: &Http,
     node: &Value,
@@ -143,7 +151,7 @@ pub(crate) fn fetch(
             .checked_sub(data.len() as u64)
             .ok_or_else(|| bad("SAM 3 batch exceeds the encoded byte limit"))?;
         // Check source dimensions before the conversion allocates a decoded image buffer.
-        let reader = png::Decoder::new(data.as_slice())
+        let reader = png::Decoder::new(std::io::Cursor::new(data.as_slice()))
             .read_info()
             .map_err(|_| bad("SAM 3 returned an invalid mask"))?;
         if reader.info().width != width || reader.info().height != height {
@@ -159,6 +167,8 @@ pub(crate) fn fetch(
     })
 }
 
+/// Checks one SAM 3 mask descriptor before it is fetched: a plain file name, a safe
+/// sub-folder, and a folder type of `output` or `temp` (the scratch area) only.
 fn validate_file(file: &Value) -> Result<(), AiError> {
     let name = file
         .get("filename")
@@ -177,8 +187,10 @@ fn validate_file(file: &Value) -> Result<(), AiError> {
             && !s.contains(['/', '\\', ':'])
             && !s.chars().any(char::is_control)
     };
-    if file.get("type").and_then(Value::as_str) != Some("output")
-        || !safe(name)
+    if !matches!(
+        file.get("type").and_then(Value::as_str),
+        Some("output" | "temp")
+    ) || !safe(name)
         || (!subfolder.is_empty() && !safe(subfolder))
     {
         return Err(bad("SAM 3 mask descriptor is unsafe"));

@@ -58,6 +58,16 @@ impl ComfyInstall {
         Some(install)
     }
 
+    /// Adds the folders in a model-paths file kept outside the base folder, which a ComfyUI started
+    /// with `--extra-model-paths-config <file>` reads. A file that is missing, oversized or not
+    /// readable adds nothing; the folder cap counts the base file and this one together.
+    pub fn with_extra_paths_file(mut self, path: &Path) -> Self {
+        if let Some(yaml) = read_small(path) {
+            self.add_extra(parse_extra_paths(&yaml));
+        }
+        self
+    }
+
     fn add_extra(&mut self, extra: Vec<(String, PathBuf)>) {
         for entry in extra {
             if self.model_dirs.len() < MAX_EXTRA_DIRS && !self.model_dirs.contains(&entry) {

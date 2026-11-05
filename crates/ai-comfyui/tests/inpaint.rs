@@ -54,6 +54,8 @@ fn inpaint_installed() -> String {
     }).to_string()
 }
 
+/// Inpainting uploads the source and the mask, then queues the graph with the names the server
+/// returned for them.
 #[test]
 fn inpaint_uploads_source_and_mask_then_queues_with_returned_names() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -74,12 +76,12 @@ fn inpaint_uploads_source_and_mask_then_queues_with_returned_names() {
             if r.body_text().contains("craft-source-") {
                 Reply::Json(
                     200,
-                    json!({"name":"returned-source.png","subfolder":"","type":"input"}).to_string(),
+                    json!({"name":"returned-source.png","subfolder":"","type":"temp"}).to_string(),
                 )
             } else {
                 Reply::Json(
                     200,
-                    json!({"name":"returned-mask.png","subfolder":"","type":"input"}).to_string(),
+                    json!({"name":"returned-mask.png","subfolder":"","type":"temp"}).to_string(),
                 )
             }
         }
@@ -109,10 +111,11 @@ fn inpaint_uploads_source_and_mask_then_queues_with_returned_names() {
         .find(|r| r.path == "/prompt")
         .unwrap()
         .body_json()["prompt"];
-    assert_eq!(graph["2"]["inputs"]["image"], "returned-source.png");
-    assert_eq!(graph["3"]["inputs"]["image"], "returned-mask.png");
+    assert_eq!(graph["2"]["inputs"]["image"], "returned-source.png [temp]");
+    assert_eq!(graph["3"]["inputs"]["image"], "returned-mask.png [temp]");
 }
 
+/// When the server renames an upload to avoid a clash, the new name is used and the job still runs.
 #[test]
 fn upload_collision_filename_is_used_without_losing_the_job() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -125,7 +128,7 @@ fn upload_collision_filename_is_used_without_losing_the_job() {
             };
             Reply::Json(
                 200,
-                json!({"name":name,"subfolder":"","type":"input"}).to_string(),
+                json!({"name":name,"subfolder":"","type":"temp"}).to_string(),
             )
         }
         "/prompt" => Reply::Json(200, r#"{"prompt_id":"collision-job"}"#.into()),
@@ -143,16 +146,17 @@ fn upload_collision_filename_is_used_without_losing_the_job() {
         .find(|r| r.path == "/prompt")
         .unwrap()
         .body_json()["prompt"];
-    assert_eq!(graph["2"]["inputs"]["image"], "craft-source (1).png");
+    assert_eq!(graph["2"]["inputs"]["image"], "craft-source (1).png [temp]");
 }
 
+/// An invalid mask, or an upload reply with an unsafe name, stops the job before anything is queued.
 #[test]
 fn inpaint_bad_mask_or_upload_reply_never_queues_a_job() {
     let s = Server::start(|r| match r.path.as_str() {
         "/object_info" => Reply::Json(200, inpaint_installed()),
         "/upload/image" => Reply::Json(
             200,
-            json!({"name":"../escape.png","type":"input","subfolder":""}).to_string(),
+            json!({"name":"../escape.png","type":"temp","subfolder":""}).to_string(),
         ),
         "/prompt" => Reply::Json(200, r#"{"prompt_id":"should-not-run"}"#.into()),
         _ => Reply::Json(404, "{}".into()),

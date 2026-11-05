@@ -10,19 +10,29 @@ use crate::picker::{GroupState, PickerView};
 impl AiClient {
     /// The local engines `feature` can run on, best first, judged for `profile` (see
     /// `craft_ai_comfy_env::system::detect`). An engine this app has no adapter for is listed but
-    /// never suggested. A tool with no usable local recipe has none.
+    /// never suggested. Every built-in engine some usable recipe lists is offered (each runs its own
+    /// recipe, [`Feature::engine_recipe`]), then ComfyUI when a usable recipe runs on it; the
+    /// memory limit is the first usable
+    /// recipe's, the one [`ToolDesk::enable_local`](crate::ToolDesk::enable_local) registers. A tool
+    /// with no usable recipe has no advice.
     pub fn engine_advice(&self, feature: &Feature, profile: &SystemProfile) -> Vec<EngineAdvice> {
-        let Some(recipe) = feature.local.as_ref().filter(|r| r.usable) else {
+        let Some(recipe) = feature.first_usable_recipe() else {
             return Vec::new();
         };
-        let mut providers: Vec<&str> = recipe.native.iter().map(|n| n.provider.as_str()).collect();
-        providers.push("comfyui");
+        let mut providers: Vec<&str> = feature.engines();
+        if feature.comfyui_recipes().any(|r| r.usable) {
+            providers.push("comfyui");
+        }
         let offers: Vec<EngineOffer> = providers
             .into_iter()
             .map(|p| EngineOffer {
                 provider: p.to_owned(),
                 adapter_present: self.has_adapter(p),
                 accelerators: self.declared_accelerators(p),
+                fast_on_processor: feature
+                    .engine_recipe(p)
+                    .and_then(|r| r.native.iter().find(|n| n.provider == p))
+                    .is_some_and(|n| n.fast_on_processor),
             })
             .collect();
         advise(profile, &offers, recipe.min_vram_mb)

@@ -10,7 +10,7 @@ use crate::factory::ProviderFactory;
 
 impl ProviderFactory {
     /// Makes every engine in `registry` available: a saved connection whose provider is one of
-    /// the registry's engines (`candle`, `burn`) is built as an [`EngineProvider`] that runs its
+    /// the registry's engines (`candle`, `burn`, `rten`) is built as an [`EngineProvider`] that runs its
     /// model from the weights file recorded on the connection. The accelerators each engine
     /// declares are recorded too, so engine advice needs nothing stated by the app.
     ///
@@ -73,4 +73,17 @@ impl Kept {
         kept.insert(id, (shape, provider.clone()));
         Ok(provider)
     }
+}
+
+/// The engines compiled into this build, by cargo feature. Empty when none is turned on.
+pub(crate) fn built_in() -> EngineRegistry {
+    #[allow(unused_mut)]
+    let mut registry = EngineRegistry::new();
+    #[cfg(feature = "candle")]
+    registry.extend(craft_ai_engine_candle::runners());
+    #[cfg(feature = "rten")]
+    registry.extend(craft_ai_engine_rten::runners());
+    #[cfg(feature = "burn")]
+    registry.extend(craft_ai_engine_burn::runners());
+    registry
 }

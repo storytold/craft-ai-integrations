@@ -2,8 +2,34 @@ use craft_ai_core::PRESETS;
 use craft_ai_features::*;
 use std::collections::HashSet;
 
+/// The built-in feature with id `id`.
 fn feature(id: &str) -> Feature {
     builtin().into_iter().find(|f| f.id == id).unwrap()
+}
+
+/// The SAM 3 recipe of `f`, found by its workflow name, never by its place in the list. These
+/// tests check the planner against its real files; SAM 2.1 is listed first (see `sam21.rs`).
+fn sam3(f: &Feature) -> &LocalRecipe {
+    f.locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap()
+}
+
+/// [`sam3`], to change for one test.
+fn sam3_mut(f: &mut Feature) -> &mut LocalRecipe {
+    f.locals
+        .iter_mut()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap()
+}
+
+/// The plan for the SAM 3 recipe of `f` on `inventory`, out of [`plans`].
+fn sam3_plan(f: &Feature, inventory: &Inventory) -> Plan {
+    plans(f, inventory)
+        .into_iter()
+        .find(|p| p.recipe == "sam3-segment")
+        .unwrap()
 }
 
 fn have_sam3() -> Inventory {
@@ -27,6 +53,8 @@ fn bare() -> Inventory {
     }
 }
 
+/// The catalogue has eight features with unique ids, each with a title, summary and app uses,
+/// every hosted option names a real preset and no feature claims an app ships it yet.
 #[test]
 fn the_catalogue_is_complete_and_consistent() {
     let all = builtin();
@@ -53,11 +81,12 @@ fn the_catalogue_is_complete_and_consistent() {
     }
 }
 
+/// Every model file in every local recipe has a lowercase hex SHA-256, a non-zero size, an
+/// https source and a path that stays inside one sub-folder under its destination folder.
 #[test]
 fn recipes_carry_checkable_files() {
     for f in builtin() {
-        let Some(local) = f.local else { continue };
-        for m in local.models {
+        for m in f.locals.into_iter().flat_map(|local| local.models) {
             assert_eq!(m.sha256.len(), 64, "{}", m.filename);
             assert!(
                 m.sha256
@@ -66,15 +95,24 @@ fn recipes_carry_checkable_files() {
             );
             assert!(m.size_bytes > 0);
             assert!(m.source.url().starts_with("https://"));
-            assert!(!m.filename.contains(['/', '\\']) && !m.folder.contains(['/', '\\', '.']));
+            // A bundle keeps its files in one sub-folder: at most three plain names, none starting
+            // with a dot and none holding a backslash or a colon.
+            assert!(m.filename.split('/').count() <= 3, "{}", m.filename);
+            assert!(m.filename.split('/').all(|part| !part.is_empty()
+                && !part.starts_with('.')
+                && !part.contains(['\\', ':'])));
+            assert!(!m.folder.contains(['/', '\\', '.']));
         }
     }
 }
 
+/// SAM 3's checkpoint pins the size, hash and revision-pinned URL of the real file, and its
+/// licence must be accepted.
 #[test]
 fn the_sam3_recipe_matches_the_real_file() {
     // Size and checksum of the file the Hugging Face copy serves and of the copy checked on the maintainer's machine.
-    let m = &feature("select-subject").local.unwrap().models[0];
+    let f = feature("select-subject");
+    let m = &sam3(&f).models[0];
     assert_eq!(m.size_bytes, 3_449_860_632);
     assert_eq!(
         m.sha256,
@@ -87,24 +125,27 @@ fn the_sam3_recipe_matches_the_real_file() {
     assert!(m.licence.accept_required);
 }
 
+/// No built-in text contains an em dash or an en dash.
 #[test]
 fn no_user_text_uses_an_em_dash() {
     let json = serde_json::to_string(&builtin()).unwrap();
     assert!(!json.contains('\u{2014}') && !json.contains('\u{2013}'));
 }
 
+/// With SAM 3's file and node pack present, its plan is Ready with nothing to download or accept.
 #[test]
 fn everything_present_means_ready() {
-    let p = plan(&feature("select-subject"), &have_sam3());
+    let p = sam3_plan(&feature("select-subject"), &have_sam3());
     assert_eq!(p.state, State::Ready);
     assert!(p.missing_files.is_empty() && p.missing_packs.is_empty());
     assert_eq!(p.download_bytes, 0);
     assert!(p.licences.is_empty());
 }
 
+/// A bare ComfyUI needs SAM 3's one file, its node pack and its one licence.
 #[test]
 fn a_bare_install_needs_the_model_and_the_pack() {
-    let p = plan(&feature("select-subject"), &bare());
+    let p = sam3_plan(&feature("select-subject"), &bare());
     assert_eq!(p.state, State::NeedsInstall);
     assert_eq!(p.download_bytes, 3_449_860_632);
     assert_eq!(p.missing_files.len(), 1);
@@ -112,61 +153,72 @@ fn a_bare_install_needs_the_model_and_the_pack() {
     assert_eq!(p.licences.len(), 1);
 }
 
+/// A file one byte short, or the right size in the wrong folder, counts as missing.
 #[test]
 fn a_file_of_the_wrong_size_counts_as_missing() {
     let mut inv = have_sam3();
     inv.files[0].size_bytes -= 1;
-    let p = plan(&feature("select-subject"), &inv);
+    let p = sam3_plan(&feature("select-subject"), &inv);
     assert_eq!(p.state, State::NeedsInstall);
     assert_eq!(p.missing_files.len(), 1);
     // Same size but the wrong folder is also missing.
     let mut inv = have_sam3();
     inv.files[0].folder = "sams".into();
     assert_eq!(
-        plan(&feature("select-subject"), &inv).missing_files.len(),
+        sam3_plan(&feature("select-subject"), &inv)
+            .missing_files
+            .len(),
         1
     );
 }
 
+/// File and node folder names match whatever their case.
 #[test]
 fn names_match_without_regard_to_case() {
     let mut inv = have_sam3();
     inv.files[0].filename = "SAM3.safetensors".into();
     inv.node_folders = vec!["ComfyUI-SAM3".into()];
-    assert_eq!(plan(&feature("select-subject"), &inv).state, State::Ready);
+    assert_eq!(
+        sam3_plan(&feature("select-subject"), &inv).state,
+        State::Ready
+    );
 }
 
+/// With only the node pack missing, SAM 3 still needs installing but downloads nothing.
 #[test]
 fn only_the_pack_missing_still_needs_install_but_downloads_nothing() {
     let mut inv = have_sam3();
     inv.node_folders.clear();
-    let p = plan(&feature("select-subject"), &inv);
+    let p = sam3_plan(&feature("select-subject"), &inv);
     assert_eq!(p.state, State::NeedsInstall);
     assert_eq!(p.download_bytes, 0);
     assert_eq!(p.missing_packs.len(), 1);
 }
 
+/// Two files under one licence ask for it once.
 #[test]
 fn a_licence_shared_by_two_files_is_asked_once() {
     let mut f = feature("select-subject");
-    let local = f.local.as_mut().unwrap();
+    let local = sam3_mut(&mut f);
     let mut second = local.models[0].clone();
     second.filename = "other.safetensors".into();
     local.models.push(second);
-    let p = plan(&f, &bare());
+    let p = sam3_plan(&f, &bare());
     assert_eq!(p.missing_files.len(), 2);
     assert_eq!(p.licences.len(), 1);
 }
 
+/// Too little graphics memory or disk space blocks the plan, and each blocker says what is
+/// needed and what there is.
 #[test]
 fn not_enough_graphics_memory_or_disk_blocks() {
     let mut f = feature("select-subject");
-    f.local.as_mut().unwrap().min_vram_mb = Some(12_000);
+    sam3_mut(&mut f).min_vram_mb = Some(12_000);
     let mut inv = have_sam3();
     inv.files.clear();
     inv.vram_mb = Some(8_000);
     inv.free_disk_bytes = Some(1_000);
-    let p = plan(&f, &inv);
+    let p = sam3_plan(&f, &inv);
     assert_eq!(p.state, State::Blocked);
     assert!(p.blockers.contains(&Blocker::NotEnoughVram {
         needed_mb: 12_000,
@@ -181,7 +233,7 @@ fn not_enough_graphics_memory_or_disk_blocks() {
 #[test]
 fn unknown_hardware_does_not_block() {
     let mut f = feature("select-subject");
-    f.local.as_mut().unwrap().min_vram_mb = Some(12_000);
+    f.locals[0].min_vram_mb = Some(12_000);
     let mut inv = bare();
     inv.vram_mb = None;
     inv.free_disk_bytes = None;
@@ -256,8 +308,8 @@ fn each_photocraft_tool_has_one_shared_tool_with_the_right_job_and_inputs() {
 
 #[test]
 fn a_tool_without_a_checked_route_offers_none() {
-    // Remove background has no verified local recipe and no hosted adapter that matts an image.
-    let f = feature("remove-background");
-    assert!(f.local.is_none());
+    // Remove objects has no verified local recipe and no hosted adapter that fills a masked area.
+    let f = feature("remove-object");
+    assert!(f.locals.is_empty());
     assert!(f.cloud.is_empty());
 }

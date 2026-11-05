@@ -8,8 +8,9 @@ use craft_ai_egui::{
     ADD_KEY, ALL_MODELS, HEADING, IN_USE, NOTHING, PickerAction, SET_UP, SUGGESTED, SWITCH_ON,
     model_picker,
 };
+use egui::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 struct State {
     view: PickerView,
@@ -39,6 +40,8 @@ fn group(title: &str, state: GroupState, models: Vec<PickerModel>) -> PickerGrou
     }
 }
 
+/// Builds a synthetic `PickerView` for a role with a title, an optional current choice and the
+/// given groups.
 fn view(groups: Vec<PickerGroup>, current: Option<CurrentChoice>) -> PickerView {
     PickerView {
         tool: RoleId::new("select-subject").unwrap(),
@@ -49,6 +52,21 @@ fn view(groups: Vec<PickerGroup>, current: Option<CurrentChoice>) -> PickerView 
     }
 }
 
+/// A fixed-size picker harness whose state keeps the last reported action.
+fn harness_sized(size: egui::Vec2, view: PickerView) -> Harness<'static, State> {
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        |ui, st: &mut State| {
+            if let Some(a) = model_picker(ui, &st.view) {
+                st.last = Some(a);
+            }
+        },
+        State { view, last: None },
+    );
+    h.run();
+    h
+}
+
+/// A default-size picker harness whose state keeps the last reported action.
 fn harness(view: PickerView) -> Harness<'static, State> {
     let mut h = Harness::new_ui_state(
         |ui, st: &mut State| {
@@ -305,6 +323,7 @@ fn presets_sit_above_the_full_list_with_their_reason_and_choose_like_any_row() {
     );
 }
 
+/// Without presets neither the Suggested section nor the extra All Models heading is drawn.
 #[test]
 fn with_no_presets_there_is_no_suggested_section_and_no_extra_heading() {
     let h = harness(view(
@@ -317,4 +336,65 @@ fn with_no_presets_there_is_no_suggested_section_and_no_extra_heading() {
     ));
     assert!(h.query_by_label(SUGGESTED).is_none());
     assert!(h.query_by_label(ALL_MODELS).is_none());
+}
+
+/// A selected model is a toggled-on button, other models are toggled off, and setup is an
+/// ordinary button role.
+#[test]
+fn a_selected_model_is_reported_as_selected_and_setup_is_an_ordinary_button() {
+    let mut group = group(
+        "Box",
+        GroupState::Ready,
+        vec![
+            row("box", "a", "Alpha", true),
+            row("box", "b", "Beta", false),
+        ],
+    );
+    group.setup = Some(SetupLink::New {
+        option: "local:select-subject".into(),
+    });
+    let h = harness(view(vec![group], None));
+    let selected = h.get_by_label_contains("About Alpha.");
+    assert_eq!(selected.accesskit_node().role(), Role::Button);
+    assert_eq!(
+        selected.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    let other = h.get_by_label_contains("About Beta.");
+    assert_eq!(
+        other.accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::False)
+    );
+    assert_eq!(h.get_by_label(SET_UP).accesskit_node().role(), Role::Button);
+}
+
+/// At 180px a long provider header wraps while the setup button stays inside the window and
+/// still reports its action.
+#[test]
+fn a_long_provider_header_wraps_its_setup_button_into_a_narrow_window() {
+    let mut group = group(
+        "A provider with a name long enough to fill a narrow window",
+        GroupState::NotSetUp,
+        vec![row("box", "a", "Alpha", false)],
+    );
+    group.suggested = true;
+    group.size_bytes = Some(32_000_000_000);
+    group.note = "A long note that also wants room on the row.".into();
+    group.setup = Some(SetupLink::New {
+        option: "local:select-subject".into(),
+    });
+    let mut h = harness_sized(egui::vec2(180.0, 600.0), view(vec![group], None));
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(180.0, 600.0));
+    let setup = h.get_by_label(SET_UP);
+    assert!(
+        screen.contains_rect(setup.rect()),
+        "Set up is outside {screen:?}: {:?}",
+        setup.rect()
+    );
+    setup.click();
+    h.run();
+    assert!(matches!(
+        h.state().last,
+        Some(PickerAction::SetUp(SetupLink::New { .. }))
+    ));
 }

@@ -9,6 +9,10 @@ on:
         description: Case group to run, for example u3 or u4
         required: true
         default: u3
+      filter:
+        description: Only run cases whose name contains this text (optional)
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,11 +30,19 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: python3 tools/mutation/mutation_check.py "$GROUP"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Run ${{ inputs.group }} deliberate-bug checks
         env:
           GROUP: ${{ inputs.group }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          set -eu
+          if [ -n "$FILTER" ]; then
+            python3 tools/mutation/mutation_check.py "$GROUP" "$FILTER"
+          else
+            python3 tools/mutation/mutation_check.py "$GROUP"
+          fi

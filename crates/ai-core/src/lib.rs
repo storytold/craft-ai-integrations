@@ -1,9 +1,10 @@
 //! Shared data model for AI in the Craft apps: connections, models, capabilities, roles,
 //! requests, jobs, consent and the launcher's shared store.
 //!
-//! This contract is **provisional** until its review in `storytold/craft-libs` finishes. It is
-//! small on purpose, has no I/O and no async runtime, and compiles for wasm. Apps build their
-//! adapters against it and test with [`mock::MockProvider`].
+//! The initial contract has landed in `storytold/craft-libs`. This local copy retains newer
+//! consent-term and model-folder additions until their upstream review; see `docs/CORE-SYNC.md`.
+//! It has no I/O or async runtime and compiles for wasm. Apps test their adapters with
+//! [`mock::MockProvider`].
 //!
 //! # Map
 //!
@@ -24,6 +25,7 @@
 //! | [`consent`] | [`Disclosure`], [`ConsentLedger`], [`ConsentTerm`] |
 //! | [`store`] | [`StoreFile`], the launcher's versioned shared store |
 //! | [`picks`] | model presets: [`Pick`], the curated [`Catalog`], and [`picks::choose`] |
+//! | [`segment`] | the `image.segment` contract: clicks, a box, and what a selection found |
 //! | [`spec`] | a provider described as data: types, checker and substitutions |
 //! | [`provider`] | the [`Provider`] trait |
 //! | [`mock`], [`conformance`] | scripted provider and reusable behaviour checks |
@@ -57,6 +59,7 @@ pub mod provider;
 pub mod request;
 pub mod role;
 pub mod secret;
+pub mod segment;
 pub mod spec;
 pub mod store;
 

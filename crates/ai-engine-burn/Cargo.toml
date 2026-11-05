@@ -1,0 +1,38 @@
+[package]
+name = "craft-ai-engine-burn"
+description = "The Burn engine for Craft AI: optional graphics-card runners for image.segment (SAM 2.1, weights prepared once on this computer) and image.matte (InSPyReNet). Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Burn 0.22 needs a newer compiler than the rest of the workspace.
+rust-version = "1.95"
+repository.workspace = true
+publish = false
+
+[features]
+# On by default: a Burn choice made from the downloaded ONNX files prepares its own saved copy
+# (the bundled converter, no Rust toolchain). Off, such a choice is told to prepare it first.
+default = ["prepare"]
+prepare = ["dep:craft-ai-burn-setup"]
+
+[dependencies]
+craft-ai-core.workspace = true
+craft-ai-engine = { path = "../ai-engine", package = "craft-ai-engine" }
+craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
+# The request handling (clicks, box, the picture kept between requests, the empty-mask answer),
+# picture decoding and resampling are engine-neutral and live there once.
+craft-ai-engine-rten = { path = "../ai-engine-rten", package = "craft-ai-engine-rten" }
+# `wgpu` reaches Vulkan, Metal and DirectX 12 cards; `ndarray` is the processor fallback. Without
+# `rayon` and `simd` (off with the default features) the processor fallback runs on one core with
+# scalar maths.
+burn = { version = "=0.22.1", default-features = false, features = ["std", "ndarray", "wgpu", "rayon", "simd"] }
+burn-store = "=0.22.1"
+craft-ai-burn-setup = { path = "../ai-burn-setup", package = "craft-ai-burn-setup", features = ["conversion"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true
+png = "0.18"
+
+[lints]
+workspace = true

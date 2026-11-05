@@ -5,6 +5,7 @@
 
 use crate::feature::Feature;
 use crate::png;
+use craft_ai_core::segment::{self, Click};
 use craft_ai_core::{InputRole, Payload, Request};
 
 /// A white square with a mid-grey disc, so "the disc" means something to a segmenter.
@@ -62,6 +63,24 @@ pub fn sample_request(feature: &Feature) -> Option<Request> {
         )),
         _ => None,
     }
+}
+
+/// The sample for a tool whose chosen model may run built in on this computer. A built-in
+/// selection model reads clicks, not words, so for `image.segment` with `built_in` set the sample is
+/// one click on the middle of the grey disc and no description. Every other case is
+/// [`sample_request`].
+pub fn sample_request_for(feature: &Feature, built_in: bool) -> Option<Request> {
+    if built_in && feature.capability.as_str() == segment::CAPABILITY {
+        let request = Request::new(feature.capability.clone())
+            .with_input(InputRole::Source, image(picture())?);
+        let middle = Click {
+            x: 0.5,
+            y: 0.5,
+            positive: true,
+        };
+        return Some(segment::with_clicks(request, &[middle]));
+    }
+    sample_request(feature)
 }
 
 /// Whether a sample costs more than a few pennies at hosted prices, so the screen can say so.

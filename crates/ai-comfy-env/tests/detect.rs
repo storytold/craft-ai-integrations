@@ -1,5 +1,5 @@
 use craft_ai_comfy_env::{ComfyInstall, parse_extra_paths, scan};
-use craft_ai_features::{State, builtin, plan};
+use craft_ai_features::{Feature, Inventory, Plan, State, builtin, plan, plans};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +8,7 @@ fn touch(path: &Path, bytes: usize) {
     fs::write(path, vec![7u8; bytes]).unwrap();
 }
 
+/// Builds a throwaway ComfyUI folder for the scan tests.
 fn tree() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("Comfy");
@@ -18,6 +19,14 @@ fn tree() -> tempfile::TempDir {
         6,
     );
     touch(&base.join("models/checkpoints/notes.txt"), 99);
+    // A bundle's small config files count; a large dataset file, an unlisted type and a part file do not.
+    touch(&base.join("models/LLM/Bundle/config.json"), 12);
+    touch(&base.join("models/LLM/Bundle/modeling.py"), 20);
+    touch(
+        &base.join("models/LLM/Bundle/huge.json"),
+        2 * 1024 * 1024 + 1,
+    );
+    touch(&base.join("models/LLM/Bundle/readme.md"), 30);
     touch(&base.join("models/checkpoints/big.safetensors.part"), 99);
     fs::create_dir_all(base.join("custom_nodes/ComfyUI-SAM3")).unwrap();
     fs::create_dir_all(base.join("custom_nodes/__pycache__")).unwrap();
@@ -26,6 +35,7 @@ fn tree() -> tempfile::TempDir {
     dir
 }
 
+/// A folder with model files is an install; other folders are not.
 #[test]
 fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
     let dir = tree();
@@ -33,7 +43,7 @@ fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
     let install = ComfyInstall::at(&base).unwrap();
     let mut folders: Vec<_> = install.model_dirs.iter().map(|(n, _)| n.as_str()).collect();
     folders.sort();
-    assert_eq!(folders, ["checkpoints", "diffusion_models", "sam3"]);
+    assert_eq!(folders, ["LLM", "checkpoints", "diffusion_models", "sam3"]);
     assert!(ComfyInstall::at(dir.path().join("nope").as_path()).is_none());
     assert!(ComfyInstall::at(Path::new("relative")).is_none());
     let empty = tempfile::tempdir().unwrap();
@@ -41,7 +51,8 @@ fn a_folder_with_models_is_an_install_and_other_folders_are_not() {
 }
 
 #[test]
-fn the_scan_lists_model_files_and_node_packs_only() {
+/// The scan lists model files small bundle files and node packs.
+fn the_scan_lists_model_files_small_bundle_files_and_node_packs() {
     let dir = tree();
     let inv = scan(&ComfyInstall::at(&dir.path().join("Comfy")).unwrap());
     assert!(inv.comfyui_found);
@@ -54,7 +65,10 @@ fn the_scan_lists_model_files_and_node_packs_only() {
     assert_eq!(
         files,
         [
+            ("LLM", "Bundle/config.json", 12),
+            ("LLM", "Bundle/modeling.py", 20),
             ("checkpoints", "a.ckpt", 5),
+            ("checkpoints", "notes.txt", 99),
             ("diffusion_models", "FLUX/fill.safetensors", 6),
             ("sam3", "sam3.safetensors", 10),
         ]
@@ -62,6 +76,8 @@ fn the_scan_lists_model_files_and_node_packs_only() {
     assert_eq!(inv.node_folders, ["comfyui-sam3"]);
 }
 
+/// The desktop config gives the base folder, and its extra model-paths file adds the shared
+/// folders.
 #[test]
 fn desktop_config_gives_the_base_folder_and_extra_model_paths() {
     let dir = tree();
@@ -98,6 +114,7 @@ fn desktop_config_gives_the_base_folder_and_extra_model_paths() {
     assert!(inv.files.iter().any(|f| f.folder == "sam3"));
 }
 
+/// A missing, unreadable, dangling or mistyped desktop config gives no install.
 #[test]
 fn a_missing_or_broken_desktop_config_finds_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -114,6 +131,8 @@ fn a_missing_or_broken_desktop_config_finds_nothing() {
     assert!(ComfyInstall::discover_in(dir.path()).is_none());
 }
 
+/// The model-paths file is read in any key order; missing folders and folders that escape the base
+/// are dropped; empty and malformed text give nothing.
 #[test]
 fn the_yaml_subset_is_read_in_any_order_and_unsafe_paths_are_dropped() {
     let dir = tempfile::tempdir().unwrap();
@@ -140,6 +159,8 @@ fn the_yaml_subset_is_read_in_any_order_and_unsafe_paths_are_dropped() {
     assert!(parse_extra_paths("::::\n  : :\n\t\n").is_empty());
 }
 
+/// A model folder name maps to the folder that exists or a new one under `models`, and a name that
+/// could leave `models` gives none.
 #[test]
 fn new_files_go_to_the_known_folder_or_a_new_one_and_never_outside() {
     let dir = tree();
@@ -162,6 +183,106 @@ fn new_files_go_to_the_known_folder_or_a_new_one_and_never_outside() {
     }
 }
 
+/// A sparse file of SAM 3's exact size in the right folder, with its node pack, turns its plan
+/// from NeedsInstall into Ready.
+#[test]
+fn a_model_paths_file_given_by_path_adds_its_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("Comfy");
+    fs::create_dir_all(base.join("models/sam3")).unwrap();
+    fs::create_dir_all(base.join("custom_nodes")).unwrap();
+    // The file lives outside the base folder, as it does for `--extra-model-paths-config`.
+    let shared = dir.path().join("Shared");
+    touch(&shared.join("ckpt/sdxl.safetensors"), 4);
+    let file = dir.path().join("paths/extra.yaml");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(
+        &file,
+        format!(
+            "shared:\n  base_path: {}\n  checkpoints: ckpt\n",
+            shared.display()
+        ),
+    )
+    .unwrap();
+
+    let plain = ComfyInstall::at(&base).unwrap();
+    assert_eq!(
+        plain.models_dir_for("checkpoints").unwrap(),
+        base.join("models").join("checkpoints"),
+        "without the file the folder can only be guessed"
+    );
+
+    let install = plain.with_extra_paths_file(&file);
+    assert_eq!(
+        install.models_dir_for("checkpoints").unwrap(),
+        shared.join("ckpt")
+    );
+    let inv = scan(&install);
+    assert!(
+        inv.files
+            .iter()
+            .any(|f| f.folder == "checkpoints" && f.filename == "sdxl.safetensors")
+    );
+}
+
+#[test]
+fn a_model_paths_file_that_cannot_be_used_adds_nothing() {
+    let dir = tree();
+    let base = dir.path().join("Comfy");
+    let plain = ComfyInstall::at(&base).unwrap();
+    let shared = dir.path().join("Shared");
+    fs::create_dir_all(&shared).unwrap();
+    let section = format!("shared:\n  checkpoints: {}\n", shared.display());
+
+    let junk = dir.path().join("junk.yaml");
+    fs::write(&junk, "::::\n  : :\n\t\n").unwrap();
+    // One byte over the size the detector reads, with a valid section at the top.
+    let big = dir.path().join("big.yaml");
+    let mut oversized = section;
+    oversized.push_str(&"#".repeat(256 * 1024));
+    fs::write(&big, oversized).unwrap();
+
+    let missing = dir.path().join("missing.yaml");
+    for (why, file) in [
+        ("missing", &missing),
+        ("malformed", &junk),
+        ("oversized", &big),
+    ] {
+        let install = ComfyInstall::at(&base).unwrap().with_extra_paths_file(file);
+        assert_eq!(install, plain, "{why}");
+    }
+}
+
+#[test]
+fn the_folder_cap_counts_the_base_file_and_the_given_file_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("Comfy");
+    fs::create_dir_all(base.join("models/checkpoints")).unwrap();
+    fs::create_dir_all(base.join("custom_nodes")).unwrap();
+    // The base file alone fills the cap.
+    let mut listed = String::new();
+    for i in 0..400 {
+        let folder = dir.path().join(format!("base-{i}"));
+        fs::create_dir_all(&folder).unwrap();
+        listed.push_str(&format!("s{i}:\n  f{i}: {}\n", folder.display()));
+    }
+    fs::write(base.join("extra_model_paths.yaml"), listed).unwrap();
+
+    let shared = dir.path().join("Shared");
+    fs::create_dir_all(&shared).unwrap();
+    let given = dir.path().join("given.yaml");
+    fs::write(&given, format!("s:\n  checkpoints: {}\n", shared.display())).unwrap();
+
+    let install = ComfyInstall::at(&base)
+        .unwrap()
+        .with_extra_paths_file(&given);
+    assert_eq!(install.model_dirs.len(), 400);
+    assert!(
+        !install.model_dirs.iter().any(|(_, p)| p == &shared),
+        "the given file added a folder past the cap"
+    );
+}
+
 #[test]
 fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
     let dir = tempfile::tempdir().unwrap();
@@ -170,11 +291,21 @@ fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
         .into_iter()
         .find(|f| f.id == "select-subject")
         .unwrap();
-    let model = select.local.as_ref().unwrap().models[0].clone();
+    // SAM 3's one checkpoint, found by its workflow (SAM 2.1 is listed first).
+    let model = select
+        .locals
+        .iter()
+        .find(|r| r.workflow == "sam3-segment")
+        .unwrap()
+        .models[0]
+        .clone();
     fs::create_dir_all(base.join("models")).unwrap();
     fs::create_dir_all(base.join("custom_nodes/comfyui-sam3")).unwrap();
     let install = ComfyInstall::at(&base).unwrap();
-    assert_eq!(plan(&select, &scan(&install)).state, State::NeedsInstall);
+    assert_eq!(
+        sam3_plan(&select, &scan(&install)).state,
+        State::NeedsInstall
+    );
     // A sparse file of exactly the right size stands in for the 3.4 GB model.
     let path = base.join("models/sam3").join(&model.filename);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -183,7 +314,15 @@ fn a_planted_file_is_ready_and_a_bare_install_needs_the_model() {
         .set_len(model.size_bytes)
         .unwrap();
     let install = ComfyInstall::at(&base).unwrap();
-    assert_eq!(plan(&select, &scan(&install)).state, State::Ready);
+    assert_eq!(sam3_plan(&select, &scan(&install)).state, State::Ready);
+}
+
+/// The plan for the SAM 3 recipe of `select` on `inventory`, picked from [`plans`] by name.
+fn sam3_plan(select: &Feature, inventory: &Inventory) -> Plan {
+    plans(select, inventory)
+        .into_iter()
+        .find(|p| p.recipe == "sam3-segment")
+        .unwrap()
 }
 
 /// Reads the real ComfyUI Desktop install of the person running the test. Run explicitly:

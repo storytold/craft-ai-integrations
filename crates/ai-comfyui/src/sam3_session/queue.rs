@@ -16,31 +16,15 @@ impl Sam3Session {
         }
     }
 
+    /// Queues `graph` on the local ComfyUI and waits for its history record.
+    /// Every sink is first routed to the scratch area with a fresh cache key (see
+    /// `crate::scratch::route_sinks`), so a repeat request still returns an output and nothing
+    /// is written to the user's `output/` folder.
     pub(super) fn queue(&self, mut graph: Value) -> Result<Value, AiError> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
         let started = self.canceller.mark();
-        let nodes = graph
-            .as_object_mut()
-            .ok_or_else(|| AiError::invalid("SAM 3 graph is invalid"))?;
-        for node in nodes.values_mut() {
-            if node.get("class_type").and_then(Value::as_str) != Some("SaveImage") {
-                continue;
-            }
-            if let Some(prefix) = node.pointer_mut("/inputs/filename_prefix") {
-                let name = prefix
-                    .as_str()
-                    .ok_or_else(|| AiError::invalid("SAM 3 output prefix is invalid"))?;
-                let unique = format!(
-                    "{name}-{}-{}",
-                    std::process::id(),
-                    NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)
-                );
-                *prefix = Value::String(unique);
-            }
-        }
-        // A fully cached SaveImage can yield no history outputs on newer servers.
-        // Change only the sink signature, keeping source/model/inference nodes cacheable.
+        // Results go to ComfyUI's scratch area, and a fully cached sink can yield no history
+        // outputs, so every sink gets a fresh cache key while source/model nodes stay cacheable.
+        crate::scratch::route_sinks(&mut graph)?;
         let response = self.http.post("/prompt", &json!({"prompt":graph}))?;
         let id = response
             .get("prompt_id")

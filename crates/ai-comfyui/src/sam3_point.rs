@@ -16,7 +16,7 @@ const REQUIRED: &[&str] = &[
     "SAM3CombinePoints",
     "SAM3Segmentation",
     "MaskToImage",
-    "SaveImage",
+    "PreviewImage",
 ];
 
 pub struct Sam3Point {
@@ -79,6 +79,8 @@ impl Sam3Point {
             "6":{"class_type":"MaskToImage","inputs":{"mask":["5",0]}},
             "7":{"class_type":"SaveImage","inputs":{"images":["6",0],"filename_prefix":"craft-sam3-mask"}}
         });
+        let mut graph = graph;
+        crate::scratch::route_sinks(&mut graph)?;
         let response = self.http.post("/prompt", &json!({"prompt":graph}))?;
         let id = response
             .get("prompt_id")
@@ -137,8 +139,9 @@ impl Sam3Point {
     }
 }
 
+/// Decodes a mask PNG to one grey byte per pixel, refusing one that is oversized or malformed.
 pub(crate) fn grayscale_mask(data: &[u8]) -> Result<Vec<u8>, AiError> {
-    let mut decoder = png::Decoder::new(data);
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder
         .read_info()
@@ -152,10 +155,11 @@ pub(crate) fn grayscale_mask(data: &[u8]) -> Result<Vec<u8>, AiError> {
     {
         return Err(AiError::invalid("SAM 3 mask dimensions are invalid"));
     }
-    if reader.output_buffer_size() > 64 * 1024 * 1024 {
-        return Err(AiError::invalid("SAM 3 mask is too large"));
-    }
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let size = reader
+        .output_buffer_size()
+        .filter(|size| *size <= 64 * 1024 * 1024)
+        .ok_or_else(|| AiError::invalid("SAM 3 mask is too large"))?;
+    let mut buf = vec![0; size];
     let frame = reader
         .next_frame(&mut buf)
         .map_err(|_| AiError::invalid("SAM 3 mask pixels are invalid"))?;

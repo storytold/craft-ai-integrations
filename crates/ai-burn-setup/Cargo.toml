@@ -1,0 +1,34 @@
+[package]
+name = "craft-ai-burn-setup"
+description = "Prepare and cache supported Burn model weights on this computer, without a compiler or hosted converted files."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+repository.workspace = true
+publish = false
+
+[features]
+conversion = ["dep:burn-onnx"]
+
+[dependencies]
+craft-ai-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+tempfile = "3"
+burn-onnx = { version = "=0.22.0", optional = true }
+
+[dev-dependencies]
+craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "prepare_sam21"
+required-features = ["conversion"]
+
+[[example]]
+name = "generate_architecture"
+required-features = ["conversion"]

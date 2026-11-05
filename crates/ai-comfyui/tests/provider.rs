@@ -384,6 +384,7 @@ fn provider_passes_shared_conformance_without_network_for_bad_input() {
     assert_eq!(s.count(), 4);
 }
 
+/// An output file name that could escape its folder fails the job and is never fetched.
 #[test]
 fn output_path_cannot_escape_to_other_local_files() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -415,4 +416,57 @@ fn output_path_cannot_escape_to_other_local_files() {
             .count(),
         0
     );
+}
+
+/// A scripted ComfyUI whose one job reports a single image in `folder`.
+fn one_result_server(folder: &'static str) -> Server {
+    Server::start(move |r| match r.path.as_str() {
+        "/system_stats" => Reply::Json(200, "{}".into()),
+        "/object_info" => Reply::Json(200, installed()),
+        "/prompt" => Reply::Json(200, r#"{"prompt_id":"job-1"}"#.into()),
+        "/history/job-1" => Reply::Json(
+            200,
+            json!({"job-1":{"status":{"completed":true},
+            "outputs":{"2":{"images":[{"filename":"kite.png","subfolder":"","type":folder}]}}}})
+            .to_string(),
+        ),
+        "/view?filename=kite.png&type=temp" | "/view?filename=kite.png&type=output" => {
+            http_bytes(200, &[], PNG_BYTES)
+        }
+        _ => Reply::Json(404, "{}".into()),
+    })
+}
+
+/// Submits one generation to `s` and returns the job state after a single poll.
+fn run_one(s: &Server) -> JobState {
+    let p = provider(s, "image.generate");
+    let id = p
+        .submit(
+            &ModelId::new("local-workflow").unwrap(),
+            &request("image.generate"),
+        )
+        .unwrap();
+    p.poll(&id).unwrap().state
+}
+
+/// A result reported in the scratch area is fetched with `type=temp` and the job succeeds.
+#[test]
+fn a_result_left_in_the_scratch_area_is_fetched_from_there() {
+    let s = one_result_server("temp");
+    assert_eq!(run_one(&s), JobState::Succeeded);
+    assert!(
+        s.recorded()
+            .iter()
+            .any(|r| r.path == "/view?filename=kite.png&type=temp")
+    );
+}
+
+/// A result in any folder other than `output` or `temp` fails the job without a fetch.
+#[test]
+fn a_result_reported_in_any_other_folder_is_refused_and_never_fetched() {
+    for folder in ["input", "user", ""] {
+        let s = one_result_server(folder);
+        assert!(matches!(run_one(&s), JobState::Failed { .. }), "{folder}");
+        assert!(!s.recorded().iter().any(|r| r.path.starts_with("/view")));
+    }
 }

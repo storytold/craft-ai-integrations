@@ -3,6 +3,7 @@
 use craft_ai_comfy_env::{ComfyInstall, system};
 use craft_ai_features::{EngineOffer, advise};
 
+/// Prints what this computer has and which local engine would be suggested for it.
 fn main() {
     let comfy = ComfyInstall::discover().is_some();
     let profile = system::detect(comfy);
@@ -13,6 +14,7 @@ fn main() {
             provider: (*p).to_owned(),
             adapter_present: true,
             accelerators: None,
+            fast_on_processor: false,
         })
         .collect();
     for a in advise(&profile, &offers, None) {

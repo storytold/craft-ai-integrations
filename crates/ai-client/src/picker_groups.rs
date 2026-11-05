@@ -1,6 +1,8 @@
 //! Building the provider groups for the picker: the connections a person has, and the providers
 //! they could still set up. Pure functions over the store, so each rule has its own test.
 
+use std::path::Path;
+
 use craft_ai_core::role::fits;
 use craft_ai_core::{
     AppId, Auth, Billing, Binding, Connection, InputRole, Locality, ModelInfo, PRESETS, Role,
@@ -10,6 +12,7 @@ use craft_ai_features::{Route, SetupOption};
 use craft_ai_native::secrets::secret_for;
 
 use crate::client::AiClient;
+use crate::local::{is_recipe_connection, native_connection_id};
 use crate::picker::{GroupState, PickerGroup, PickerModel, SetupLink};
 
 /// The binding the app would use: its own choice first, then the launcher default.
@@ -41,9 +44,15 @@ pub(crate) fn connection_groups(
     store: &StoreFile,
     role: &Role,
     selected: Option<&Binding>,
+    options: &[SetupOption],
 ) -> Vec<PickerGroup> {
     let mut groups = Vec::new();
     for connection in &store.connections {
+        // Its weights are gone and a set-up option replaces it (see `unset_groups`): listing it
+        // here as well would offer the same model twice, once as ready and once to set up again.
+        if files_gone(connection, role, options) {
+            continue;
+        }
         let models: Vec<PickerModel> = connection
             .models
             .iter()
@@ -94,9 +103,38 @@ pub(crate) fn connection_groups(
     groups
 }
 
+/// Whether `connection` is a built-in model of this tool whose every weights file has gone, and
+/// some set-up option stands for it, so the person is offered a fresh set-up in its place.
+fn files_gone(connection: &Connection, role: &Role, options: &[SetupOption]) -> bool {
+    if connection.locality != Locality::Local {
+        return false;
+    }
+    let fitted: Vec<&ModelInfo> = connection
+        .models
+        .iter()
+        .filter(|m| fits(role, m).is_some())
+        .collect();
+    let all_missing = !fitted.is_empty()
+        && fitted.iter().all(|m| {
+            m.local_file
+                .as_deref()
+                .is_some_and(|file| !Path::new(file).is_file())
+        });
+    all_missing
+        && options.iter().any(|o| {
+            o.usable
+                && o.unlocks.iter().any(|u| role.id.as_str() == u)
+                && matches!(&o.route, Route::Native { feature, provider, .. }
+                    if *provider == connection.provider
+                        && connection.id.as_str() == native_connection_id(feature, provider))
+        })
+}
+
 /// Providers that could do the tool and are not set up, greyed rather than hidden. A model that
-/// can be downloaded but has no workflow to run it yet is not offered.
+/// can be downloaded but has no workflow to run it yet is not offered. A built-in model whose
+/// saved connection has lost its weights file is listed again, so it can be set up afresh.
 pub(crate) fn unset_groups(
+    client: &AiClient,
     store: &StoreFile,
     role: &Role,
     options: &[SetupOption],
@@ -106,7 +144,7 @@ pub(crate) fn unset_groups(
         .iter()
         .filter(|o| o.usable && o.unlocks.iter().any(|u| u == role.id.as_str()))
     {
-        let (locality, note) = match &option.route {
+        let (locality, state, note) = match &option.route {
             Route::Service { preset } => {
                 let Some(preset) = PRESETS.iter().find(|p| p.key == preset) else {
                     continue;
@@ -118,30 +156,87 @@ pub(crate) fn unset_groups(
                 {
                     continue;
                 }
-                (None, format!("Not connected. {}", option.note))
+                (
+                    None,
+                    GroupState::NotSetUp,
+                    format!("Not connected. {}", option.note),
+                )
             }
-            Route::Local { .. } => {
+            Route::Local { feature, recipe } => {
+                // A connection a recipe registered stands for that recipe only; any other local
+                // connection still counts for every model, as before.
                 let have_local = store.connections.iter().any(|c| {
-                    c.locality == Locality::Local
-                        && c.models.iter().any(|m| fits(role, m).is_some())
+                    c.provider == "comfyui"
+                        && c.locality == Locality::Local
+                        && c.models.iter().any(|m| {
+                            fits(role, m).is_some()
+                                && (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)
+                        })
                 });
                 if have_local {
                     continue;
                 }
                 (
                     Some(Locality::Local),
+                    GroupState::NotSetUp,
                     "Not installed. Runs on this computer.".to_owned(),
                 )
+            }
+            Route::Native {
+                feature,
+                provider,
+                model: current,
+            } => {
+                // A saved connection is not proof the files are still there. One whose weights
+                // file has gone keeps the Set up link, so the model can be installed again.
+                let saved: Vec<&ModelInfo> = store
+                    .connections
+                    .iter()
+                    .filter(|c| {
+                        c.provider == *provider
+                            && c.locality == Locality::Local
+                            && c.id.as_str() == native_connection_id(feature, provider)
+                    })
+                    .flat_map(|c| &c.models)
+                    .filter(|m| fits(role, m).is_some() && m.id.as_str() == current)
+                    .collect();
+                if saved.iter().any(|m| {
+                    m.local_file
+                        .as_deref()
+                        .is_some_and(|file| Path::new(file).is_file())
+                }) {
+                    continue;
+                }
+                let files_missing = !saved.is_empty();
+                if client.has_adapter(provider) {
+                    let note = if files_missing {
+                        "The model files are missing. Set it up again."
+                    } else {
+                        "Not installed. Runs on this computer."
+                    };
+                    // What the route cannot do (selects by clicking) is said before it is chosen.
+                    (
+                        Some(Locality::Local),
+                        GroupState::NotSetUp,
+                        format!("{note} {}", option.note),
+                    )
+                } else {
+                    (
+                        Some(Locality::Local),
+                        GroupState::NeedsAdapter,
+                        "This app can't use this option yet.".to_owned(),
+                    )
+                }
             }
         };
         groups.push(PickerGroup {
             title: option.title.clone(),
             locality,
-            state: GroupState::NotSetUp,
+            state,
             note: note.trim_end().to_owned(),
             models: Vec::new(),
             suggested: false,
-            setup: Some(SetupLink::New {
+            setup: (state != GroupState::NeedsAdapter).then(|| SetupLink::New {
                 option: option.id.clone(),
             }),
             size_bytes: option.size_bytes,
@@ -169,7 +264,12 @@ fn describe(connection: &Connection, model: &ModelInfo, role: &Role) -> String {
         line.push_str(cost);
     }
     line.push('.');
-    if let Some(spec) = model.spec_for(&role.capability) {
+    // A built-in route says what it cannot do in place of the list of inputs, which would offer a
+    // prompt the route refuses.
+    if let Some(note) = built_in_note(connection, model) {
+        line.push(' ');
+        line.push_str(&note);
+    } else if let Some(spec) = model.spec_for(&role.capability) {
         let mut inputs: Vec<&InputRole> = spec.accepts.keys().collect();
         inputs.sort_by_key(|i| input_rank(i));
         let names: Vec<String> = inputs.into_iter().map(input_name).collect();
@@ -180,6 +280,16 @@ fn describe(connection: &Connection, model: &ModelInfo, role: &Role) -> String {
         }
     }
     line
+}
+
+/// The catalogue's note for the built-in route that `connection` runs `model` on, if it has one.
+fn built_in_note(connection: &Connection, model: &ModelInfo) -> Option<String> {
+    craft_ai_features::builtin()
+        .into_iter()
+        .flat_map(|f| f.locals)
+        .flat_map(|r| r.native)
+        .find(|n| n.provider == connection.provider && n.model == model.id.as_str())
+        .and_then(|n| n.note)
 }
 
 fn input_rank(role: &InputRole) -> u8 {
