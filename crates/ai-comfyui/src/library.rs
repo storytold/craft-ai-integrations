@@ -31,10 +31,11 @@ mod native_paths {
     pub use craft_ai_native::paths;
 }
 
-use crate::workflow::{Binding, Workflow};
+use crate::workflow::{Binding, MAX_GRAPH_NODES, Workflow};
 use craft_ai_core::{AiError, ErrorKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -57,8 +58,8 @@ pub struct WorkflowSpec {
     /// When absent, the only node with a plain string `text` input is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<Binding>,
-    /// Required for image.inpaint and image.segment; maps the uploaded source filename to a
-    /// LoadImage node.
+    /// Required for image.inpaint and image.segment, optional for video.generate (its start image);
+    /// maps the uploaded source filename to a LoadImage node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Binding>,
     /// Required for image.inpaint; maps the uploaded PNG filename to a LoadImageMask node.
@@ -76,6 +77,11 @@ fn default_capability() -> String {
 impl WorkflowSpec {
     /// Validates everything and builds the checked [`Workflow`].
     pub fn to_workflow(&self) -> Result<Workflow, AiError> {
+        let id = if self.id.trim().is_empty() {
+            "workflow"
+        } else {
+            self.id.trim()
+        };
         let binding = match &self.prompt {
             Some(p) => p.clone(),
             None => infer_binding(&self.graph)?,
@@ -86,11 +92,7 @@ impl WorkflowSpec {
         };
         if self.capability == "image.inpaint" {
             return Workflow::import_inpaint(
-                if self.id.trim().is_empty() {
-                    "workflow"
-                } else {
-                    self.id.trim()
-                },
+                id,
                 self.graph.clone(),
                 binding,
                 &output,
@@ -107,11 +109,7 @@ impl WorkflowSpec {
                 return Err(AiError::invalid("a selection workflow has no mask binding"));
             }
             return Workflow::import_segment(
-                if self.id.trim().is_empty() {
-                    "workflow"
-                } else {
-                    self.id.trim()
-                },
+                id,
                 self.graph.clone(),
                 binding,
                 &output,
@@ -120,22 +118,24 @@ impl WorkflowSpec {
                     .ok_or_else(|| AiError::invalid("selecting needs a source binding"))?,
             );
         }
+        if self.capability == "video.generate"
+            && self.mask.is_none()
+            && let Some(source) = &self.source
+        {
+            return Workflow::import_video_from_image(
+                id,
+                self.graph.clone(),
+                binding,
+                &output,
+                source.clone(),
+            );
+        }
         if self.source.is_some() || self.mask.is_some() {
             return Err(AiError::invalid(
-                "source and mask bindings need image.inpaint, and a source binding image.segment",
+                "source and mask bindings need image.inpaint; a source binding alone needs image.segment or video.generate",
             ));
         }
-        Workflow::import(
-            if self.id.trim().is_empty() {
-                "workflow"
-            } else {
-                self.id.trim()
-            },
-            &self.capability,
-            self.graph.clone(),
-            binding,
-            &output,
-        )
+        Workflow::import(id, &self.capability, self.graph.clone(), binding, &output)
     }
 
     /// Parses a stored file. `id` overrides the spec's `id` when the file has none
@@ -259,18 +259,21 @@ fn infer_output_node(graph: &Value) -> Result<String, AiError> {
             "API workflow must be a node map",
         ));
     };
-    let consumed: Vec<String> = nodes
+    // Refused again by `Workflow::import`; checked here so an oversized graph costs nothing.
+    if nodes.len() > MAX_GRAPH_NODES {
+        return Err(AiError::invalid("workflow graph is too large"));
+    }
+    let consumed: HashSet<&str> = nodes
         .values()
         .filter_map(|n| n.get("inputs").and_then(Value::as_object))
         .flat_map(|inputs| inputs.values())
         .filter_map(Value::as_array)
         .flatten()
         .filter_map(Value::as_str)
-        .map(str::to_owned)
         .collect();
     let mut sink: Option<&String> = None;
     for id in nodes.keys() {
-        if !consumed.iter().any(|c| c == id) {
+        if !consumed.contains(id.as_str()) {
             sink = Some(id);
         }
     }

@@ -224,6 +224,23 @@ fn pickle_formats_are_refused_unless_consented() {
 }
 
 #[test]
+fn a_pickle_name_needs_consent_whatever_format_the_description_claims() {
+    let body = b"\x80\x04some pickle".to_vec();
+    let server = serving(body.clone());
+    let rig = Rig::new();
+    let mut c = candidate(&origin(&server), "m.ckpt", &body, true);
+    c.format = Format::Safetensors;
+    assert!(c.needs().pickle);
+    assert_eq!(
+        refused(rig.install(&c, &Consents::default())),
+        Refusal::Pickle
+    );
+    assert_eq!(server.count(), 0);
+    assert!(names(&rig.models()).is_empty());
+    assert!(rig.registry().list().unwrap().is_empty());
+}
+
+#[test]
 fn an_unsupported_name_is_refused_before_any_request() {
     let server = serving(vec![1; 10]);
     let rig = Rig::new();

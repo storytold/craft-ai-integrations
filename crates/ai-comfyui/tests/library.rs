@@ -551,6 +551,41 @@ fn a_spec_with_an_unknown_capability_is_refused() {
     assert_eq!(err.kind, craft_ai_core::ErrorKind::Unsupported);
 }
 
+/// A bare graph of `count` nodes: one prompt node, every other node linked to all its
+/// predecessors' outputs through many inputs, so finding the output node sees many links.
+fn crowded_graph(count: usize) -> Vec<u8> {
+    let mut nodes = serde_json::Map::new();
+    nodes.insert(
+        "1".into(),
+        json!({"class_type":"CLIPTextEncode","inputs":{"text":"x"}}),
+    );
+    for id in 2..=count {
+        let mut inputs = serde_json::Map::new();
+        for back in 1..=16.min(id - 1) {
+            inputs.insert(format!("in{back}"), json!([(id - back).to_string(), 0]));
+        }
+        nodes.insert(
+            id.to_string(),
+            json!({"class_type":"Passthrough","inputs":inputs}),
+        );
+    }
+    serde_json::to_vec(&serde_json::Value::Object(nodes)).unwrap()
+}
+
+#[test]
+fn the_output_node_of_a_graph_at_the_node_limit_is_found() {
+    let spec = WorkflowSpec::parse(&crowded_graph(2048), Some("crowded")).unwrap();
+    assert!(spec.output_node.is_none());
+    assert!(spec.to_workflow().is_ok());
+}
+
+#[test]
+fn a_graph_over_the_node_limit_is_refused_before_its_output_is_inferred() {
+    let err = WorkflowSpec::parse(&crowded_graph(2049), Some("crowded")).unwrap_err();
+    assert_eq!(err.kind, craft_ai_core::ErrorKind::InvalidRequest);
+    assert!(err.message.contains("too large"), "{}", err.message);
+}
+
 /// A pipe offered as a workflow file is refused at once instead of blocking the import.
 #[cfg(unix)]
 #[test]

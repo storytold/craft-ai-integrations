@@ -43,6 +43,7 @@
 
 mod client;
 mod declarative;
+mod disclosed_size;
 mod engine;
 mod engines;
 mod factory;
