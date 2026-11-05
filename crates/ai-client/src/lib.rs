@@ -41,6 +41,7 @@
     clippy::unreachable
 )]
 
+mod assignments;
 mod client;
 mod declarative;
 mod disclosed_size;
@@ -60,6 +61,9 @@ mod runner;
 mod setup_flow;
 mod tools;
 
+pub use assignments::{
+    Ability, Assigned, ChoiceScope, ToolChoiceState, UnavailableChoice, Withdraw, Withdrawn,
+};
 pub use client::{AiClient, Choice, Finished, Job, PickedChoice, Plan, RoleReady, RoleStatus};
 /// File transfer and progress types, so a host does not depend on the local server crate.
 pub use craft_ai_comfy_env::{

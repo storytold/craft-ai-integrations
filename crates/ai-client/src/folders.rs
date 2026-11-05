@@ -68,7 +68,7 @@ impl FolderDesk {
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Models".to_owned());
         let identity = same_place_key(path);
-        let added = self.shared.update(|store| {
+        let added = self.shared.try_update(|store| {
             if store
                 .model_folders
                 .iter()

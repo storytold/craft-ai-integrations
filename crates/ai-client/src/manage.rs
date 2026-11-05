@@ -27,6 +27,7 @@ use craft_ai_core::{
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
 use craft_ai_native::shared::SharedStore;
 
+use crate::assignments::{UnavailableChoice, refreshed_models, unavailable_choices};
 use crate::factory::ProviderFactory;
 
 mod probe;
@@ -82,6 +83,9 @@ pub struct Saved {
     pub id: ConnectionId,
     /// Something minor went wrong after the save (an old key could not be removed).
     pub warning: Option<String>,
+    /// Choices whose model this connection no longer lists after the save. They are kept, in case
+    /// the model comes back.
+    pub unavailable_choices: Vec<UnavailableChoice>,
 }
 
 /// A completed delete.
@@ -102,6 +106,9 @@ pub struct TestReport {
     pub elapsed: Duration,
     /// For a custom connection: what the test confirmed and could not confirm.
     pub probe: Option<ProbeReport>,
+    /// Choices whose model the connection no longer lists, once a remembered refresh is saved.
+    /// They are kept, in case the model comes back.
+    pub unavailable_choices: Vec<UnavailableChoice>,
 }
 
 /// Reads and writes the user's connections.
@@ -193,8 +200,8 @@ impl ConnectionManager {
         };
 
         // 2. The file, re-checked as it is now. Only file work happens under the lock.
-        let result = self.shared.update(
-            |file| -> Result<(ConnectionId, Option<SecretRef>), SaveError> {
+        let result = self.shared.try_update(
+            |file| -> Result<(ConnectionId, Option<SecretRef>, Vec<UnavailableChoice>), SaveError> {
                 let mut again = draft
                     .prepare(&file.connections)
                     .map_err(SaveError::Invalid)?;
@@ -222,7 +229,8 @@ impl ConnectionManager {
                             .iter()
                             .any(|c| c.auth.secret_ref() == Some(r))
                 });
-                Ok((id, retired))
+                let unavailable = unavailable_choices(file, &id);
+                Ok((id, retired, unavailable))
             },
         );
         let outcome = match result {
@@ -232,7 +240,7 @@ impl ConnectionManager {
 
         // 3. The file did not change, so the slot just written is unused: drop it. It is ours
         // alone, so nothing else can be affected.
-        let (id, retired) = match outcome {
+        let (id, retired, unavailable_choices) = match outcome {
             Ok(done) => done,
             Err(e) => {
                 if let Some(slot) = &fresh {
@@ -246,7 +254,11 @@ impl ConnectionManager {
         let warning = retired
             .filter(|old| self.secrets.delete(old).is_err())
             .map(|_| "The old key could not be removed from the keychain.".to_owned());
-        Ok(Saved { id, warning })
+        Ok(Saved {
+            id,
+            warning,
+            unavailable_choices,
+        })
     }
 
     /// Writes `key` to a slot no other save can be using and returns where it went.
@@ -334,12 +346,12 @@ impl ConnectionManager {
             .cloned()
             .ok_or_else(|| not_found(id))?;
         let secret = secret_for(self.secrets.as_ref(), &connection)?;
-        let report = self.ask(connection.clone(), secret)?;
+        let mut report = self.ask(connection.clone(), secret)?;
         // Only a list the server reported itself is remembered; a custom connection's models
         // are the ones a person declared, and a test never replaces them with guesses.
         if remember && report.probe.is_none() {
             let models = report.models.clone();
-            self.shared.try_update(|file| {
+            report.unavailable_choices = self.shared.try_update(|file| {
                 let saved = file
                     .connections
                     .iter_mut()
@@ -352,8 +364,9 @@ impl ConnectionManager {
                         "the connection changed during its test; test it again",
                     ));
                 }
-                saved.models = models;
-                Ok(())
+                // What a person declared on top of the server's list is not the server's to remove.
+                saved.models = refreshed_models(&saved.models, models);
+                Ok(unavailable_choices(file, id))
             })??;
         }
         Ok(report)
@@ -371,6 +384,7 @@ impl ConnectionManager {
                 models: Vec::new(),
                 elapsed: start.elapsed(),
                 probe: Some(probe),
+                unavailable_choices: Vec::new(),
             });
         }
         // Saved models would be answered from the list, not the server.
@@ -382,6 +396,7 @@ impl ConnectionManager {
             models,
             elapsed: start.elapsed(),
             probe: None,
+            unavailable_choices: Vec::new(),
         })
     }
 }
