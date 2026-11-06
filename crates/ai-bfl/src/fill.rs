@@ -36,11 +36,6 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The media type of a returned picture, or `None` when it is not PNG, JPEG or WebP.
-pub(crate) fn result_media(data: &[u8]) -> Option<&'static str> {
-    sniff(data)
-}
-
 /// Reads the craft mask and returns BFL's: an opaque 8-bit grayscale PNG, white where to paint,
 /// black where to keep (see [`craft_ai_media::mask::binary`]).
 pub(crate) fn bfl_mask(data: &[u8]) -> Result<(Vec<u8>, u32, u32), AiError> {

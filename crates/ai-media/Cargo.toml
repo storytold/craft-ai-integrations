@@ -12,11 +12,14 @@ publish = false
 craft-ai-core.workspace = true
 craft-ai-http.workspace = true
 png = "0.18"
+# Already in the workspace for the local engines; here it decodes JPEG and WebP results in full.
+image = { version = "0.25", default-features = false, features = ["jpeg", "webp"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 tempfile = "3"
 url = "2"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "webp", "png"] }
 serde_json.workspace = true
 tempfile = "3"
 

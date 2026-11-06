@@ -177,15 +177,12 @@ impl Http {
                     "ArtCraft result image download ended early",
                 )
             })?;
-        let media = craft_ai_media::sniff::media_type(&bytes)
-            .map(|m| m.0)
-            .filter(|m| matches!(*m, "image/png" | "image/jpeg" | "image/webp"))
-            .ok_or_else(|| {
-                AiError::new(
-                    ErrorKind::Provider,
-                    "ArtCraft did not return a readable result image",
-                )
-            })?;
+        let media = craft_ai_media::decoded_result(&bytes).ok_or_else(|| {
+            AiError::new(
+                ErrorKind::Provider,
+                "ArtCraft did not return a readable result image",
+            )
+        })?;
         let payload = craft_ai_core::Payload::inline(media, bytes)?;
         payload.check(&limits)?;
         Ok(payload)

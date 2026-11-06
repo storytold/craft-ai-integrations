@@ -56,10 +56,12 @@ fn mask() -> Vec<u8> {
     })
 }
 
+/// The adapter's default model.
 fn model() -> ModelId {
     ModelId::new(DEFAULT_MODEL).unwrap()
 }
 
+/// A fill of the test source and mask with `prompt`.
 fn fill_request(prompt: &str) -> Request {
     Request::new(CapabilityId::parse("image.inpaint").unwrap())
         .with_input(
@@ -73,12 +75,19 @@ fn fill_request(prompt: &str) -> Request {
         .with_input(InputRole::Prompt, Payload::text(prompt))
 }
 
+/// The real adapter with the fixture key, pointed at the scripted server at `url`.
 fn provider(url: &str) -> GeminiProvider {
     GeminiProvider::new(GeminiConfig::new(url, SecretString::new(KEY))).unwrap()
 }
 
+/// A real 2 x 2 JPEG: results are decoded in full now, so a signature alone is refused.
 fn result_jpeg() -> Vec<u8> {
-    b"\xff\xd8\xff\xe0 a jpeg".to_vec()
+    let picture = image::RgbImage::from_pixel(2, 2, image::Rgb([200, 40, 40]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    picture
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .unwrap();
+    out.into_inner()
 }
 
 fn answer_server() -> Server {

@@ -218,10 +218,10 @@ pub(crate) fn read_answer(v: &Value) -> Result<Answer, AiError> {
         };
         let bytes = base64_decode(data)
             .ok_or_else(|| AiError::new(ErrorKind::Provider, "Gemini image data is invalid"))?;
-        let media = sniff(&bytes).ok_or_else(|| {
+        let media = craft_ai_media::decoded_result(&bytes).ok_or_else(|| {
             AiError::new(
                 ErrorKind::Provider,
-                "Gemini returned a picture that is not PNG, JPEG or WebP",
+                "Gemini returned a picture that is not a readable PNG, JPEG or WebP",
             )
         })?;
         return Ok(Answer::Image(media, bytes));

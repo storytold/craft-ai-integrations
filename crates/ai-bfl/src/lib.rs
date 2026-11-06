@@ -201,8 +201,10 @@ impl BflProvider {
             Err(e) if e.is_retryable() => return Err(e),
             Err(e) => return Ok(JobSnapshot::new(JobState::Failed { error: e })),
         };
-        let Some(media) = fill::result_media(&bytes) else {
-            return Ok(failed("the BFL result is not a PNG, JPEG or WebP image"));
+        let Some(media) = craft_ai_media::decoded_result(&bytes) else {
+            return Ok(failed(
+                "the BFL result is not a PNG, JPEG or WebP image that can be read",
+            ));
         };
         let mut snap = JobSnapshot::new(JobState::Succeeded);
         snap.events.push(Event::Output(Output {
