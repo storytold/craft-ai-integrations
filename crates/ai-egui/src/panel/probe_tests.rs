@@ -1,7 +1,7 @@
 //! A custom connection's test lists no models: the models a person declared are what the
 //! connection offers. Its answer confirms the address and must not replace them with nothing.
 
-use super::*;
+use super::{ConnectionManager, ConnectionPanel, Duration, TestCapture, TestLine};
 use craft_ai_client::{ProbeReport, TestReport};
 use craft_ai_core::{ModelId, ModelInfo};
 use craft_ai_native::secrets::MemoryStore;
