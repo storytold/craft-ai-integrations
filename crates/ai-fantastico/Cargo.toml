@@ -1,0 +1,18 @@
+[package]
+name = "craft-ai-fantastico"
+description = "A FANTASTICO account as a Craft AI provider: every major LLM from one prepaid credit, streaming and tool calls included. Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+craft-ai-core.workspace = true
+craft-ai-http.workspace = true
+serde_json.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[lints]
+workspace = true

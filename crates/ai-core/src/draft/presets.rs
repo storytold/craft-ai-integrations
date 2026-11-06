@@ -27,6 +27,15 @@ pub const PRESETS: &[Preset] = &[
         note: "One key for many hosted models.",
     },
     Preset {
+        key: "fantastico",
+        name: "FANTASTICO",
+        provider: "fantastico",
+        endpoint: "https://fantastico.cc/api",
+        billing: Billing::Metered,
+        needs_key: true,
+        note: "One prepaid credit for every major chat model. Your account key starts with ck-fant-.",
+    },
+    Preset {
         key: "bfl",
         name: "Black Forest Labs",
         provider: "bfl",
