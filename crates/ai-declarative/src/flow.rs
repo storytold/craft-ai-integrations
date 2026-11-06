@@ -24,19 +24,20 @@ pub(crate) fn fill(call: &Call, values: &Values<'_>) -> Result<Filled, AiError> 
             format!("could not fill in a call: {why}"),
         )
     };
+    let mut budget = values.budget();
     Ok(Filled {
         method: call.method,
-        path: render_text(&call.path, values).map_err(internal)?,
+        path: render_text(&call.path, values, &mut budget).map_err(internal)?,
         query: call
             .query
             .iter()
-            .map(|(k, v)| Ok((k.clone(), render_text(v, values)?)))
+            .map(|(k, v)| Ok((k.clone(), render_text(v, values, &mut budget)?)))
             .collect::<Result<_, String>>()
             .map_err(internal)?,
         body: call
             .body
             .as_ref()
-            .map(|b| render_value(b, values))
+            .map(|b| render_value(b, values, &mut budget))
             .transpose()
             .map_err(internal)?,
     })

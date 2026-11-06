@@ -6,6 +6,8 @@
 
 use serde_json::Value;
 
+use super::MAX_TEMPLATE_BYTES;
+
 /// A value a template may name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
@@ -40,6 +42,17 @@ impl Values<'_> {
             Slot::Model => self.model,
             Slot::JobId => self.job_id,
         }
+    }
+
+    /// The most bytes one call's substitutions may add in total: each value once, plus a
+    /// template's worth of slack for short values used in several places. A template that names
+    /// `{prompt}` many times cannot multiply a large prompt past this.
+    pub fn budget(&self) -> usize {
+        MAX_TEMPLATE_BYTES
+            + [self.prompt, self.model, self.job_id]
+                .iter()
+                .map(|v| v.map_or(0, str::len))
+                .sum::<usize>()
     }
 }
 
@@ -117,34 +130,44 @@ pub fn value_slots(template: &Value) -> Result<Vec<Slot>, String> {
     Ok(out)
 }
 
-pub fn render_text(text: &str, values: &Values<'_>) -> Result<String, String> {
+/// Renders `text`, taking every inserted value's bytes from `budget` (start one call at
+/// [`Values::budget`]) so a call cannot grow past it however many slots it names.
+pub fn render_text(text: &str, values: &Values<'_>, budget: &mut usize) -> Result<String, String> {
     let mut out = String::new();
     for piece in pieces(text)? {
         match piece {
             Piece::Text(t) => out.push_str(&t),
-            Piece::Slot(slot, name) => out.push_str(
-                values
+            Piece::Slot(slot, name) => {
+                let value = values
                     .get(slot)
-                    .ok_or_else(|| format!("{{{name}}} is not available in this call"))?,
-            ),
+                    .ok_or_else(|| format!("{{{name}}} is not available in this call"))?;
+                *budget = budget
+                    .checked_sub(value.len())
+                    .ok_or("the call is too large once its values are filled in")?;
+                out.push_str(value);
+            }
         }
     }
     Ok(out)
 }
 
 /// Renders every string value of `template`. Keys are never substituted.
-pub fn render_value(template: &Value, values: &Values<'_>) -> Result<Value, String> {
+pub fn render_value(
+    template: &Value,
+    values: &Values<'_>,
+    budget: &mut usize,
+) -> Result<Value, String> {
     Ok(match template {
-        Value::String(s) => Value::String(render_text(s, values)?),
+        Value::String(s) => Value::String(render_text(s, values, budget)?),
         Value::Array(items) => Value::Array(
             items
                 .iter()
-                .map(|i| render_value(i, values))
+                .map(|i| render_value(i, values, budget))
                 .collect::<Result<_, _>>()?,
         ),
         Value::Object(map) => Value::Object(
             map.iter()
-                .map(|(k, v)| Ok((k.clone(), render_value(v, values)?)))
+                .map(|(k, v)| Ok((k.clone(), render_value(v, values, budget)?)))
                 .collect::<Result<_, String>>()?,
         ),
         other => other.clone(),
