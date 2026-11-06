@@ -16,6 +16,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 /// Reading and writing the masks the inpainting adapters send.
+mod image_size;
 pub mod mask;
 /// Media identified by its first bytes; shared with the adapters that check what they send or
 /// receive.
@@ -23,6 +24,7 @@ pub mod sniff;
 mod store;
 mod url_rules;
 
+pub use image_size::image_size;
 pub use store::{MediaStore, MediaStoreConfig};
 
 /// The link rules, for other downloaders that must follow the same ones.

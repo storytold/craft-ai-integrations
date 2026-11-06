@@ -216,12 +216,15 @@ fn status_error(status: u16, retry_after: Option<u64>, body: &[u8], key: &Secret
         _ => ErrorKind::Provider,
     };
     let detail = if message.is_empty() { reason } else { message };
+    // Scrub the key from the whole message before cutting it short, so a key that straddles
+    // the cut cannot leave a fragment behind.
+    let detail = AiError::redacted(kind, &detail, &[key]).message;
     let text = if detail.is_empty() {
         format!("Gemini answered {status}")
     } else {
         format!("Gemini answered {status}: {}", fill::clip(&detail, 300))
     };
-    let e = AiError::redacted(kind, &text, &[key]);
+    let e = AiError::new(kind, text);
     match retry_after {
         Some(secs) if status == 429 => e.with_retry_after(secs),
         _ => e,
@@ -275,11 +278,14 @@ fn run_fill(
             ErrorKind::Provider,
             "Gemini returned no image",
         )),
-        fill::Answer::Text(text) => Err(AiError::redacted(
-            ErrorKind::Provider,
-            &format!("Gemini returned no image: {}", fill::clip(&text, 300)),
-            &[key],
-        )),
+        fill::Answer::Text(text) => {
+            // Scrub before cutting, as in `status_error`.
+            let text = AiError::redacted(ErrorKind::Provider, &text, &[key]).message;
+            Err(AiError::new(
+                ErrorKind::Provider,
+                format!("Gemini returned no image: {}", fill::clip(&text, 300)),
+            ))
+        }
     }
 }
 

@@ -32,11 +32,16 @@ impl ArtCraftConfig {
 }
 /// Most jobs remembered, finished ones included. Oldest finished jobs are dropped first.
 const KEEP_JOBS: usize = 128;
+/// Polls that may fail to fetch a finished job's result for a passing reason (network, busy
+/// service) before the job is given up as failed, so it stops holding an active-job slot.
+const RESULT_TRIES: u8 = 5;
 
 struct Job {
     remote: String,
     video: bool,
     inline_image: bool,
+    /// Failed fetches of this finished job's result so far.
+    result_failures: u8,
     snapshot: JobSnapshot,
 }
 /// Holds a slot for a request that has been sent but has no job token yet, so concurrent
@@ -108,6 +113,26 @@ impl ArtCraftProvider {
     pub fn documented_models() -> Vec<ModelInfo> {
         crate::models::documented()
     }
+    /// A finished job whose result could not be fetched. A passing failure is returned so the
+    /// caller polls again, up to [`RESULT_TRIES`]; any other failure, or one too many, ends the job
+    /// here as failed. The remote job is not cancelled (it has already finished); it is only
+    /// forgotten as active, so it no longer counts against `max_active_jobs`.
+    fn result_failed(&self, id: &JobId, error: AiError) -> Result<JobSnapshot, AiError> {
+        let mut jobs = self.lock()?;
+        let Some(job) = jobs.get_mut(id) else {
+            return Err(error);
+        };
+        if job.snapshot.state.is_terminal() {
+            return Ok(JobSnapshot::new(job.snapshot.state.clone()));
+        }
+        job.result_failures = job.result_failures.saturating_add(1);
+        let passing = matches!(error.kind, ErrorKind::Network | ErrorKind::RateLimited);
+        if passing && job.result_failures < RESULT_TRIES {
+            return Err(error);
+        }
+        job.snapshot = JobSnapshot::new(JobState::Failed { error });
+        Ok(job.snapshot.clone())
+    }
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<JobId, Job>>, AiError> {
         self.jobs
             .lock()
@@ -120,6 +145,8 @@ impl Provider for ArtCraftProvider {
             "ArtCraft Omni API has no documented free key test; saved models are unverified until a job runs",
         ))
     }
+    /// Checks the request against the documented model, reserves a job slot, uploads the fill's
+    /// source and mask when it is a fill, then asks Omni to generate. Nothing is sent for a refused request.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let info = Self::documented_models()
             .into_iter()
@@ -146,11 +173,16 @@ impl Provider for ArtCraftProvider {
             .iter()
             .find(|i| i.role == InputRole::Prompt)
             .and_then(|i| match &i.payload {
-                Payload::Text { text } => Some(text),
+                Payload::Text { text } => Some(text.as_str()),
                 _ => None,
-            })
-            .filter(|s| fill.is_some() || !s.trim().is_empty())
-            .ok_or_else(|| AiError::invalid("ArtCraft Omni API needs a text prompt"))?;
+            });
+        // A fill may leave the prompt out: the shared instruction then asks Omni to remove what the
+        // mask covers. Generation always needs words.
+        let prompt = match prompt {
+            Some(text) if fill.is_some() || !text.trim().is_empty() => text,
+            None if fill.is_some() => "",
+            _ => return Err(AiError::invalid("ArtCraft Omni API needs a text prompt")),
+        };
         let video = model.as_str() == "seedance_2p0";
         // Reserve before sending: a paid job that cannot be tracked must never be created.
         let _slot = {
@@ -226,11 +258,14 @@ impl Provider for ArtCraftProvider {
                 remote: remote.to_owned(),
                 video,
                 inline_image: fill.is_some(),
+                result_failures: 0,
                 snapshot: JobSnapshot::new(JobState::Queued),
             },
         );
         Ok(id)
     }
+    /// Asks Omni for the job's state. A finished fill's picture is fetched and handed over once; a
+    /// finished job is not asked about again, and its stored state keeps no picture bytes.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let (remote, video, inline_image, prior) = {
             let jobs = self.lock()?;
@@ -286,7 +321,10 @@ impl Provider for ArtCraftProvider {
                     .ok_or_else(|| {
                         AiError::new(ErrorKind::Provider, "ArtCraft job result has no CDN URL")
                     })?;
-                let payload = crate::result::payload(&self.http, uri, video, inline_image)?;
+                let payload = match crate::result::payload(&self.http, uri, video, inline_image) {
+                    Ok(payload) => payload,
+                    Err(error) => return self.result_failed(id, error),
+                };
                 let mut done = JobSnapshot::new(JobState::Succeeded);
                 done.events.push(Event::Output(Output {
                     payload,
@@ -311,7 +349,13 @@ impl Provider for ArtCraftProvider {
                 snap = job.snapshot.clone();
                 snap.events.clear();
             } else if job.snapshot.state.can_become(&snap.state) {
-                job.snapshot = snap.clone();
+                // Keep the state and usage only: the output was handed over in this answer, and a
+                // later poll of a finished job returns no events, so its bytes are never copied again.
+                job.snapshot = JobSnapshot {
+                    state: snap.state.clone(),
+                    events: Vec::new(),
+                    usage: snap.usage.clone(),
+                };
             } else {
                 snap = job.snapshot.clone();
                 snap.events.clear();

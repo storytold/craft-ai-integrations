@@ -191,7 +191,7 @@ impl BflProvider {
         }
         let bytes = match self.http.download(uri, DEFAULT_MAX_INLINE_BYTES) {
             Ok(bytes) => bytes,
-            Err(e) if e.kind == ErrorKind::Network => return Err(e),
+            Err(e) if e.is_retryable() => return Err(e),
             Err(e) => return Ok(JobSnapshot::new(JobState::Failed { error: e })),
         };
         let Some(media) = fill::result_media(&bytes) else {
@@ -253,6 +253,8 @@ impl Provider for BflProvider {
         }
         Ok(Self::catalog())
     }
+    /// Checks the request against the catalogue, builds the body (a fill is fully checked here),
+    /// sends it and records the task with its polling address.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let info = Self::catalog()
             .into_iter()
@@ -307,6 +309,8 @@ impl Provider for BflProvider {
         );
         Ok(id)
     }
+    /// Asks BFL for the task at its polling address. Any found answer ends a not-found streak;
+    /// a Ready fill is downloaded, and a busy download is an error to poll again.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let (remote, url, kind, prior) = {
             let jobs = self.job_lock()?;
@@ -327,17 +331,22 @@ impl Provider for BflProvider {
         };
         // A 404 is the same answer as a "Task not found" status.
         let Some(reply) = self.http.poll(&url)? else {
-            return self.not_found(id, prior);
+            return self.not_found(id);
         };
         let status = reply.get("status").and_then(Value::as_str).unwrap_or("");
         if status == "Task not found" {
-            return self.not_found(id, prior);
+            return self.not_found(id);
         }
         if reply.get("id").and_then(Value::as_str) != Some(remote.as_str()) {
             return Err(AiError::new(
                 ErrorKind::Provider,
                 "BFL returned a different task ID",
             ));
+        }
+        // BFL has found the task, so the not-found streak ends now, even if fetching a Ready
+        // result below fails and this poll returns an error.
+        if let Some(job) = self.job_lock()?.get_mut(id) {
+            job.not_found = None;
         }
         let snap = match status {
             "Pending" => JobSnapshot::new(prior),
@@ -373,6 +382,7 @@ impl Provider for BflProvider {
         };
         self.settle(id, snap, true)
     }
+    /// BFL has no cancel route: a finished job cancels quietly, a running one is refused.
     fn cancel(&self, id: &JobId) -> Result<(), AiError> {
         let jobs = self.job_lock()?;
         match jobs.get(id) {
@@ -387,22 +397,24 @@ impl Provider for BflProvider {
 
 impl BflProvider {
     /// Counts a "Task not found" answer and fails the job once it has lasted (see `polling`).
-    fn not_found(&self, id: &JobId, prior: JobState) -> Result<JobSnapshot, AiError> {
-        let snap = {
-            let mut jobs = self.job_lock()?;
-            let job = jobs
-                .get_mut(id)
-                .ok_or_else(|| AiError::invalid("unknown BFL job"))?;
-            let (count, since) = job.not_found.unwrap_or((0, Instant::now()));
-            let count = count.saturating_add(1);
-            job.not_found = Some((count, since));
-            if count >= polling::NOT_FOUND_POLLS && since.elapsed() >= self.not_found_grace {
-                failed("BFL could not find the job; it may have expired")
-            } else {
-                JobSnapshot::new(prior)
-            }
-        };
-        self.settle(id, snap, false)
+    /// Counting, deciding and recording happen under one lock, so a poll that found the task in
+    /// between (and reset the streak) cannot be overwritten by this stale failure.
+    fn not_found(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
+        let mut jobs = self.job_lock()?;
+        let job = jobs
+            .get_mut(id)
+            .ok_or_else(|| AiError::invalid("unknown BFL job"))?;
+        if job.snapshot.state.is_terminal() {
+            return Ok(JobSnapshot::new(job.snapshot.state.clone()));
+        }
+        let (count, since) = job.not_found.unwrap_or((0, Instant::now()));
+        let count = count.saturating_add(1);
+        job.not_found = Some((count, since));
+        if count >= polling::NOT_FOUND_POLLS && since.elapsed() >= self.not_found_grace {
+            job.snapshot = failed("BFL could not find the job; it may have expired");
+        }
+        // The current state, not the one this poll started from, which may be out of date.
+        Ok(JobSnapshot::new(job.snapshot.state.clone()))
     }
     /// Records `snap` unless the job already finished, and returns what the caller should see.
     /// `found` is false only for a "Task not found" answer; any other answer resets that count.

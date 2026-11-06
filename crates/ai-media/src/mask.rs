@@ -74,6 +74,27 @@ pub fn png_size(data: &[u8]) -> Option<(u32, u32)> {
     Some((reader.info().width, reader.info().height))
 }
 
+/// Decodes every pixel of a PNG within `bounds` and returns its size, so a truncated or corrupt
+/// picture is refused here, before it is uploaded or paid for. `what` names it in errors. Memory is
+/// capped by the same limit [`binary`] uses.
+pub fn png_checked(data: &[u8], bounds: Bounds, what: &str) -> Result<(u32, u32), AiError> {
+    let bad = || AiError::invalid(format!("the {what} is not a readable PNG image"));
+    if !matches!(crate::sniff::media_type(data), Some(("image/png", _))) {
+        return Err(AiError::invalid(format!("the {what} must be a PNG image")));
+    }
+    let limit = png::Limits {
+        bytes: usize::try_from(bounds.max_pixels.saturating_mul(8)).unwrap_or(usize::MAX),
+    };
+    let mut reader = png::Decoder::new_with_limits(Cursor::new(data), limit)
+        .read_info()
+        .map_err(|_| bad())?;
+    let (width, height) = (reader.info().width, reader.info().height);
+    bounds.check(width, height)?;
+    let mut buffer = vec![0u8; reader.output_buffer_size().ok_or_else(bad)?];
+    reader.next_frame(&mut buffer).map_err(|_| bad())?;
+    Ok((width, height))
+}
+
 fn bad_mask() -> AiError {
     AiError::invalid("the mask is not a readable PNG image")
 }

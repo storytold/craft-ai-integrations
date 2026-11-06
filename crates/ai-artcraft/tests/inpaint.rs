@@ -92,11 +92,13 @@ fn nano_banana_2_uploads_both_inputs_and_delivers_inline_image_once() {
     let server = Server::start(move |r| match (r.method.as_str(), r.path.as_str()) {
         ("POST", "/v1/omni_api/upload/image") => {
             check_upload(r);
-            let token = if n.fetch_add(1, Ordering::SeqCst) == 0 {
-                "m_source"
-            } else {
-                "m_mask"
-            };
+            n.fetch_add(1, Ordering::SeqCst);
+            // The token names what was uploaded, not the order it came in, so sending the mask
+            // first would put the tokens in the wrong order and fail the generate check below.
+            // The source goes up as it was given (RGBA); the mask goes up normalised to grayscale.
+            let source = png(8, 8);
+            let is_source = r.body.windows(source.len()).any(|w| w == source.as_slice());
+            let token = if is_source { "m_source" } else { "m_mask" };
             Reply::Json(
                 200,
                 format!(r#"{{"success":true,"media_file_token":"{token}"}}"#),
@@ -238,7 +240,26 @@ fn invalid_result_hosts_redirects_pages_and_oversized_images_are_refused() {
         let id = p
             .submit(&ModelId::new("nano_banana_2").unwrap(), &request())
             .unwrap();
-        assert!(p.poll(&id).is_err(), "{mode}");
-        assert_eq!(server.count(), if mode == "foreign" { 4 } else { 5 });
+        // None of these will get better on another poll, so the job ends as failed and stops
+        // counting as active, rather than returning an error for ever.
+        let snap = p.poll(&id).unwrap();
+        let JobState::Failed { error } = &snap.state else {
+            panic!("{mode}: {:?}", snap.state);
+        };
+        assert_eq!(error.kind, ErrorKind::Provider, "{mode}");
+        if mode == "foreign" {
+            assert_eq!(error.message, "ArtCraft result image URL is not permitted");
+        }
+        let sent = if mode == "foreign" { 4 } else { 5 };
+        assert_eq!(server.count(), sent, "{mode}");
+        assert!(matches!(
+            p.poll(&id).unwrap().state,
+            JobState::Failed { .. }
+        ));
+        assert_eq!(
+            server.count(),
+            sent,
+            "{mode}: a failed job is not asked about again"
+        );
     }
 }

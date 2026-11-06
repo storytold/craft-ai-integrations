@@ -95,18 +95,18 @@ pub(crate) fn body(request: &Request) -> Result<Value, AiError> {
         })
         .ok_or_else(|| AiError::invalid("FLUX Fill needs a non-empty text prompt"))?;
     let source = mask::inline(request, BOUNDS, InputRole::Source, "source image")?;
-    let media = sniff(source)
+    sniff(source)
         .ok_or_else(|| AiError::invalid("the source image is not a PNG, JPEG or WebP image"))?;
     let (mask, width, height) = bfl_mask(mask::inline(request, BOUNDS, InputRole::Mask, "mask")?)?;
-    if media == "image/png" {
-        let (w, h) = mask::png_size(source)
-            .ok_or_else(|| AiError::invalid("the source image is not a readable PNG"))?;
-        BOUNDS.check(w, h)?;
-        if (w, h) != (width, height) {
-            return Err(AiError::invalid(
-                "the mask must be the same size as the source image",
-            ));
-        }
+    // Every accepted format is measured, so a JPEG or WebP source meets the same limits and
+    // mask-size rule as a PNG before anything is sent.
+    let (w, h) = craft_ai_media::image_size(source)
+        .ok_or_else(|| AiError::invalid("the source image's size could not be read"))?;
+    BOUNDS.check(w, h)?;
+    if (w, h) != (width, height) {
+        return Err(AiError::invalid(
+            "the mask must be the same size as the source image",
+        ));
     }
     let mut body = Map::new();
     body.insert("prompt".into(), json!(prompt));

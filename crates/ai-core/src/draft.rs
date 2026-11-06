@@ -51,6 +51,7 @@ pub struct Preset {
 pub use presets::PRESETS;
 use presets::preset_models;
 
+pub(crate) mod omni_models;
 mod presets;
 
 /// Which box a problem belongs to, so a form can mark it.

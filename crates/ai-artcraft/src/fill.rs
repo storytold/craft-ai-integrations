@@ -19,9 +19,8 @@ pub(crate) struct Fill<'a> {
 /// A PNG source and a normalized, non-empty PNG mask with matching dimensions.
 pub(crate) fn prepare(request: &Request) -> Result<Fill<'_>, AiError> {
     let source = mask::inline(request, BOUNDS, InputRole::Source, "source picture")?;
-    let source_size = mask::png_size(source)
-        .ok_or_else(|| AiError::invalid("the Omni fill source must be a readable PNG"))?;
-    BOUNDS.check(source_size.0, source_size.1)?;
+    // Decode the whole source, not only its header, so a broken file never reaches an upload.
+    let source_size = mask::png_checked(source, BOUNDS, "Omni fill source")?;
     let original = mask::inline(request, BOUNDS, InputRole::Mask, "mask")?;
     let (mask, width, height) = mask::binary(original, BOUNDS)?;
     if source_size != (width, height) {

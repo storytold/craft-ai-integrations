@@ -67,6 +67,7 @@ pub use capability::{CapabilityId, Modality};
 pub use connection::{Auth, Billing, Connection, Locality};
 pub use consent::{ConsentLedger, Disclosure};
 pub use consent_term::ConsentTerm;
+pub use draft::omni_models::documented as artcraft_omni_models;
 pub use draft::{ConnectionDraft, DraftError, Field, KeyChange, PRESETS, Prepared, Preset};
 pub use error::{AiError, ErrorKind};
 pub use history::{EndRecord, HistoryEntry, HistoryLog, HistoryRecord, Outcome, StartRecord};

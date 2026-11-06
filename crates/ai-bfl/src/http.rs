@@ -97,10 +97,23 @@ impl Http {
             })?;
         let status = response.status().as_u16();
         if !response.status().is_success() {
-            return Err(AiError::new(
-                ErrorKind::Provider,
-                format!("the BFL result could not be downloaded ({status}); it may have expired"),
-            ));
+            // Busy or briefly down is worth another poll; anything else (an expired link) is not.
+            return Err(match status {
+                429 => AiError::new(
+                    ErrorKind::RateLimited,
+                    "the BFL result download was rate limited",
+                ),
+                408 | 500..=599 => AiError::new(
+                    ErrorKind::Network,
+                    format!("the BFL result server is not answering right now ({status})"),
+                ),
+                _ => AiError::new(
+                    ErrorKind::Provider,
+                    format!(
+                        "the BFL result could not be downloaded ({status}); it may have expired"
+                    ),
+                ),
+            });
         }
         let mut bytes = Vec::new();
         response

@@ -91,7 +91,8 @@ pub(crate) fn nearest_ratio(w: u32, h: u32) -> (u32, u32) {
 }
 
 /// The output size token: asked for in `image_size`, else enough for the picture sent (its long
-/// side up to 1,024 px is 1K, up to 2,048 px 2K, larger 4K). Lite models only make 1K.
+/// side up to 1,024 px is 1K, up to 2,048 px 2K, larger 4K). Lite models only make 1K; [`body`]
+/// refuses a larger size asked of them before this is reached.
 fn size_token(model: &str, asked: Option<&str>, w: u32, h: u32) -> &'static str {
     if model.contains("lite") {
         return "1K";
@@ -145,20 +146,26 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
             }
         }
     }
+    // Lite models only make 1K pictures; a larger size asked for is refused, not quietly lowered.
+    if model.contains("lite") && matches!(asked_size, Some("2K" | "4K")) {
+        return Err(AiError::unsupported(
+            "this Gemini model makes 1K pictures only; ask for 1K or leave the size out",
+        ));
+    }
     let source = mask::inline(request, BOUNDS, InputRole::Source, "source image")?;
     let media = sniff(source)
         .ok_or_else(|| AiError::invalid("the source image is not a PNG, JPEG or WebP image"))?;
     let (mask, width, height) =
         shown_mask(mask::inline(request, BOUNDS, InputRole::Mask, "mask")?)?;
-    if media == "image/png" {
-        let (w, h) = mask::png_size(source)
-            .ok_or_else(|| AiError::invalid("the source image is not a readable PNG"))?;
-        BOUNDS.check(w, h)?;
-        if (w, h) != (width, height) {
-            return Err(AiError::invalid(
-                "the mask must be the same size as the source image",
-            ));
-        }
+    // Every accepted format is measured, so a JPEG or WebP source meets the same limits and
+    // mask-size rule as a PNG before anything is sent.
+    let (w, h) = craft_ai_media::image_size(source)
+        .ok_or_else(|| AiError::invalid("the source image's size could not be read"))?;
+    BOUNDS.check(w, h)?;
+    if (w, h) != (width, height) {
+        return Err(AiError::invalid(
+            "the mask must be the same size as the source image",
+        ));
     }
     let (a, b) = nearest_ratio(width, height);
     Ok(json!({

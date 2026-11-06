@@ -132,11 +132,24 @@ impl Http {
                 "ArtCraft result image could not be downloaded",
             )
         })?;
+        let status = response.status().as_u16();
         if !response.status().is_success() {
-            return Err(AiError::new(
-                ErrorKind::Provider,
-                "ArtCraft result image download was refused",
-            ));
+            // Busy or briefly down is worth another poll; anything else (gone, forbidden) is not.
+            let (kind, message) = match status {
+                429 => (
+                    ErrorKind::RateLimited,
+                    "ArtCraft result image download was rate limited",
+                ),
+                408 | 500..=599 => (
+                    ErrorKind::Network,
+                    "ArtCraft result image server is not answering right now",
+                ),
+                _ => (
+                    ErrorKind::Provider,
+                    "ArtCraft result image download was refused",
+                ),
+            };
+            return Err(AiError::new(kind, message));
         }
         let limits = craft_ai_core::Limits::default();
         let limit = limits.max_inline_bytes;
