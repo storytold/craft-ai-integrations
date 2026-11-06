@@ -569,10 +569,16 @@ impl AiClient {
 
     /// Removes this app's own choice, so the launcher default applies again.
     pub fn clear_binding(&self, role: &RoleId) -> Result<(), AiError> {
-        self.shared.update(|store| {
-            if let Some(settings) = store.apps.get_mut(&self.app) {
-                settings.overrides.retain(|b| &b.role != role);
+        // With no choice to remove, nothing is written: no file is created and no bytes change.
+        // `Err(())` from the closure only means there was nothing to clear.
+        let _ = self.shared.try_update(|file| {
+            let settings = file.apps.get_mut(&self.app).ok_or(())?;
+            let before = settings.overrides.len();
+            settings.overrides.retain(|b| &b.role != role);
+            if settings.overrides.len() == before {
+                return Err(());
             }
+            Ok(())
         })?;
         Ok(())
     }

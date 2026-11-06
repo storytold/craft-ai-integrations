@@ -9,6 +9,9 @@ ROLE = CORE + 'role.rs'
 CLIENT = 'crates/ai-client/src/'
 RUN = CLIENT + 'client_run.rs'
 SIZE = CLIENT + 'disclosed_size.rs'
+ASSIGN = CLIENT + 'assignments.rs'
+REFRESH = CLIENT + 'assignments/refresh.rs'
+MANAGE = CLIENT + 'manage.rs'
 M = 'craft-ai-core'
 CL = 'craft-ai-client'
 CA = [
@@ -35,10 +38,16 @@ CA = [
      'Ok(_) => {}', 'Ok(_) => item.bytes = None,',
      CL, 'disclosed_size', 'other_payloads_keep_their_size'),
     ('late-model-answer-taken', DRAFT,
-     'if address.trim() != self.endpoint.trim() {', 'if false {',
+     '''pub fn set_models(&mut self, address: &str, models: Vec<ModelInfo>) -> bool {
+        if address.trim() != self.endpoint.trim() {''',
+     '''pub fn set_models(&mut self, address: &str, models: Vec<ModelInfo>) -> bool {
+        if false {''',
      M, 'draft_provenance', 'a_test_that_answers_after_the_address_moved_on'),
     ('probe-address-forgotten', DRAFT,
-     'self.models_for = Some(self.endpoint.trim().to_owned());', 'self.models_for = None;',
+     '''self.models = models;
+        self.models_for = Some(self.endpoint.trim().to_owned());''',
+     '''self.models = models;
+        self.models_for = None;''',
      M, 'draft_provenance', 'new_draft_discards_models'),
     ('model-address-not-checked', DRAFT,
      '.is_none_or(|origin| origin == address)', '.is_none_or(|_| true)',
@@ -92,7 +101,7 @@ CA = [
      '.filter(|end| end.outcome == Outcome::Done)', '',
      CL, 'route_support_limits', 'the_last_success'),
     ('refused-choice-rewrites-store', 'crates/ai-client/src/tools.rs',
-     'self.shared.try_update(|store| {', 'self.shared.update(|store| {',
+     'let written = self.shared.try_update(|store| {', 'let written = self.shared.update(|store| {',
      CL, 'route_support_limits', 'a_refused_choice_does_not_rewrite'),
     ('picks-offers-a-refused-route', 'crates/ai-client/src/client.rs',
      'eligible.retain(|r| !self.known_unsupported(role, r.connection, &r.model.id));', '',
@@ -115,7 +124,142 @@ CA = [
      'if accepted && complete && outputs && stream && !query.has_options {',
      'if complete && outputs && stream && !query.has_options {',
      CL, 'route_support', 'inputs_a_listed_model'),
-    ('abort-probe-uses-unconditional-update', 'crates/ai-client/src/manage.rs',
+    ('assign-skips-the-final-check', ASSIGN,
+     '''let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+                .map_err(|e| AiError::invalid(e.to_string()))?;
+            refuse_unsupported(self, role, resolved.connection, model)?;
+            let layer = layer_mut(store, scope);''',
+     'let layer = layer_mut(store, scope);',
+     CL, 'model_assignment', 'a_model_that_cannot_do_the_job'),
+    ('declared-ability-not-marked', ASSIGN,
+     'info.tags.push(declared_tag(&role.capability));', '',
+     CL, 'model_assignment', 'a_person_can_declare_an_unlisted_model'),
+    ('withdraw-removes-a-provider-ability', ASSIGN,
+     'if !declared {', 'if false {',
+     CL, 'model_assignment', 'withdrawing_never_removes'),
+    ('stale-withdraw-accepted', ASSIGN,
+     'if what == Withdraw::Choice && selected != Some(true) {', 'if false {',
+     CL, 'model_assignment', 'withdrawing_a_choice_that_has_moved_on'),
+    ('withdraw-leaves-a-binding-stale', ASSIGN,
+     'if let Some((user, scope)) = binding_needing(store, role, connection, model) {',
+     'if let Some((user, scope)) = None::<(RoleId, ChoiceScope)> {',
+     CL, 'model_assignment', 'withdrawing_the_ability_is_refused_while_another_tool'),
+    ('withdraw-ignores-app-overrides', ASSIGN,
+     '.map(|b| (b.role.clone(), ChoiceScope::App(app.clone())))',
+     '.filter(|_| false).map(|b| (b.role.clone(), ChoiceScope::App(app.clone())))',
+     CL, 'model_assignment', 'withdrawing_the_ability_is_refused_while_an_app_override'),
+    ('refresh-drops-declared-abilities', MANAGE,
+     'saved.models = refreshed_models(&saved.models, models);', 'saved.models = models;',
+     CL, 'model_refresh', 'a_refresh_keeps_declared'),
+    ('assign-ignores-a-refused-route', ASSIGN,
+     'refuse_unsupported(self, role, resolved.connection, model)?;', 'let _ = resolved;',
+     CL, 'assignment_guards', 'assigning_a_route_the_adapter_refuses'),
+    ('state-offers-a-refused-route', ASSIGN,
+     'refuse_unsupported(self, role, resolved.connection, model).map_err(|e| e.message)',
+     '''let _ = resolved;
+                Ok(())''',
+     CL, 'assignment_guards', 'assigning_a_route_the_adapter_refuses'),
+    ('refused-route-blocks-an-adapterless-default', ASSIGN,
+     'RouteSupport::Supported | RouteSupport::Untested => Ok(()),',
+     'RouteSupport::Supported => Ok(()),\n        RouteSupport::Untested => Err(AiError::unsupported("untested")),',
+     CL, 'assignment_guards', 'a_provider_with_no_adapter'),
+    ('withdraw-trusts-a-replaced-tool', ASSIGN,
+     '''// caller holding the old one must not take back the new choice or its ability.
+            store
+                .check_tool(role)
+                .map_err(|e| AiError::invalid(e.to_string()))?;''',
+     '// caller holding the old one must not take back the new choice or its ability.',
+     CL, 'assignment_guards', 'withdrawing_with_a_tool_that_was_replaced'),
+    ('refresh-drops-a-declared-input', REFRESH,
+     'Some(reported) => add_input(reported, &mut now.tags, &input, most),',
+     'Some(_) => {}',
+     CL, 'model_refresh', 'a_refresh_keeps_an_input'),
+    ('refresh-forgets-an-input-while-the-ability-is-gone', REFRESH,
+     'None if !now.tags.contains(tag) => now.tags.push(tag.clone()),',
+     'None if false => now.tags.push(tag.clone()),',
+     CL, 'model_refresh', 'a_declared_input_survives_two_refreshes'),
+    ('store-writes-in-place', 'crates/ai-native/src/fsutil.rs',
+     'let result = write_tmp(&tmp, bytes).and_then(|()| fs::rename(&tmp, path));',
+     'let result = fs::write(path, bytes);',
+     CL, 'assignment_guards', 'a_failed_write_leaves_no_part_of_an_assignment'),
+    ('save-drops-a-model-listed-later', MANAGE,
+     'if !draft.opened_with().contains(&later.id)',
+     'if false && !draft.opened_with().contains(&later.id)',
+     CL, 'assignment_guards', 'saving_a_form_opened_before_a_model_was_listed'),
+    ('declared-input-not-marked', ASSIGN,
+     'info.tags.push(declared_input_tag(&role.capability, input));', '',
+     CL, 'model_refresh', 'a_refresh_keeps_an_input'),
+    ('save-drops-declarations', MANAGE,
+     'let mut models = refreshed_models(&slot.models, listed);',
+     'let mut models = listed;',
+     CL, 'assignment_guards', 'saving_a_'),
+    ('stale-form-restores-a-withdrawal', MANAGE,
+     'let listed = without_withdrawn(listed, &slot.models);', '',
+     CL, 'withdrawal_scope', 'a_form_opened_before_a_withdrawal_does_not_bring_it_back'),
+    ('stale-form-restores-a-withdrawn-input', REFRESH,
+     'spec.accepts.remove(input);', '',
+     CL, 'withdrawal_scope', 'a_form_opened_before_a_withdrawal_does_not_bring_back_an_input'),
+    ('declared-input-blocked-by-any-tool', ASSIGN,
+     '&& (whole', '&& (true',
+     CL, 'withdrawal_scope', 'only_a_choice_that_takes_the_declared_input'),
+    ('refusal-hides-the-scope', ASSIGN,
+     "ChoiceScope::App(app) => format!(\"{app}'s own choice\"),",
+     'ChoiceScope::App(_) => "a choice".to_owned(),',
+     CL, 'withdrawal_scope', 'a_refusal_names_the_scope'),
+    ('set-enabled-unknown-writes', MANAGE,
+     '''        self.shared.try_update(|saved| {
+            saved
+''',
+     '''        self.shared.update(|saved| {
+            saved
+''',
+     CL, 'withdrawal_scope', 'changes_with_nothing_to_change_write_nothing'),
+    ('delete-unknown-writes', MANAGE,
+     'let (gone, bindings_removed, key_still_used) = self.shared.try_update(|saved| {',
+     'let (gone, bindings_removed, key_still_used) = self.shared.update(|saved| {',
+     CL, 'withdrawal_scope', 'changes_with_nothing_to_change_write_nothing'),
+    ('clear-nothing-writes', 'crates/ai-client/src/client.rs',
+     'let _ = self.shared.try_update(|file| {', 'let _ = self.shared.update(|file| {',
+     CL, 'withdrawal_scope', 'changes_with_nothing_to_change_write_nothing'),
+    ('probe-answer-wipes-declared-models', 'crates/ai-egui/src/panel.rs',
+     'Some(_) => self.form.draft.confirm_models_for(tested),',
+     'Some(_) => self.form.draft.set_models(tested, Vec::new()),',
+     'craft-ai-egui', 'lib', 'a_custom_connection_test_keeps_the_declared_models'),
+    ('custom-test-leaves-models-on-the-old-address', DRAFT,
+     '''            return false;
+        }
+        self.models_for = Some(self.endpoint.trim().to_owned());
+        true
+    }
+
+    /// Known provenance''',
+     '''            return false;
+        }
+        true
+    }
+
+    /// Known provenance''',
+     'craft-ai-egui', 'lib', 'a_passed_custom_test_at_a_new_address'),
+    ('custom-test-confirms-an-old-address', DRAFT,
+     '''    pub fn confirm_models_for(&mut self, address: &str) -> bool {
+        if address.trim() != self.endpoint.trim() {''',
+     '''    pub fn confirm_models_for(&mut self, address: &str) -> bool {
+        if false && address.trim() != self.endpoint.trim() {''',
+     M, 'draft_provenance', 'confirming_models_moves_them_only'),
+    ('refresh-hides-a-lost-choice', MANAGE,
+     'Ok(unavailable_choices(file, id))', 'Ok(Vec::new())',
+     CL, 'model_refresh', 'a_refresh_reports'),
+    ('refresh-ignores-a-lost-ability', REFRESH,
+     'known_tool(store, &features, &b.role).is_some_and(|tool| {',
+     'known_tool(store, &features, &b.role).is_some_and(|tool| false && {',
+     CL, 'model_refresh', 'a_refresh_reports_a_choice_whose_model_stays_listed'),
+    ('refused-bind-rewrites-the-file', 'crates/ai-client/src/client.rs',
+     'self.shared.try_update(|store| {', 'self.shared.update(|store| {',
+     CL, 'model_assignment', 'every_refused_store_change'),
+    ('refused-choice-rewrites-the-file', 'crates/ai-client/src/tools.rs',
+     'let written = self.shared.try_update(|store| {', 'let written = self.shared.update(|store| {',
+     CL, 'model_assignment', 'every_refused_store_change'),
+    ('abort-probe-uses-unconditional-update', MANAGE,
      'self.shared.try_update(|file| {', 'self.shared.update(|file| {',
      CL, 'saved_probe_abort', ''),
     ('nested-unknown-fields-dropped', 'crates/ai-native/src/shared/keep_unknown.rs',
@@ -155,10 +299,10 @@ CA = [
     ('loaded-address-not-trimmed', DRAFT,
      'models_for: c.endpoint.as_deref().map(|e| e.trim().to_owned()),',
      'models_for: c.endpoint.clone(),', M, 'draft_provenance', 'whitespace_in_a_saved_address'),
-    ('saved-probe-ignores-changed-settings', 'crates/ai-client/src/manage.rs',
+    ('saved-probe-ignores-changed-settings', MANAGE,
      'if *saved != connection {', 'if false {',
      CL, 'saved_probe_writeback', 'changed_endpoint_keeps_new_models_and_returns_a_stale_error'),
-    ('saved-probe-compares-only-endpoint', 'crates/ai-client/src/manage.rs',
+    ('saved-probe-compares-only-endpoint', MANAGE,
      'if *saved != connection {', 'if saved.endpoint != connection.endpoint {',
      CL, 'saved_probe_writeback', 'every_changed_connection_field_prevents_writeback'),
     ('picker-ignores-required-input', ROLE,

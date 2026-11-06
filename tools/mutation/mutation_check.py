@@ -333,7 +333,7 @@ V1 = [
     ('status-reads-one-fixed-app', CLIENT, STATUS_RESOLVE + '\n            Ok(r) => r,\n            Err(e) => return unavailable(', 'let resolved = match store.resolve(&AppId::new("launcher").unwrap_or_else(|_| self.app.clone()), role) {\n            Ok(r) => r,\n            Err(e) => return unavailable(', CL, 'one_binding', ''),
     ('unbound-reads-as-broken', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(r) => write!(f, \"'{r}' is broken\"),", CL, 'one_binding', ''),
     ('unbound-hides-the-tool', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(_) => write!(f, \"no model is chosen\"),", CL, 'one_binding', ''),
-    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(true)', '            let _ = binding;\n            Ok(true)', CL, 'one_binding', ''),
+    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(())', '            let _ = binding;\n            Ok(())', CL, 'one_binding', ''),
 ]
 
 PICK_G = C + 'ai-client/src/picker_groups.rs'
@@ -381,7 +381,7 @@ V3 = [
     ('service-claims-a-download', OPT, 'usable: true,\n                    size_bytes: None,', 'usable: true,\n                    size_bytes: Some(1),', FE, 'options', ''),
     ('size-dropped-in-the-picker', PICK_G, 'size_bytes: option.size_bytes,', 'size_bytes: None,', CL, 'picker', ''),
     ('fix-group-claims-a-download', PICK_G, '            size_bytes: None,', '            size_bytes: Some(1),', CL, 'picker', ''),
-    ('choose-skips-the-check', TOOLS_RS, 'let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)\n                .map_err(|e| AiError::invalid(e.to_string()))?;', 'let Ok(resolved) = resolve(role, &[std::slice::from_ref(&binding)], &store.connections) else {\n                set_default(store, binding);\n                return Ok(true);\n            };', CL, 'popup', ''),
+    ('choose-skips-the-check', TOOLS_RS, 'let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)\n                .map_err(|e| Stop::Refused(AiError::invalid(e.to_string())))?;', 'let Ok(resolved) = resolve(role, &[std::slice::from_ref(&binding)], &store.connections) else {\n                set_default(store, binding);\n                return Ok(());\n            };', CL, 'popup', ''),
     ('popup-shown-when-ready', TOOLS_RS, 'let RoleStatus::Unavailable { reason } = self.client.status(role) else {\n            return Ok(None);\n        };', 'let reason = match self.client.status(role) {\n            RoleStatus::Unavailable { reason } => reason,\n            RoleStatus::Ready(_) => String::new(),\n        };', CL, 'popup', ''),
     ('popup-without-ways-to-set-up', TOOLS_RS, 'self.client.picker(role, &setup_options(features))?', 'self.client.picker(role, &[])?', CL, 'popup', ''),
     ('popup-reason-blank', TOOLS_RS, 'title: role.label.clone(),\n            reason,', 'title: role.label.clone(),\n            reason: String::new(),', CL, 'popup', ''),
