@@ -49,48 +49,40 @@ silently. Both are the gaps this proposal closes.
 
 ## Proposed design
 
-### 1. How consent reaches a person through the bridge
+### 1. How consent reaches a person — in the launcher, not through the bridge
 
-**Fail closed by default.** `auto_consent` defaults to `false`. The bridge never grants consent on
-its own. Keep `McpState::with_policy(client, auto_consent, timeout)` for tests and an explicit,
-clearly-documented opt-in (e.g. `CRAFT_MCP_AUTO_CONSENT=1`) for trusted local development only.
+Jeremy's correction: an MCP `consent/grant` tool would let *whoever calls the bridge* approve their
+own request — including the AI model and any local program. That defeats human-in-the-loop consent.
+So approval must happen where a **person** acts: in the app or launcher, not through the bridge.
 
-**Surface the disclosure.** When a tool needs consent, return the existing
-`ToolCallResult::NeedsConsent { disclosure }`. The `Disclosure` names *kinds and sizes* of data that
-would leave the machine — never contents. The agent relays this to the user in conversation.
+- **Fail closed by default.** `auto_consent` defaults to `false`. The bridge never grants consent on
+  its own. Keep `McpState::with_policy(client, auto_consent, timeout)` for tests and an explicit,
+  clearly-documented opt-in (e.g. `CRAFT_MCP_AUTO_CONSENT=1`) for trusted local development only.
+- **Surface the disclosure.** When a tool needs consent, return the existing
+  `ToolCallResult::NeedsConsent { disclosure }`. The `Disclosure` names *kinds and sizes* of data that
+  would leave the machine — never contents. The agent relays this to the user in conversation.
+- **Approve in the launcher.** The human approves from the ArtCraft Launcher (see §5), which writes
+  the grant into the per-app `ConsentFile` ledger (`consent/<app>.json`) via `ledger.grant(d)` /
+  `grant_until(d, expires_at)`. The bridge re-checks the ledger on start and proceeds only if a valid
+  grant exists. There is no path where consent is granted without a person approving in the launcher/app.
+- **Local vs remote.** Preserve the existing rule that purely-local operations (`Locality::Local`) do
+  not require consent — they never leave the machine. Only remote destinations trigger the consent
+  round-trip.
 
-**Record approval as an MCP action.** Add consent tools so a human's approval is recorded *through*
-the bridge rather than bypassed:
+### 2. How a caller is authenticated — from the start
 
-- `consent/pending` — list disclosures currently requiring consent (so the agent can show what is outstanding).
-- `consent/grant { disclosure_id, [expires_at] }` — grant one specific pending disclosure, persisted
-  to the app's per-app `ConsentFile` ledger (`consent/<app>.json`) via `ledger.grant(d)` /
-  `grant_until(d, expires_at)`. Same semantics and revocability as the apps' own ledger.
-- (Optional) `consent/revoke { disclosure_id }`.
+Jeremy: callers must authenticate *from the start*, not as a later step. So authentication is core,
+not an optional hardening:
 
-**Why this keeps a human in the loop.** The agent must (a) show the disclosure to the user, (b) get an
-explicit "yes", then (c) call `consent/grant`. There is no path where consent is granted without a
-human saying yes. The grant is persisted and revocable, matching app ledger semantics.
-
-**Local vs remote.** Preserve the existing rule that purely-local operations (`Locality::Local`) do
-not require consent — they never leave the machine. Only remote destinations trigger the consent
-round-trip.
-
-### 2. How a caller is authenticated
-
-The trust boundary stays **localhost-only** (bind `127.0.0.1` only, as today). On top of that:
-
-- **Recommended now:** keep localhost-only and rely on fail-closed consent (§1) so even an unauthenticated
-  local process cannot send data without explicit per-call consent. This closes the dangerous
-  combination (silent consent) without blocking the merge on auth machinery.
-- **Follow-up hardening:** once §3's keychain wiring is in place, add an optional per-install bearer
-  token: generate a random token at first run, store it in the OS keychain (`KeychainStore`), require
-  `Authorization: Bearer <token>` on `/mcp`, and write it into the same `ng-mcp.json` entry's
-  `headers` field the installer already writes. A stray local process then needs the keychain-held
-  token, not just network reachability.
-
-**Open question:** is localhost-only + fail-closed consent acceptable as day-one, with the bearer
-token as a follow-up? Or should the token be required from the start?
+- **Trust boundary stays localhost-only** (bind `127.0.0.1` only).
+- **Per-install bearer token.** Generate a random token at first run, store it in the OS keychain
+  (`KeychainStore`), and require `Authorization: Bearer <token>` on `/mcp`. The token is written into
+  the same `ng-mcp.json` entry's `headers` field the installer already writes (and surfaced in the
+  launcher so a human can manage it). A stray local process then needs the keychain-held token, not
+  just network reachability.
+- **The AI model / agent is a caller too.** Because the bridge is driven by an LLM host, the host's
+  own identity must be authenticated — which is why approval lives in the launcher (a human boundary),
+  not in an MCP tool the model could call.
 
 ### 3. How it uses the shared store
 
@@ -140,6 +132,31 @@ so it reconnects.
   restarting Bionic makes the Craft AI MCP appear and connect (bridge running, `tools/list` returns all
   built-in tools).
 
+### 5. Product: ArtCraft Launcher control for the bridge
+
+To make consent and service management a *human* act, add a section to the ArtCraft Launcher Settings
+(see [artcraft-settings-toggle-area.png](images/artcraft-settings-toggle-area.png)) that controls the
+MCP bridge and surfaces app visibility. This is the "approve in the launcher" point Jeremy asked for,
+and it also answers "where are my apps / what's installed."
+
+Proposed controls (in the highlighted area of ArtCraft Settings):
+
+- **Enable/disable the Craft AI MCP bridge** — start/stop the `craft-ai-mcp` service and toggle its
+  entry in `ng-mcp.json`. This replaces the hidden logon scheduled task with a visible, user-controlled
+  switch.
+- **Consent approvals** — list outstanding disclosures and let the human approve/revoke them (writing
+  to the per-app `ConsentFile` ledger). This is where "a person approves in the launcher" happens.
+- **Install location + installed apps** — show the default install folder (`C:\Programs`, see
+  [artcraft-install-folder.png](images/artcraft-install-folder.png)) and the list of installed Craft
+  apps, so users know what's present and where.
+- **MCP registration for other hosts** — an option to (re)write the `Craft AI` entry into a host's MCP
+  config (Bionic/LM Studio), and optionally expose the bridge for third-party local clients.
+
+Evidence of the target surface:
+
+- [bionic-mcp-servers-list.png](images/bionic-mcp-servers-list.png) — Bionic's "Connected MCP Servers"
+  list, showing all Craft AI apps connected (the goal state the bridge joins).
+
 ## What this does NOT do
 
 - No paid or live service calls.
@@ -149,17 +166,18 @@ so it reconnects.
 
 ## Open questions for review
 
-1. **Consent mechanism:** MCP `consent/grant` tools (§1) vs. requiring approval in the app/launcher UI?
-   I propose the MCP tools — they fit the host model and keep the human in the loop.
-2. **Auth level:** localhost-only + fail-closed consent now, bearer token later — acceptable, or day-one?
-3. **Start-up / registration:** user-initiated chat install (copy-paste prompt, §4) as the recommended
-   flow — agree? (Validated on a real Bionic install.) Future: integrate with Bionic's own lifecycle if
-   it supports launching long-running MCP servers.
+1. **Consent location:** approve in the ArtCraft Launcher (§5) rather than via an MCP `consent/grant`
+   tool — agree? (Jeremy: yes, a person must approve in the app/launcher.)
+2. **Auth level:** per-install bearer token required from the start (callers authenticate from the
+   beginning), not as a later hardening — agree?
+3. **Start-up / registration:** user-initiated chat install (§4) *plus* launcher control (§5) — is
+   the combination right, or should the launcher be the sole control surface?
 4. **Alignment with craft-libs#248:** which parts of that draft should this adopt vs. diverge from?
 
 ## Next steps
 
 1. Review this proposal (Jeremy8776 + dylanmtaylor).
-2. On approval, implement in a focused PR: fail-closed consent + consent tools; `AiClient::standard`
-   wiring; remove the auto-start pattern.
+2. On approval, implement in a focused PR: fail-closed consent (approval via launcher); day-one
+   bearer-token auth; `AiClient::standard` wiring; remove the auto-start pattern.
 3. Add scripted tests for the consent round-trip and store wiring — no live/paid calls.
+4. Coordinate the ArtCraft Launcher controls (§5) with the launcher team / craft-libs#248.
