@@ -486,6 +486,62 @@ fn a_refresh_keeps_declared_abilities_and_models() {
     );
 }
 
+/// An input a person added to an ability the server reports comes back after a refresh, and
+/// withdrawing takes back only that input.
+#[test]
+fn a_refresh_keeps_an_input_a_person_added_to_a_reported_ability() {
+    let w = world(Some(file()));
+    let mut wider = tool("fill");
+    wider.inputs.push(craft_ai_core::model::InputRole::Mask);
+    w.desk
+        .assign_model(
+            &wider,
+            &one(),
+            &model("reported"),
+            &ChoiceScope::Suite,
+            &declared(),
+        )
+        .unwrap();
+    let mut reported = craft_ai_core::ModelInfo::new(model("reported"), "Reported");
+    reported.capabilities.push(
+        craft_ai_core::model::CapabilitySpec::new("image.generate".parse().unwrap())
+            .accepting(craft_ai_core::model::InputRole::Prompt, 1),
+    );
+    refresh(&w, vec![reported]);
+    let state = w
+        .desk
+        .model_choice_state(&wider, &one(), &model("reported"))
+        .unwrap();
+    assert_eq!(state.available, Ok(()), "the added input came back");
+
+    let done = w
+        .desk
+        .withdraw_model(
+            &wider,
+            &one(),
+            &model("reported"),
+            &ChoiceScope::Suite,
+            Withdraw::ChoiceAndDeclaredAbility,
+        )
+        .unwrap();
+    assert!(done.ability_removed);
+    let store = saved(&w);
+    let spec = store.connections[0]
+        .model(&model("reported"))
+        .and_then(|m| m.spec_for(&"image.generate".parse().unwrap()))
+        .cloned()
+        .unwrap();
+    assert!(
+        spec.accepts
+            .contains_key(&craft_ai_core::model::InputRole::Prompt)
+    );
+    assert!(
+        !spec
+            .accepts
+            .contains_key(&craft_ai_core::model::InputRole::Mask)
+    );
+}
+
 #[test]
 fn a_refresh_reports_a_choice_it_could_not_keep_and_leaves_the_binding() {
     let w = world(Some(file()));

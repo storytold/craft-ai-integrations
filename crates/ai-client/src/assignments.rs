@@ -8,12 +8,17 @@
 //! Invariants:
 //! - The caller states its intent. A model is never chosen as a side effect of a repair.
 //! - An ability a provider reported is never removed. An ability a person declared carries a tag
-//!   ([`declared_tag`]), because comparing its shape cannot tell the two apart.
+//!   ([`declared_tag`]), and so does an input a person added to a reported ability
+//!   ([`declared_input_tag`]), because comparing its shape cannot tell the two apart. A refresh or a
+//!   saved form puts both back on top of what the provider reports.
+//! - A route the adapter says it would refuse is never assigned or reported as available, as in
+//!   [`ToolDesk::choose`]. A provider with no adapter in this build is not refused here.
 //! - Withdrawing refuses while another binding still needs the ability, rather than leaving that
 //!   binding stale or silently deleting someone's choice.
 //! - A suite choice never touches an app's own override, and an app choice never touches the suite
 //!   default. The other layer is reported so a host can show it.
 
+use craft_ai_core::model::InputRole;
 use craft_ai_core::model::{CapabilitySpec, ModelInfo};
 use craft_ai_core::role::resolve;
 use craft_ai_core::{
@@ -22,6 +27,7 @@ use craft_ai_core::{
 };
 use craft_ai_features::builtin;
 
+use crate::route_support::RouteSupport;
 use crate::tools::ToolDesk;
 
 /// Marks a model the connection did not list, added only because a person assigned it to a tool.
@@ -30,6 +36,34 @@ const DECLARED_MODEL: &str = "declared-model";
 /// Marks an ability a person declared, as opposed to one the provider reported.
 fn declared_tag(capability: &CapabilityId) -> String {
     format!("declared:{capability}")
+}
+
+/// The start of every [`declared_input_tag`] for `capability`.
+fn declared_input_prefix(capability: &CapabilityId) -> String {
+    format!("declared-input:{capability}:")
+}
+
+/// Marks an input a person added to an ability the provider reported.
+fn declared_input_tag(capability: &CapabilityId, input: &InputRole) -> String {
+    format!("{}{input}", declared_input_prefix(capability))
+}
+
+/// Refuses a route the adapter for `connection` says it would refuse. An adapter that says
+/// nothing, or a provider with no adapter in this build, is not refused: the suite default may
+/// name a model only some apps can run.
+fn refuse_unsupported(
+    desk: &ToolDesk,
+    role: &Role,
+    connection: &Connection,
+    model: &ModelId,
+) -> Result<(), AiError> {
+    match desk
+        .client
+        .route_support(connection, model, &role.capability, &role.inputs)
+    {
+        RouteSupport::Unsupported { reason } => Err(AiError::unsupported(reason)),
+        RouteSupport::Supported | RouteSupport::Untested => Ok(()),
+    }
 }
 
 /// Which choice an operation acts on.
@@ -113,8 +147,9 @@ impl ToolDesk {
             if let Ability::DeclaredByPerson { label } = ability {
                 declare(store, role, connection, model, label)?;
             }
-            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+            let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
+            refuse_unsupported(self, role, resolved.connection, model)?;
             let layer = layer_mut(store, scope);
             let replaced = layer
                 .iter()
@@ -146,6 +181,11 @@ impl ToolDesk {
         what: Withdraw,
     ) -> Result<Withdrawn, AiError> {
         self.shared.try_update(|store| {
+            // A custom tool removed and registered again with another job is a different tool: a
+            // caller holding the old one must not take back the new choice or its ability.
+            store
+                .check_tool(role)
+                .map_err(|e| AiError::invalid(e.to_string()))?;
             // An app with no settings yet has no choice to withdraw, and gets no empty entry.
             let layer = match scope {
                 ChoiceScope::Suite => Some(&mut store.defaults),
@@ -191,9 +231,9 @@ impl ToolDesk {
             .check_tool(role)
             .map_err(|e| e.to_string())
             .and_then(|()| {
-                resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
-                    .map(|_| ())
-                    .map_err(|e| e.to_string())
+                let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+                    .map_err(|e| e.to_string())?;
+                refuse_unsupported(self, role, resolved.connection, model).map_err(|e| e.message)
             });
         Ok(ToolChoiceState {
             suite_selected: store.defaults.iter().any(|b| b.role == role.id && here(b)),
@@ -237,8 +277,9 @@ fn connection_mut<'a>(
         .ok_or_else(|| AiError::invalid(format!("connection {id} no longer exists")))
 }
 
-/// Writes the ability onto the model. An ability the provider reported is never narrowed, and
-/// inputs added to it are not tagged, so withdrawing can never take the provider's ability away.
+/// Writes the ability onto the model. An ability the provider reported is never narrowed. Each
+/// input added to it is tagged on its own, so a refresh can put it back and withdrawing takes back
+/// only that input, never the provider's ability.
 fn declare(
     store: &mut StoreFile,
     role: &Role,
@@ -264,7 +305,10 @@ fn declare(
     {
         Some(spec) => {
             for input in &role.inputs {
-                spec.accepts.entry(input.clone()).or_insert(1);
+                if !spec.accepts.contains_key(input) {
+                    spec.accepts.insert(input.clone(), 1);
+                    info.tags.push(declared_input_tag(&role.capability, input));
+                }
             }
         }
         None => {
@@ -279,7 +323,8 @@ fn declare(
     Ok(())
 }
 
-/// Removes the ability if a person declared it. Refused while a binding still needs it.
+/// Removes the ability if a person declared it, or the inputs a person added to a reported one.
+/// Refused while a binding still needs it.
 fn forget_declared(
     store: &mut StoreFile,
     role: &Role,
@@ -287,12 +332,17 @@ fn forget_declared(
     model: &ModelId,
 ) -> Result<bool, AiError> {
     let tag = declared_tag(&role.capability);
+    let input_tag = |input: &InputRole| declared_input_tag(&role.capability, input);
     let declared = store
         .connections
         .iter()
         .find(|c| &c.id == connection)
         .and_then(|c| c.model(model))
-        .is_some_and(|m| m.tags.contains(&tag));
+        .is_some_and(|m| {
+            m.tags.contains(&tag)
+                || m.spec_for(&role.capability)
+                    .is_some_and(|s| s.accepts.keys().any(|i| m.tags.contains(&input_tag(i))))
+        });
     if !declared {
         return Ok(false);
     }
@@ -306,9 +356,19 @@ fn forget_declared(
         return Ok(false);
     };
     let info = &mut saved.models[index];
-    info.capabilities
-        .retain(|spec| spec.capability != role.capability);
-    info.tags.retain(|t| t != &tag);
+    if info.tags.contains(&tag) {
+        info.capabilities
+            .retain(|spec| spec.capability != role.capability);
+    } else if let Some(spec) = info
+        .capabilities
+        .iter_mut()
+        .find(|spec| spec.capability == role.capability)
+    {
+        spec.accepts
+            .retain(|input, _| !info.tags.contains(&input_tag(input)));
+    }
+    let prefix = declared_input_prefix(&role.capability);
+    info.tags.retain(|t| t != &tag && !t.starts_with(&prefix));
     if info.capabilities.is_empty() && info.tags.iter().any(|t| t == DECLARED_MODEL) {
         saved.models.remove(index);
     }
@@ -347,26 +407,55 @@ fn binding_needing(
         .map(|b| b.role.clone())
 }
 
-/// A saved list after a refresh: what the server reported, plus what a person declared on top. A
-/// declared ability the server now reports itself stops being marked as declared.
+/// A saved list after a refresh or a saved form: the new list, plus what a person declared on top of
+/// the old one. A declared ability or input the new list already has stops being marked as
+/// declared, since the provider now reports it.
 pub(crate) fn refreshed_models(old: &[ModelInfo], reported: Vec<ModelInfo>) -> Vec<ModelInfo> {
     let mut models = reported;
     for before in old {
         match models.iter_mut().find(|m| m.id == before.id) {
-            Some(now) => {
-                for spec in &before.capabilities {
-                    let tag = declared_tag(&spec.capability);
-                    if before.tags.contains(&tag) && now.spec_for(&spec.capability).is_none() {
-                        now.capabilities.push(spec.clone());
-                        now.tags.push(tag);
-                    }
-                }
-            }
+            Some(now) => carry_declared(before, now),
             None if before.tags.iter().any(|t| t == DECLARED_MODEL) => models.push(before.clone()),
             None => {}
         }
     }
     models
+}
+
+/// Puts what a person declared on `before` back onto `now`. A whole declared ability the provider
+/// does not report comes back as it was. Where the provider reports the ability, only the inputs a
+/// person declared and the provider lacks are added, each tagged so it can be taken back later.
+fn carry_declared(before: &ModelInfo, now: &mut ModelInfo) {
+    for spec in &before.capabilities {
+        let tag = declared_tag(&spec.capability);
+        let whole = before.tags.contains(&tag);
+        if now.tags.contains(&tag) {
+            continue;
+        }
+        match now
+            .capabilities
+            .iter_mut()
+            .find(|s| s.capability == spec.capability)
+        {
+            None if whole => {
+                now.capabilities.push(spec.clone());
+                now.tags.push(tag);
+            }
+            None => {}
+            Some(reported) => {
+                for (input, most) in &spec.accepts {
+                    let input_tag = declared_input_tag(&spec.capability, input);
+                    let declared = whole || before.tags.contains(&input_tag);
+                    if declared && !reported.accepts.contains_key(input) {
+                        reported.accepts.insert(input.clone(), *most);
+                        if !now.tags.contains(&input_tag) {
+                            now.tags.push(input_tag);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A person's choice whose model the connection no longer offers. The choice is kept, so it works
