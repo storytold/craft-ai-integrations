@@ -310,9 +310,10 @@ impl ConnectionPanel {
                 let models = report.models.len();
                 let millis = u64::try_from(report.elapsed.as_millis()).unwrap_or(u64::MAX);
                 // A custom connection's models are the ones a person declared. Its test lists none,
-                // so it confirms the address without replacing them with an empty list.
+                // so it confirms the address without replacing them with an empty list, and the
+                // models then belong to that address, or a save would drop them.
                 let accepted = match report.probe {
-                    Some(_) => tested.trim() == self.form.draft.endpoint.trim(),
+                    Some(_) => self.form.draft.confirm_models_for(tested),
                     None => self.form.draft.set_models(tested, report.models),
                 };
                 if accepted {

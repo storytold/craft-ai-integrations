@@ -38,10 +38,16 @@ CA = [
      'Ok(_) => {}', 'Ok(_) => item.bytes = None,',
      CL, 'disclosed_size', 'other_payloads_keep_their_size'),
     ('late-model-answer-taken', DRAFT,
-     'if address.trim() != self.endpoint.trim() {', 'if false {',
+     '''pub fn set_models(&mut self, address: &str, models: Vec<ModelInfo>) -> bool {
+        if address.trim() != self.endpoint.trim() {''',
+     '''pub fn set_models(&mut self, address: &str, models: Vec<ModelInfo>) -> bool {
+        if false {''',
      M, 'draft_provenance', 'a_test_that_answers_after_the_address_moved_on'),
     ('probe-address-forgotten', DRAFT,
-     'self.models_for = Some(self.endpoint.trim().to_owned());', 'self.models_for = None;',
+     '''self.models = models;
+        self.models_for = Some(self.endpoint.trim().to_owned());''',
+     '''self.models = models;
+        self.models_for = None;''',
      M, 'draft_provenance', 'new_draft_discards_models'),
     ('model-address-not-checked', DRAFT,
      '.is_none_or(|origin| origin == address)', '.is_none_or(|_| true)',
@@ -216,9 +222,30 @@ CA = [
      'let _ = self.shared.try_update(|file| {', 'let _ = self.shared.update(|file| {',
      CL, 'withdrawal_scope', 'changes_with_nothing_to_change_write_nothing'),
     ('probe-answer-wipes-declared-models', 'crates/ai-egui/src/panel.rs',
-     'Some(_) => tested.trim() == self.form.draft.endpoint.trim(),',
+     'Some(_) => self.form.draft.confirm_models_for(tested),',
      'Some(_) => self.form.draft.set_models(tested, Vec::new()),',
      'craft-ai-egui', 'lib', 'a_custom_connection_test_keeps_the_declared_models'),
+    ('custom-test-leaves-models-on-the-old-address', DRAFT,
+     '''            return false;
+        }
+        self.models_for = Some(self.endpoint.trim().to_owned());
+        true
+    }
+
+    /// Known provenance''',
+     '''            return false;
+        }
+        true
+    }
+
+    /// Known provenance''',
+     'craft-ai-egui', 'lib', 'a_passed_custom_test_at_a_new_address'),
+    ('custom-test-confirms-an-old-address', DRAFT,
+     '''    pub fn confirm_models_for(&mut self, address: &str) -> bool {
+        if address.trim() != self.endpoint.trim() {''',
+     '''    pub fn confirm_models_for(&mut self, address: &str) -> bool {
+        if false && address.trim() != self.endpoint.trim() {''',
+     M, 'draft_provenance', 'confirming_models_moves_them_only'),
     ('refresh-hides-a-lost-choice', MANAGE,
      'Ok(unavailable_choices(file, id))', 'Ok(Vec::new())',
      CL, 'model_refresh', 'a_refresh_reports'),
