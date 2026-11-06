@@ -70,6 +70,21 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Safe local error without paths reaching the screen.
+/// Opens an original for reading without blocking on a pipe or device at its name (`O_NONBLOCK`
+/// on Unix) and refuses anything but a plain file, judged on the open handle. A pipe would
+/// otherwise stall preparation forever while it holds the model's lock.
+fn open_plain_file(path: &Path) -> std::io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a plain file"));
+    }
+    Ok(file)
+}
+
 fn file_error(_: impl std::fmt::Display) -> AiError {
     AiError::unsupported(
         "The saved model files could not be read or written. Check the model folder and try again.",
@@ -236,7 +251,11 @@ pub(crate) fn prepare(
     let output = scratch(output_role)?;
     for file in &bundle.files {
         let snapshot = work.path().join(&file.name);
-        let input = File::open(source.join(&file.name)).map_err(file_error)?;
+        let input = open_plain_file(&source.join(&file.name)).map_err(|_| {
+            AiError::unsupported(
+                "The original model files do not match this option. Check them in Set up AI first.",
+            )
+        })?;
         let mut target = File::create(&snapshot).map_err(file_error)?;
         let copied = std::io::copy(&mut input.take(file.size.saturating_add(1)), &mut target)
             .map_err(file_error)?;

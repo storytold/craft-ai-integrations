@@ -2020,6 +2020,7 @@ dependencies = [
  "burn-onnx",
  "craft-ai-core",
  "craft-ai-features",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.11.1",
