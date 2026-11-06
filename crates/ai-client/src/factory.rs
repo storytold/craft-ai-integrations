@@ -25,7 +25,8 @@ use craft_ai_seedance::{SeedanceConfig, SeedanceProvider};
 use craft_ai_vertex::{VertexConfig, VertexProvider};
 
 use crate::route_support::{
-    AddressRule, RouteQuery, RouteSupport, SupportFn, at_address, list_check, vertex_check,
+    AddressRule, RouteQuery, RouteSupport, SupportFn, at_address, gemini_check, list_check,
+    vertex_check,
 };
 
 /// Builds a provider for one connection.
@@ -353,8 +354,9 @@ impl ProviderFactory {
             .map_or(RouteSupport::Untested, |check| check(query))
     }
 
-    /// The built-in adapters that serve a fixed list of models say so. Those that take any model
-    /// the service offers, and adapters added later, stay untested.
+    /// The built-in adapters that serve a fixed list of models say so, as does Gemini, whose
+    /// model rule and job are fixed. Those that take any model the service offers, and adapters
+    /// added later, stay untested.
     fn declare_built_in_support(&mut self) {
         let lists: [(&str, Vec<_>, AddressRule); 3] = [
             (
@@ -373,6 +375,11 @@ impl ProviderFactory {
             self.support
                 .insert(name.to_owned(), at_address(allowed, list_check(models)));
         }
+        let gemini: Arc<SupportFn> = Arc::new(gemini_check);
+        self.support.insert(
+            "gemini".to_owned(),
+            at_address(GeminiProvider::address_allowed, gemini),
+        );
         let vertex: Arc<SupportFn> = Arc::new(vertex_check);
         self.support.insert(
             "vertex-express".to_owned(),

@@ -65,6 +65,7 @@ pub struct GeminiConfig {
     pub request_timeout: Duration,
 }
 impl GeminiConfig {
+    /// A config for `base_url` and `api_key`, with a 10 s connect and a 240 s request timeout.
     pub fn new(base_url: impl Into<String>, api_key: SecretString) -> Self {
         Self {
             base_url: base_url.into(),
@@ -80,6 +81,7 @@ impl GeminiConfig {
 /// exits, or when the worker never starts.
 struct Permit(Arc<AtomicUsize>);
 impl Permit {
+    /// Takes a place, or `None` when [`MAX_RUNNING`] requests are already in flight.
     fn acquire(in_flight: &Arc<AtomicUsize>) -> Option<Self> {
         // Over the limit, dropping the permit takes the count back down. Submits racing at the
         // limit may refuse one too many, never admit one too many.
@@ -88,6 +90,7 @@ impl Permit {
     }
 }
 impl Drop for Permit {
+    /// Gives the place back.
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
@@ -102,12 +105,15 @@ pub struct GeminiProvider {
     sequence: AtomicU64,
 }
 impl std::fmt::Debug for GeminiProvider {
+    /// Prints the type name only, so the key can never reach a log.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("GeminiProvider")
     }
 }
 
 impl GeminiProvider {
+    /// Builds the adapter. Refuses an empty or multi-line key, and any address other than the
+    /// official one or a local test server (see [`address_allowed`](Self::address_allowed)).
     pub fn new(config: GeminiConfig) -> Result<Self, AiError> {
         if config.api_key.is_empty()
             || config
@@ -119,9 +125,8 @@ impl GeminiProvider {
             return Err(AiError::invalid("a single-line Gemini API key is required"));
         }
         let base = config.base_url.trim_end_matches('/');
-        let endpoint =
-            Endpoint::parse(base).map_err(|_| AiError::invalid("invalid Gemini API address"))?;
-        if base.contains(['?', '#']) || (!endpoint.is_loopback() && base != OFFICIAL) {
+        Endpoint::parse(base).map_err(|_| AiError::invalid("invalid Gemini API address"))?;
+        if !Self::address_allowed(base) {
             return Err(AiError::invalid(
                 "the Gemini API must use its official address",
             ));
@@ -145,6 +150,21 @@ impl GeminiProvider {
             in_flight: Arc::new(AtomicUsize::new(0)),
             sequence: AtomicU64::new(0),
         })
+    }
+
+    /// Whether [`new`](Self::new) accepts `base_url`: the official address or a test server on this
+    /// computer, with no query or fragment. It reads no key and contacts nothing, so the client's
+    /// support check asks it before anything is built.
+    pub fn address_allowed(base_url: &str) -> bool {
+        let base = base_url.trim_end_matches('/');
+        !base.contains(['?', '#'])
+            && Endpoint::parse(base).is_ok_and(|e| e.is_loopback() || base == OFFICIAL)
+    }
+
+    /// Whether [`submit`](Provider::submit) accepts `model`: a listed model, or any well-formed
+    /// `gemini-…-image…` id, so a newer model works without an update to this crate.
+    pub fn model_allowed(model: &str) -> bool {
+        fill::model_allowed(model)
     }
 
     fn catalog() -> Vec<ModelInfo> {
@@ -283,6 +303,7 @@ fn run_fill(
 }
 
 impl Provider for GeminiProvider {
+    /// Checks the key with one free model listing, then offers this crate's own model list.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         // Listing models is free and checks the key; one entry is enough to know it works.
         call(
@@ -295,6 +316,8 @@ impl Provider for GeminiProvider {
         Ok(Self::catalog())
     }
 
+    /// Checks the model, job and inputs, makes room in the registry (see `registry::admit`), and
+    /// starts the fill on its own thread. Refuses before anything is sent.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         if !fill::model_allowed(model.as_str()) {
             return Err(AiError::unsupported(format!(
@@ -389,6 +412,8 @@ impl Provider for GeminiProvider {
         Ok(id)
     }
 
+    /// Hands out the job's state and any events not yet collected, and marks a terminal state as
+    /// delivered.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let mut jobs = lock(&self.jobs)?;
         let slot = jobs
@@ -400,6 +425,8 @@ impl Provider for GeminiProvider {
         Ok(snapshot)
     }
 
+    /// Stops waiting for the answer and records when the job ended, so its age limit applies. A
+    /// request already sent may still be billed.
     fn cancel(&self, id: &JobId) -> Result<(), AiError> {
         let mut jobs = lock(&self.jobs)?;
         let slot = jobs
