@@ -158,3 +158,17 @@ fn the_instruction_names_references_by_image_number() {
         "{three}"
     );
 }
+
+/// The pixel-count limit on its own: a picture within the side limit but over the pixel count is
+/// refused, and the same picture passes when only the side limit applies.
+#[test]
+fn the_pixel_count_limit_refuses_on_its_own() {
+    let wide = inline(png_rgb(11, 10, [3, 3, 3]));
+    let few_pixels = Bounds {
+        max_pixels: 100,
+        ..BOUNDS
+    };
+    let err = references(&request(vec![wide.clone()]), few_pixels, RULE).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest, "{}", err.message);
+    assert!(references(&request(vec![wide]), BOUNDS, RULE).is_ok());
+}

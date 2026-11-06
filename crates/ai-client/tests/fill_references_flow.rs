@@ -67,9 +67,15 @@ fn client(
     dir: &tempfile::TempDir,
 ) -> AiClient {
     let role = fill_role();
+    // The store refuses a remote connection at a loopback address, so a test server is local.
+    let locality = if endpoint.starts_with("http://127.0.0.1") {
+        "local"
+    } else {
+        "remote"
+    };
     let connection: Connection = serde_json::from_value(serde_json::json!({
         "id": "fill-refs", "label": "Fill", "provider": provider, "endpoint": endpoint,
-        "locality": "remote", "auth": {"kind": "api_key", "secret": "fill-refs-key"},
+        "locality": locality, "auth": {"kind": "api_key", "secret": "fill-refs-key"},
         "billing": "metered", "models": models
     }))
     .unwrap();
@@ -173,14 +179,14 @@ fn omni_fill_with_a_reference_discloses_it_and_waits_for_consent() {
 }
 
 /// FLUX.1 Fill: a reference is refused at plan time, before anyone is asked to agree, and nothing
-/// is sent.
+/// is sent. The saved connection points at the test server, so any request would be counted.
 #[test]
 fn flux_fill_with_a_reference_is_refused_before_consent() {
     let server = Server::start(|_| Reply::Json(500, "unexpected".into()));
     let dir = tempfile::tempdir().unwrap();
     let c = client(
         "bfl",
-        "https://api.bfl.ai/v1",
+        &server.url,
         BflProvider::catalog(),
         "flux-pro-1.0-fill",
         &server,

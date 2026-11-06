@@ -97,6 +97,15 @@ fn references_follow_the_source_and_mask_in_request_order() {
     let data = |i: usize| base64_decode(input[i]["data"].as_str().unwrap()).unwrap();
     assert_eq!(data(1), png_rgb([10, 20, 30]), "source first");
     assert_eq!(input[2]["mime_type"], "image/png", "then the mask");
+    // The mask itself, normalised to opaque grayscale (all white here), not the source sent twice.
+    let mut reader = png::Decoder::new(std::io::Cursor::new(data(2)))
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!((frame.width, frame.height), (8, 8));
+    assert_eq!(frame.color_type, png::ColorType::Grayscale);
+    assert_eq!(&pixels[..frame.buffer_size()], &[255; 64]);
     assert_eq!(
         (data(3), input[3]["mime_type"].clone()),
         (first, json!("image/png"))
