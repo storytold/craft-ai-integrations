@@ -122,6 +122,11 @@ fn try_builtin() -> Option<Vec<Feature>> {
             "Google Gemini (Nano Banana)",
             "Your own Google AI Studio key, billed by Google. Prompt-guided editing: Gemini takes no mask, so it is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Built and tested offline only.",
         ),
+        cloud(
+            "artcraft-omni",
+            "ArtCraft",
+            "Staff-enabled API key. Whether a subscription covers it is unverified. Nano Banana is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Built and tested offline only.",
+        ),
     ];
 
     let mut expand = feature(
