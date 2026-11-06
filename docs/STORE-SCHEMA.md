@@ -37,3 +37,18 @@ hash of `model` beside `model` would be wrong after an older build changes `mode
 
 A bump is a last resort, because it stops older apps from reading the connections they already use.
 Prefer an additive change.
+
+## Reserved model tags
+
+A model's `tags` hold catalogue labels such as `recommended`, and also the shared layer's markers for
+what a person declared when they assigned the model to a tool. A host must not show these as labels:
+
+| Tag | Means |
+|---|---|
+| `declared-model` | The connection did not list this model; a person added it for a tool |
+| `declared:<capability>` | A person declared this whole ability; the provider did not report it |
+| `declared-input:<capability>:<input>` | A person added this input to an ability the provider reports |
+
+A refresh or a saved form puts these declarations back on top of the provider's new list, and a
+withdrawal takes back only what they mark. An older build that rewrites the list drops a marker and
+the declaration it marks together, so the two never disagree.

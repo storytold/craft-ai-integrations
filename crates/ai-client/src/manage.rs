@@ -84,8 +84,8 @@ pub struct Saved {
     pub id: ConnectionId,
     /// Something minor went wrong after the save (an old key could not be removed).
     pub warning: Option<String>,
-    /// Choices whose model this connection no longer lists after the save. They are kept, in case
-    /// the model comes back.
+    /// Choices this connection can no longer serve after the save: the model is gone, or still
+    /// listed without the ability or an input the tool needs. They are kept, in case it comes back.
     pub unavailable_choices: Vec<UnavailableChoice>,
 }
 
@@ -107,8 +107,9 @@ pub struct TestReport {
     pub elapsed: Duration,
     /// For a custom connection: what the test confirmed and could not confirm.
     pub probe: Option<ProbeReport>,
-    /// Choices whose model the connection no longer lists, once a remembered refresh is saved.
-    /// They are kept, in case the model comes back.
+    /// Choices the connection can no longer serve once a remembered refresh is saved: the model is
+    /// gone, or still listed without the ability or an input the tool needs. They are kept, in case
+    /// it comes back.
     pub unavailable_choices: Vec<UnavailableChoice>,
 }
 

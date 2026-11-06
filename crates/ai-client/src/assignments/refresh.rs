@@ -16,6 +16,11 @@ use super::{
 /// A saved list after a refresh or a saved form: the new list, plus what a person declared on top of
 /// the old one. A declared ability or input the new list already has stops being marked as
 /// declared, since the provider now reports it.
+///
+/// A model added only by [`ToolDesk::assign_model`](crate::ToolDesk::assign_model) comes back even
+/// when the new list leaves it out, because a test answer cannot be told from a form that removed it
+/// on purpose. Keeping it loses nothing; [`ToolDesk::withdraw_model`](crate::ToolDesk::withdraw_model)
+/// is the way to remove it.
 pub(crate) fn refreshed_models(old: &[ModelInfo], reported: Vec<ModelInfo>) -> Vec<ModelInfo> {
     let mut models = reported;
     for before in old {
