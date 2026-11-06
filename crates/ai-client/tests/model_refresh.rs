@@ -235,3 +235,38 @@ fn a_refresh_reports_a_choice_whose_model_stays_listed_but_lost_the_ability() {
         assert_eq!(saved(&w).defaults.len(), 1, "the choice is kept");
     }
 }
+
+/// An input a person added survives a refresh that drops the whole ability, and comes back when a
+/// later refresh reports the ability again without it.
+#[test]
+fn a_declared_input_survives_two_refreshes_that_drop_and_restore_the_ability() {
+    let w = world(Some(file()));
+    let mut wider = tool("fill");
+    wider.inputs.push(craft_ai_core::model::InputRole::Mask);
+    w.desk
+        .assign_model(
+            &wider,
+            &one(),
+            &model("reported"),
+            &ChoiceScope::Suite,
+            &declared(),
+        )
+        .unwrap();
+
+    refresh(
+        &w,
+        vec![craft_ai_core::ModelInfo::new(model("reported"), "Reported")],
+    );
+    let mut restored = craft_ai_core::ModelInfo::new(model("reported"), "Reported");
+    restored.capabilities.push(
+        craft_ai_core::model::CapabilitySpec::new("image.generate".parse().unwrap())
+            .accepting(craft_ai_core::model::InputRole::Prompt, 1),
+    );
+    refresh(&w, vec![restored]);
+
+    let state = w
+        .desk
+        .model_choice_state(&wider, &one(), &model("reported"))
+        .unwrap();
+    assert_eq!(state.available, Ok(()), "the declared input came back");
+}
