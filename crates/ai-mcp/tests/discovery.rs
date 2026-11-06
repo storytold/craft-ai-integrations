@@ -74,14 +74,19 @@ fn serve_json_sequence(pages: Vec<String>) -> String {
                     }
                 }
                 let mut q = queue.lock().unwrap();
-                let Some(body) = q.pop() else { continue; };
+                let Some(body) = q.pop() else {
+                    continue;
+                };
                 let has_next = !q.is_empty();
                 let mut resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
                     body.len(),
                 );
                 if has_next {
-                    resp.push_str(&format!("Link: <{}>; rel=\"next\"; type=\"application/json\"\r\n", base_url));
+                    resp.push_str(&format!(
+                        "Link: <{}>; rel=\"next\"; type=\"application/json\"\r\n",
+                        base_url
+                    ));
                 }
                 resp.push_str("Connection: close\r\n\r\n");
                 resp.push_str(&body);
@@ -142,6 +147,12 @@ fn discovery_follows_pagination_link_headers() {
     assert_eq!(repos.len(), 4, "expected both pages combined");
 
     let names: Vec<String> = repos.iter().map(|r| r.name.clone()).collect();
-    assert!(names.contains(&"photocraft".to_string()), "missing page-1 entry");
-    assert!(names.contains(&"unreal-demo".to_string()), "missing page-2 entry (pagination)");
+    assert!(
+        names.contains(&"photocraft".to_string()),
+        "missing page-1 entry"
+    );
+    assert!(
+        names.contains(&"unreal-demo".to_string()),
+        "missing page-2 entry (pagination)"
+    );
 }

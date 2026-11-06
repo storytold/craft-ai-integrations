@@ -42,10 +42,15 @@ fn main() {
     if let Ok(dir_str) = env::var("CRAFT_MCP_SKILLS_DIR") {
         let dir = PathBuf::from(&dir_str);
         if is_bionic_skills_dir(&dir) {
-            eprintln!("refusing to generate skills into Bionic's skills directory ({}) - use a separate staging folder and install via skill.install", dir.display());
+            eprintln!(
+                "refusing to generate skills into Bionic's skills directory ({}) - use a separate staging folder and install via skill.install",
+                dir.display()
+            );
         } else {
             match craft_ai_mcp::installer::write_skills(&dir, &craft_ai_features::builtin()) {
-                Ok(written) => println!("wrote {} skill folders to {}", written.len(), dir.display()),
+                Ok(written) => {
+                    println!("wrote {} skill folders to {}", written.len(), dir.display())
+                }
                 Err(e) => eprintln!("failed to write skills to {}: {e}", dir.display()),
             }
         }
@@ -92,6 +97,12 @@ fn is_bionic_skills_dir(p: &Path) -> bool {
     let comps: Vec<_> = canon.components().collect();
     // True when the resolved path ends in `.lmstudio/skills`, independent of separator style.
     comps.len() >= 2
-        && comps[comps.len() - 1].as_os_str().to_string_lossy().eq_ignore_ascii_case("skills")
-        && comps[comps.len() - 2].as_os_str().to_string_lossy().eq_ignore_ascii_case(".lmstudio")
+        && comps[comps.len() - 1]
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("skills")
+        && comps[comps.len() - 2]
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(".lmstudio")
 }

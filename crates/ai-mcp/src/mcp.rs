@@ -94,7 +94,11 @@ impl McpState {
             "tools/list" => Some(self.ok(id, self.tools_list())),
             "ping" => Some(self.ok(id, Ok(Value::Object(Map::new())))),
             "tools/call" => Some(self.ok(id, self.tools_call(request))),
-            _ => Some(error_response(id, -32601, format!("unknown method `{method}`"))),
+            _ => Some(error_response(
+                id,
+                -32601,
+                format!("unknown method `{method}`"),
+            )),
         }
     }
 
@@ -185,10 +189,7 @@ impl McpState {
 
         // Unknown tool names are a client error (JSON-RPC -32601). Known-tool execution outcomes
         // become MCP tool results with `isError` so the host can surface them plainly.
-        if !craft_ai_features::builtin()
-            .iter()
-            .any(|f| f.id == name)
-        {
+        if !craft_ai_features::builtin().iter().any(|f| f.id == name) {
             return Err(format!("unknown tool `{name}`"));
         }
 
@@ -342,7 +343,10 @@ mod tests {
             "params": { "protocolVersion": "2025-11-25" },
         });
         let resp = state.handle(&req).unwrap();
-        assert_eq!(resp["result"]["protocolVersion"].as_str().unwrap(), "2025-11-25");
+        assert_eq!(
+            resp["result"]["protocolVersion"].as_str().unwrap(),
+            "2025-11-25"
+        );
     }
 
     #[test]
@@ -356,7 +360,10 @@ mod tests {
             "params": { "protocolVersion": "2025-03-26" },
         });
         let resp = state.handle(&req).unwrap();
-        assert_eq!(resp["result"]["protocolVersion"].as_str().unwrap(), DEFAULT_PROTOCOL_VERSION);
+        assert_eq!(
+            resp["result"]["protocolVersion"].as_str().unwrap(),
+            DEFAULT_PROTOCOL_VERSION
+        );
     }
 
     #[test]
@@ -370,7 +377,10 @@ mod tests {
             "params": { "protocolVersion": "not-a-date" },
         });
         let resp = state.handle(&req).unwrap();
-        assert_eq!(resp["result"]["protocolVersion"].as_str().unwrap(), DEFAULT_PROTOCOL_VERSION);
+        assert_eq!(
+            resp["result"]["protocolVersion"].as_str().unwrap(),
+            DEFAULT_PROTOCOL_VERSION
+        );
     }
 
     #[test]
@@ -382,10 +392,10 @@ mod tests {
 
     #[test]
     fn is_protocol_version_rejects_malformed_dates() {
-        assert!(!is_protocol_version(""));             // empty
-        assert!(!is_protocol_version("2025-06-1"));    // too short
-        assert!(!is_protocol_version("abcd-ef-gh"));   // non-digit positions
-        assert!(!is_protocol_version("2025-06-18x"));  // too long
+        assert!(!is_protocol_version("")); // empty
+        assert!(!is_protocol_version("2025-06-1")); // too short
+        assert!(!is_protocol_version("abcd-ef-gh")); // non-digit positions
+        assert!(!is_protocol_version("2025-06-18x")); // too long
     }
 
     #[test]

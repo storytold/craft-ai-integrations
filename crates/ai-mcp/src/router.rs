@@ -10,12 +10,12 @@
 use std::time::Duration;
 
 use craft_ai_client::{AiClient, RoleStatus};
-use craft_ai_media::sniff;
 use craft_ai_core::{
     ConsentLedger, InputRole, JobState, Payload, PayloadKind, Request, Role,
     job::{Event, Output},
 };
 use craft_ai_features::Feature;
+use craft_ai_media::sniff;
 use serde_json::Value;
 
 /// An inline media asset returned by a job (bytes + MIME type), surfaced as MCP image content.
@@ -30,7 +30,10 @@ pub struct Media {
 pub enum ToolCallResult {
     /// The job ran to completion. `text` holds human-readable output lines; `media` holds any
     /// inline image assets (bytes + MIME type) returned by the provider.
-    Succeeded { text: Vec<String>, media: Vec<Media> },
+    Succeeded {
+        text: Vec<String>,
+        media: Vec<Media>,
+    },
     /// The tool is not usable yet. `reason` is safe to show verbatim and points at what is missing
     /// (no model chosen, key absent, file gone) — this is the "prompt to install" signal.
     Unavailable { reason: String },
@@ -233,8 +236,8 @@ fn sniff_type(data: &[u8]) -> &'static str {
 fn read_inline(path: &str) -> Result<Payload, String> {
     // Reject oversized files before allocating their full contents — a client-supplied path must
     // not let us stream an unbounded blob into memory.
-    let meta = std::fs::metadata(path)
-        .map_err(|e| format!("cannot stat source file '{path}': {e}"))?;
+    let meta =
+        std::fs::metadata(path).map_err(|e| format!("cannot stat source file '{path}': {e}"))?;
     if !meta.is_file() {
         return Err(format!("source file '{path}' is not a regular file"));
     }
@@ -253,7 +256,10 @@ fn read_inline(path: &str) -> Result<Payload, String> {
 fn decode_inline(b64: &str) -> Result<Payload, String> {
     // Strip whitespace (a client may wrap the base64 across lines), then use the strict core
     // decoder so malformed input is rejected rather than silently mangled.
-    let compact = b64.chars().filter(|c| !c.is_ascii_whitespace()).collect::<String>();
+    let compact = b64
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect::<String>();
     let data = craft_ai_core::payload::base64_decode(&compact)
         .ok_or_else(|| "bad base64 for source".to_string())?;
     Payload::inline(sniff_type(&data), data).map_err(|e| e.to_string())
@@ -372,5 +378,4 @@ mod tests {
         assert!(role_for("select-subject").is_some());
         assert!(role_for("not-a-tool").is_none());
     }
-
 }

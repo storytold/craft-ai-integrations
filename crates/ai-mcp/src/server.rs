@@ -7,8 +7,8 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -57,7 +57,9 @@ pub fn run(listener: TcpListener, state: McpState) {
     let state = Arc::new(state);
     let active = Arc::new(AtomicUsize::new(0));
     for result in listener.incoming() {
-        let Ok(mut stream) = result else { continue; };
+        let Ok(mut stream) = result else {
+            continue;
+        };
         // Reject overflow before spawning so we never exceed the cap.
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONCURRENT_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);
@@ -183,7 +185,13 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         body.extend_from_slice(&chunk);
     }
 
-    Ok(HttpRequest { method, path, content_type, origin, body })
+    Ok(HttpRequest {
+        method,
+        path,
+        content_type,
+        origin,
+        body,
+    })
 }
 
 /// Read bytes until the header block ends (`\r\n\r\n`). Returns everything seen so far. Bounded by

@@ -109,8 +109,7 @@ pub fn install_mcp_server(path: &Path, port: u16) -> Result<(), String> {
     // that created it keeps access after the swap.
     let tmp = NamedTempFile::new_in(path.parent().unwrap_or_else(|| Path::new(".")))
         .map_err(|e| format!("could not create temp file in {}: {e}", path.display()))?;
-    fs::write(tmp.path(), out.as_bytes())
-        .map_err(|e| format!("could not write temp file: {e}"))?;
+    fs::write(tmp.path(), out.as_bytes()).map_err(|e| format!("could not write temp file: {e}"))?;
     // Preserve the target's permissions on Unix (no-op elsewhere; NTFS ignores these bits).
     #[cfg(unix)]
     if let Ok(meta) = fs::metadata(path) {
