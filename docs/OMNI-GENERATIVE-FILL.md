@@ -13,14 +13,25 @@ white meaning edit and black meaning keep. Each input is uploaded to
 fresh idempotency token. No local filename is uploaded.
 
 The image-generation body contains the selected `model`, a fresh `idempotency_token`,
-`image_media_tokens` in source-then-mask order, `image_batch_count: 1` and an expanded
-`prompt`. The shared instruction asks the model to replace the white region, preserve the
-black region and match the scene. An empty prompt asks it to continue the surroundings.
+`image_media_tokens` in source, mask, then reference order, `image_batch_count: 1` and an
+expanded `prompt`. The shared instruction asks the model to replace the white region, preserve
+the black region and match the scene. An empty prompt asks it to continue the surroundings.
+
+## Reference pictures
+
+A fill may carry up to three `reference` inputs. This count is our own bound: Omni documents
+none, and every reference is one more upload. Each must be inline PNG data of at most 10 MB,
+within the same pixel bounds as the source, and must decode in full. All of them are checked
+before the first upload, so a refused reference means nothing was sent. They are uploaded after
+the source and mask in request order, and the instruction names them as images 3 onwards and
+tells the model to use them only as a guide, never to change the black region to match them.
+A connection saved before references were mapped gains them, as an optional input, when the
+store is read.
 
 Omni receives two ordinary image references. There is no dedicated mask parameter or
 pixel-preservation guarantee from this request. The host app must composite the result
-through its own selection mask. User reference attachments and generation parameters are
-not mapped by this adapter. A host may request several variations through separate jobs.
+through its own selection mask. Generation parameters are not mapped by this adapter. A
+host may request several variations through separate jobs.
 
 Fill results are retrieved as bounded image bytes from the documented HTTPS CDN, without
 the API key, cookies or redirects, and returned as an inline payload. Loopback delivery

@@ -2,8 +2,9 @@
 //!
 //! Omni has reference images, not a dedicated mask field. The normalized mask is the second
 //! reference, and the shared instruction explains it. Callers composite only inside the mask.
+//! A person's own reference pictures follow, in request order, each a PNG checked in full here.
 use craft_ai_core::{AiError, InputRole, Request};
-use craft_ai_media::mask::{self, Bounds};
+use craft_ai_media::mask::{self, Bounds, Reference, ReferenceRule};
 
 const BOUNDS: Bounds = Bounds {
     service: "ArtCraft Omni fill",
@@ -11,13 +12,20 @@ const BOUNDS: Bounds = Bounds {
     max_pixels: 32 * 1024 * 1024,
 };
 
+/// The largest reference picture uploaded, our own bound.
+const REFERENCE_BYTES: usize = 10 * 1024 * 1024;
+
 pub(crate) struct Fill<'a> {
     pub source: &'a [u8],
     pub mask: Vec<u8>,
+    /// The person's reference pictures, in request order, sent after the source and mask.
+    pub references: Vec<Reference<'a>>,
 }
 
-/// A PNG source and a normalized, non-empty PNG mask with matching dimensions.
-pub(crate) fn prepare(request: &Request) -> Result<Fill<'_>, AiError> {
+/// A PNG source, a normalized, non-empty PNG mask with matching dimensions, and at most
+/// `max_references` PNG reference pictures (the model's declared limit), all checked before any
+/// upload. Omni uploads every picture as PNG, so another format is refused, not converted.
+pub(crate) fn prepare(request: &Request, max_references: usize) -> Result<Fill<'_>, AiError> {
     let source = mask::inline(request, BOUNDS, InputRole::Source, "source picture")?;
     // Decode the whole source, not only its header, so a broken file never reaches an upload.
     let source_size = mask::png_checked(source, BOUNDS, "Omni fill source")?;
@@ -28,5 +36,18 @@ pub(crate) fn prepare(request: &Request) -> Result<Fill<'_>, AiError> {
             "the Omni fill source and mask must be the same size",
         ));
     }
-    Ok(Fill { source, mask })
+    let references = mask::references(
+        request,
+        BOUNDS,
+        ReferenceRule {
+            max_count: max_references,
+            max_bytes: REFERENCE_BYTES,
+            png_only: true,
+        },
+    )?;
+    Ok(Fill {
+        source,
+        mask,
+        references,
+    })
 }
