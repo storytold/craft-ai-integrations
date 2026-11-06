@@ -177,6 +177,14 @@ impl Http {
                     "ArtCraft result image download ended early",
                 )
             })?;
+        // A server that sends no Content-Length is caught here, before the decode, so an
+        // oversized picture costs no decoding and fails with the same error as one declared big.
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                "ArtCraft result image is too large",
+            ));
+        }
         let media = craft_ai_media::decoded_result(&bytes).ok_or_else(|| {
             AiError::new(
                 ErrorKind::Provider,
