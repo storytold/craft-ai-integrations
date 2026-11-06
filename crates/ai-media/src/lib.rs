@@ -13,16 +13,27 @@
 //! The app owns the directory, its retention and its cleanup. Downloads are synchronous inside
 //! `poll`, which the client already runs on a worker thread.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 
 /// Reading and writing the masks the inpainting adapters send.
+mod image_size;
 pub mod mask;
+mod result_image;
 /// Media identified by its first bytes; shared with the adapters that check what they send or
 /// receive.
 pub mod sniff;
 mod store;
 mod url_rules;
 
+pub use image_size::image_size;
+pub use result_image::{MAX_RESULT_PIXELS, decoded_result};
 pub use store::{MediaStore, MediaStoreConfig};
 
 /// The link rules, for other downloaders that must follow the same ones.

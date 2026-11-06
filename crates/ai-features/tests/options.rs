@@ -22,6 +22,7 @@ fn options_are_derived_from_the_features_not_written_twice() {
     assert_eq!(ids.len(), options.len());
 }
 
+/// Each service option lists every tool that names it, once, in catalogue order.
 #[test]
 fn a_service_unlocks_every_tool_that_names_it_once() {
     let features = builtin();
@@ -39,6 +40,15 @@ fn a_service_unlocks_every_tool_that_names_it_once() {
     let gemini = options.iter().find(|o| o.id == "service:gemini").unwrap();
     assert_eq!(gemini.unlocks, ["generative-fill"]);
     assert_eq!(gemini.title, "Google Gemini");
+    // Omni runs Generative fill too, so its setup offers it beside generation.
+    let omni = options
+        .iter()
+        .find(|o| o.id == "service:artcraft-omni")
+        .unwrap();
+    assert_eq!(
+        omni.unlocks,
+        ["generative-fill", "generate-image", "generate-video"]
+    );
 }
 
 #[test]

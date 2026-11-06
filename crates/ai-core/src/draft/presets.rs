@@ -121,25 +121,7 @@ pub const PRESETS: &[Preset] = &[
 /// The fixed model list a built-in preset offers before its connection is tested.
 pub(super) fn preset_models(preset: &Preset) -> Vec<ModelInfo> {
     if preset.key == "artcraft-omni" {
-        return [
-            ("nano_banana", "Nano Banana (unverified)", "image.generate"),
-            (
-                "seedance_2p0",
-                "Seedance 2.0 (unverified)",
-                "video.generate",
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(id, label, capability)| {
-            Some(
-                ModelInfo::new(ModelId::new(id).ok()?, label).with(
-                    CapabilitySpec::new(CapabilityId::parse(capability).ok()?)
-                        .accepting(InputRole::Prompt, 1)
-                        .requiring(InputRole::Prompt),
-                ),
-            )
-        })
-        .collect();
+        return super::omni_models::documented();
     }
     // Vertex express does not offer a known free key probe. Seed the documented model as
     // unverified so it can be bound without pretending the Test button has reached Google.

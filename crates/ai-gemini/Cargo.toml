@@ -17,6 +17,7 @@ serde_json.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 serde_json.workspace = true
 
 [lints]
