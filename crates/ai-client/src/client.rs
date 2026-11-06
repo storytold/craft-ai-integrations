@@ -122,6 +122,14 @@ impl Plan {
         &self.connection.label
     }
 
+    /// The adapter name as stored on the connection, for adapter-specific params.
+    ///
+    /// The factory matches names case-insensitively. This accessor preserves the original
+    /// spelling, so compare with `eq_ignore_ascii_case` (for example against `"bfl"`).
+    pub fn provider(&self) -> &str {
+        &self.connection.provider
+    }
+
     pub fn model(&self) -> &ModelId {
         &self.model
     }

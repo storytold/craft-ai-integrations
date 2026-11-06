@@ -28,18 +28,28 @@ impl Http {
         }
     }
     fn response(&self, response: Result<Response<Body>, ureq::Error>) -> Result<Value, AiError> {
+        self.reply(response, false)?
+            .ok_or_else(|| status_error(404, None))
+    }
+    /// As `response`, but a 404 is `None` when `not_found_ok` is set.
+    fn reply(
+        &self,
+        response: Result<Response<Body>, ureq::Error>,
+        not_found_ok: bool,
+    ) -> Result<Option<Value>, AiError> {
         let mut response =
             response.map_err(|_| AiError::new(ErrorKind::Network, "could not reach BFL"))?;
         let status = response.status().as_u16();
+        if status == 404 && not_found_ok {
+            return Ok(None);
+        }
         if !response.status().is_success() {
-            let kind = match status {
-                401 | 403 => ErrorKind::Auth,
-                429 => ErrorKind::RateLimited,
-                402 => ErrorKind::Quota,
-                400 | 404 | 405 | 413 | 422 => ErrorKind::InvalidRequest,
-                _ => ErrorKind::Provider,
-            };
-            return Err(AiError::new(kind, format!("BFL answered {status}")));
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            return Err(status_error(status, retry_after));
         }
         let mut bytes = Vec::new();
         response
@@ -52,7 +62,23 @@ impl Http {
             return Err(AiError::new(ErrorKind::Provider, "BFL reply is too large"));
         }
         serde_json::from_slice(&bytes)
+            .map(Some)
             .map_err(|_| AiError::new(ErrorKind::Provider, "BFL returned invalid JSON"))
+    }
+    /// Reads a task from `url`, which the caller has checked (`polling::polling_url_allowed`) or
+    /// built from the configured address. `None` means BFL answered 404.
+    pub fn poll(&self, url: &str) -> Result<Option<Value>, AiError> {
+        self.reply(
+            self.agent
+                .get(url)
+                .header("x-key", self.key.expose())
+                .call(),
+            true,
+        )
+    }
+    /// The configured address followed by `path`.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base)
     }
     pub fn get(&self, path: &str) -> Result<Value, AiError> {
         self.response(
@@ -61,6 +87,35 @@ impl Http {
                 .header("x-key", self.key.expose())
                 .call(),
         )
+    }
+    /// Downloads a result picture. The key is not sent, redirects are not followed and the size
+    /// is bounded by `limit`.
+    pub fn download(&self, url: &str, limit: u64) -> Result<Vec<u8>, AiError> {
+        let mut response =
+            self.agent.get(url).call().map_err(|_| {
+                AiError::new(ErrorKind::Network, "could not download the BFL result")
+            })?;
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                format!("the BFL result could not be downloaded ({status}); it may have expired"),
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(limit + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| AiError::new(ErrorKind::Network, "the BFL result download ended early"))?;
+        if bytes.len() as u64 > limit {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                "the BFL result is too large",
+            ));
+        }
+        Ok(bytes)
     }
     pub fn post(&self, path: &str, value: &Value) -> Result<Value, AiError> {
         let bytes = serde_json::to_vec(value)
@@ -72,6 +127,25 @@ impl Http {
                 .content_type("application/json")
                 .send(&bytes),
         )
+    }
+}
+
+/// The error for a non-success answer. Only a rate limit carries the server's wait.
+pub(crate) fn status_error(status: u16, retry_after: Option<u64>) -> AiError {
+    let (kind, text) = match status {
+        401 | 403 => (ErrorKind::Auth, "BFL refused the API key"),
+        402 => (ErrorKind::Quota, "the BFL account is out of credits"),
+        429 => (
+            ErrorKind::RateLimited,
+            "BFL is limiting requests; try again shortly",
+        ),
+        400 | 404 | 405 | 413 | 422 => (ErrorKind::InvalidRequest, "BFL refused the request"),
+        _ => (ErrorKind::Provider, "BFL could not do it"),
+    };
+    let error = AiError::new(kind, format!("{text} ({status})"));
+    match (status, retry_after) {
+        (429, Some(secs)) => error.with_retry_after(secs),
+        _ => error,
     }
 }
 

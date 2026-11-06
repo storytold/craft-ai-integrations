@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 craft-ai-core.workspace = true
 craft-ai-http.workspace = true
+png = "0.18"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 tempfile = "3"
 url = "2"
