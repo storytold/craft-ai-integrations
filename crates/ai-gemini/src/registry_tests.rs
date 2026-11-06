@@ -41,6 +41,7 @@ fn seed(provider: &GeminiProvider, state: JobState) -> Vec<JobId> {
                     state: state.clone(),
                     events: Vec::new(),
                     terminal_delivered: false,
+                    ended: state.is_terminal().then(Instant::now),
                 },
             );
             id

@@ -22,8 +22,10 @@
     clippy::unreachable
 )]
 mod fill;
+mod registry;
 
 pub use fill::fill_instruction;
+use registry::{Jobs, MAX_TRACKED, Slot, lock};
 
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
@@ -35,10 +37,10 @@ use std::{
     collections::HashMap,
     io::Read,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// The official Gemini API address.
@@ -53,7 +55,6 @@ const MAX_ERROR_REPLY: u64 = 64 * 1024;
 /// Requests in flight to Google at once, cancelled ones included (see [`Permit`]), and jobs
 /// remembered in all.
 const MAX_RUNNING: usize = 32;
-const MAX_TRACKED: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct GeminiConfig {
@@ -73,16 +74,6 @@ impl GeminiConfig {
         }
     }
 }
-
-struct Slot {
-    state: JobState,
-    /// Events not yet handed out by a poll.
-    events: Vec<Event>,
-    /// Whether a poll has delivered the terminal state, including failure or cancellation.
-    terminal_delivered: bool,
-}
-
-type Jobs = Arc<Mutex<HashMap<JobId, Slot>>>;
 
 /// A place among the [`MAX_RUNNING`] requests in flight, held by the worker thread for its whole
 /// life. Cancelling ends a job but not its request, so the place is only given back when the worker
@@ -114,11 +105,6 @@ impl std::fmt::Debug for GeminiProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("GeminiProvider")
     }
-}
-
-fn lock(jobs: &Jobs) -> Result<MutexGuard<'_, HashMap<JobId, Slot>>, AiError> {
-    jobs.lock()
-        .map_err(|_| AiError::new(ErrorKind::Internal, "Gemini job registry unavailable"))
 }
 
 impl GeminiProvider {
@@ -362,24 +348,8 @@ impl Provider for GeminiProvider {
         })?;
         {
             let mut jobs = lock(&self.jobs)?;
-            if jobs.len() >= MAX_TRACKED {
-                // Forget finished jobs whose results were already handed out.
-                jobs.retain(|_, s| !s.terminal_delivered);
-                if jobs.len() >= MAX_TRACKED {
-                    return Err(AiError::new(
-                        ErrorKind::RateLimited,
-                        "too many Gemini results are waiting; check a finished fill first",
-                    ));
-                }
-            }
-            jobs.insert(
-                id.clone(),
-                Slot {
-                    state: JobState::Running { percent: None },
-                    events: Vec::new(),
-                    terminal_delivered: false,
-                },
-            );
+            registry::admit(&mut jobs, Instant::now())?;
+            jobs.insert(id.clone(), Slot::running());
         }
         let (agent, key, jobs, job) = (
             self.agent.clone(),
@@ -400,13 +370,13 @@ impl Provider for GeminiProvider {
                 };
                 match result {
                     Ok(payload) => {
-                        slot.state = JobState::Succeeded;
                         slot.events.push(Event::Output(Output {
                             payload,
                             label: None,
                         }));
+                        slot.finish(JobState::Succeeded, Instant::now());
                     }
-                    Err(error) => slot.state = JobState::Failed { error },
+                    Err(error) => slot.finish(JobState::Failed { error }, Instant::now()),
                 }
             });
         if spawned.is_err() {
@@ -436,11 +406,13 @@ impl Provider for GeminiProvider {
             .get_mut(id)
             .ok_or_else(|| AiError::invalid("unknown Gemini job"))?;
         if !slot.state.is_terminal() {
-            slot.state = JobState::Cancelled;
+            slot.finish(JobState::Cancelled, Instant::now());
         }
         Ok(())
     }
 }
 
+#[cfg(test)]
+mod registry_limits_tests;
 #[cfg(test)]
 mod registry_tests;
