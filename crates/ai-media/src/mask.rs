@@ -101,6 +101,7 @@ pub fn png_checked(data: &[u8], bounds: Bounds, what: &str) -> Result<(u32, u32)
     Ok((width, height))
 }
 
+/// The error for a mask that cannot be read as a PNG.
 fn bad_mask() -> AiError {
     AiError::invalid("the mask is not a readable PNG image")
 }

@@ -3,6 +3,7 @@
 
 use super::*;
 
+/// A provider pointed at a closed local port, so nothing can reach a real service.
 fn provider() -> GeminiProvider {
     GeminiProvider::new(GeminiConfig::new(
         "http://127.0.0.1:9/v1beta",
@@ -11,6 +12,7 @@ fn provider() -> GeminiProvider {
     .unwrap()
 }
 
+/// A one-pixel fill request: a white source and a white mask, no prompt.
 fn request() -> Request {
     let mut bytes = Vec::new();
     {
@@ -30,6 +32,7 @@ fn request() -> Request {
         )
 }
 
+/// Fills the registry to [`MAX_TRACKED`] jobs in `state`, none delivered, and returns their ids.
 fn seed(provider: &GeminiProvider, state: JobState) -> Vec<JobId> {
     let mut jobs = lock(&provider.jobs).unwrap();
     (0..MAX_TRACKED)

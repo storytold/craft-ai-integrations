@@ -16,6 +16,7 @@ fn finished(now: Instant, age: Duration, bytes: u64) -> Slot {
     slot
 }
 
+/// The test job id `job-<n>`.
 fn id(n: usize) -> JobId {
     JobId::new(format!("job-{n}")).unwrap()
 }
