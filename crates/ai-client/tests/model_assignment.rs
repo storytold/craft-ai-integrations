@@ -5,97 +5,16 @@
 use std::sync::Arc;
 
 use craft_ai_client::{
-    Ability, AiClient, ChoiceScope, ConnectionManager, ToolDesk, UnavailableChoice, Withdraw,
+    Ability, AiClient, ChoiceScope, ConnectionManager, UnavailableChoice, Withdraw,
 };
-use craft_ai_core::{AppId, ConnectionId, ModelId, Role, RoleId, StoreFile};
+use craft_ai_core::{AppId, RoleId};
 use craft_ai_native::secrets::MemoryStore;
-use craft_ai_native::shared::SharedStore;
-use serde_json::json;
 
-struct World {
-    _dir: tempfile::TempDir,
-    shared: SharedStore,
-    desk: ToolDesk,
-}
+#[path = "support/assignment_world.rs"]
+mod assignment_world;
+use assignment_world::*;
 
-fn world(file: Option<serde_json::Value>) -> World {
-    let dir = tempfile::tempdir().unwrap();
-    let shared = SharedStore::new(dir.path().join("connections.json"));
-    if let Some(file) = file {
-        std::fs::write(shared.path(), file.to_string()).unwrap();
-    }
-    let client = AiClient::new(
-        ToolDesk::app().unwrap(),
-        shared.clone(),
-        Arc::new(MemoryStore::new()),
-    );
-    let desk = ToolDesk::new(client, shared.clone(), None);
-    World {
-        _dir: dir,
-        shared,
-        desk,
-    }
-}
-
-/// One connection `one`: `reported` can do images (the provider said so), `bare` can do nothing yet.
-fn file() -> serde_json::Value {
-    json!({
-        "schema_version": 1,
-        "connections": [{
-            "id": "one",
-            "label": "One",
-            "provider": "openai",
-            "endpoint": "https://one.example.com/v1",
-            "locality": "remote",
-            "auth": {"kind": "none"},
-            "billing": "metered",
-            "models": [
-                {
-                    "id": "reported",
-                    "label": "Reported",
-                    "capabilities": [{"capability": "image.generate", "accepts": {"prompt": 1}}]
-                },
-                {"id": "bare", "label": "Bare"}
-            ]
-        }]
-    })
-}
-
-fn tool(id: &str) -> Role {
-    Role {
-        id: RoleId::new(id).unwrap(),
-        label: id.to_owned(),
-        capability: "image.generate".parse().unwrap(),
-        inputs: vec![craft_ai_core::model::InputRole::Prompt],
-    }
-}
-
-fn one() -> ConnectionId {
-    ConnectionId::new("one").unwrap()
-}
-
-fn model(id: &str) -> ModelId {
-    ModelId::new(id).unwrap()
-}
-
-fn app(id: &str) -> ChoiceScope {
-    ChoiceScope::App(AppId::new(id).unwrap())
-}
-
-fn declared() -> Ability {
-    Ability::DeclaredByPerson {
-        label: "Added".to_owned(),
-    }
-}
-
-fn saved(w: &World) -> StoreFile {
-    w.shared.load().unwrap()
-}
-
-fn bytes(w: &World) -> Vec<u8> {
-    std::fs::read(w.shared.path()).unwrap()
-}
-
+/// A listed model is saved as the suite choice, and its standing says it is chosen and usable.
 #[test]
 fn assigning_writes_the_binding_apps_resolve() {
     let w = world(Some(file()));
@@ -121,6 +40,8 @@ fn assigning_writes_the_binding_apps_resolve() {
     assert_eq!(state.available, Ok(()));
 }
 
+/// A listed model without the tool's ability is refused, the file's bytes stay, and its standing
+/// gives the reason.
 #[test]
 fn a_model_that_cannot_do_the_job_is_refused_and_the_bytes_stay() {
     let w = world(Some(file()));
@@ -142,6 +63,7 @@ fn a_model_that_cannot_do_the_job_is_refused_and_the_bytes_stay() {
     assert!(state.available.is_err(), "the reason is reported");
 }
 
+/// With no store file yet, a refused assignment leaves no file behind.
 #[test]
 fn a_refused_assignment_creates_no_file() {
     let w = world(None);
@@ -156,6 +78,8 @@ fn a_refused_assignment_creates_no_file() {
     assert!(!w.shared.path().exists());
 }
 
+/// A model the connection does not list can be declared and chosen; withdrawing the choice and
+/// ability removes the model again and leaves no binding.
 #[test]
 fn a_person_can_declare_an_unlisted_model_and_withdrawing_removes_it_whole() {
     let w = world(Some(file()));
@@ -188,6 +112,8 @@ fn a_person_can_declare_an_unlisted_model_and_withdrawing_removes_it_whole() {
     assert!(store.connections[0].model(&model("unlisted")).is_none());
 }
 
+/// Withdrawing a choice and its declared ability from a model whose ability the provider reported
+/// removes the choice only.
 #[test]
 fn withdrawing_never_removes_an_ability_the_provider_reported() {
     let w = world(Some(file()));
@@ -217,6 +143,8 @@ fn withdrawing_never_removes_an_ability_the_provider_reported() {
     assert_eq!(info.capabilities.len(), 1, "the provider's ability stays");
 }
 
+/// A declared ability another suite choice still needs is not withdrawn, and nothing is half
+/// removed.
 #[test]
 fn withdrawing_the_ability_is_refused_while_another_tool_still_uses_it() {
     let w = world(Some(file()));
@@ -243,6 +171,7 @@ fn withdrawing_the_ability_is_refused_while_another_tool_still_uses_it() {
     assert_eq!(bytes(&w), before, "the choice was not half removed");
 }
 
+/// A declared ability an app's own choice still needs is not withdrawn from the suite scope.
 #[test]
 fn withdrawing_the_ability_is_refused_while_an_app_override_uses_it() {
     let w = world(Some(file()));
@@ -267,6 +196,7 @@ fn withdrawing_the_ability_is_refused_while_an_app_override_uses_it() {
     assert_eq!(bytes(&w), before);
 }
 
+/// Withdrawing the choice of a model the tool no longer uses is refused as out of date.
 #[test]
 fn withdrawing_a_choice_that_has_moved_on_is_stale_and_changes_nothing() {
     let w = world(Some(file()));
@@ -291,6 +221,8 @@ fn withdrawing_a_choice_that_has_moved_on_is_stale_and_changes_nothing() {
     assert_eq!(bytes(&w), before);
 }
 
+/// After the tool moves to another model, withdrawing the old model's declared ability keeps the
+/// new choice.
 #[test]
 fn withdrawing_an_ability_leaves_another_models_choice_for_the_tool_alone() {
     let w = world(Some(file()));
@@ -328,6 +260,8 @@ fn withdrawing_an_ability_leaves_another_models_choice_for_the_tool_alone() {
     assert_eq!(saved(&w).defaults[0].model.as_str(), "reported");
 }
 
+/// A suite choice does not overwrite an app's own choice; the app is reported as choosing
+/// elsewhere, and each model's standing names its scope.
 #[test]
 fn suite_and_app_choices_stay_apart_and_each_is_reported() {
     let w = world(Some(file()));
@@ -366,6 +300,8 @@ fn suite_and_app_choices_stay_apart_and_each_is_reported() {
     assert_eq!(bare.apps_selected, vec![AppId::new("photocraft").unwrap()]);
 }
 
+/// Withdrawing one tool's choice keeps another tool's choice on the same model and every listed
+/// model.
 #[test]
 fn unrelated_choices_and_connections_survive() {
     let w = world(Some(file()));
@@ -395,6 +331,7 @@ fn unrelated_choices_and_connections_survive() {
     assert_eq!(store.connections[0].models.len(), 2);
 }
 
+/// Saving a form that drops a chosen model reports the app's choice as unavailable and keeps it.
 #[test]
 fn a_saved_connection_change_reports_a_choice_whose_model_went_away() {
     let w = world(Some(file()));
@@ -425,183 +362,8 @@ fn a_saved_connection_change_reports_a_choice_whose_model_went_away() {
     assert_eq!(settings.overrides.len(), 1, "the person's choice is kept");
 }
 
-/// Answers a refresh with a fixed model list.
-struct Lists(Vec<craft_ai_core::ModelInfo>);
-
-impl craft_ai_core::Provider for Lists {
-    fn models(&self) -> Result<Vec<craft_ai_core::ModelInfo>, craft_ai_core::AiError> {
-        Ok(self.0.clone())
-    }
-    fn submit(
-        &self,
-        _: &ModelId,
-        _: &craft_ai_core::Request,
-    ) -> Result<craft_ai_core::JobId, craft_ai_core::AiError> {
-        panic!("a refresh must not submit a job");
-    }
-    fn poll(
-        &self,
-        _: &craft_ai_core::JobId,
-    ) -> Result<craft_ai_core::JobSnapshot, craft_ai_core::AiError> {
-        panic!("a refresh must not poll a job");
-    }
-    fn cancel(&self, _: &craft_ai_core::JobId) -> Result<(), craft_ai_core::AiError> {
-        Ok(())
-    }
-}
-
-fn refresh(w: &World, list: Vec<craft_ai_core::ModelInfo>) -> craft_ai_client::TestReport {
-    let mut factory = craft_ai_client::ProviderFactory::standard();
-    factory.register("openai", move |_, _| Ok(Arc::new(Lists(list.clone()))));
-    ConnectionManager::new(w.shared.clone(), Arc::new(MemoryStore::new()))
-        .with_probe_factory(factory)
-        .test_saved(&one(), true)
-        .unwrap()
-}
-
-#[test]
-fn a_refresh_keeps_declared_abilities_and_models() {
-    let w = world(Some(file()));
-    for (id, name) in [("fill", "bare"), ("other", "unlisted")] {
-        w.desk
-            .assign_model(
-                &tool(id),
-                &one(),
-                &model(name),
-                &ChoiceScope::Suite,
-                &declared(),
-            )
-            .unwrap();
-    }
-    let reported = vec![craft_ai_core::ModelInfo::new(model("bare"), "Bare")];
-    let report = refresh(&w, reported);
-    assert_eq!(report.unavailable_choices, Vec::new());
-    let store = saved(&w);
-    let bare = store.connections[0].model(&model("bare")).unwrap();
-    assert_eq!(bare.capabilities.len(), 1, "the person's declaration stays");
-    assert!(store.connections[0].model(&model("unlisted")).is_some());
-    assert!(
-        store.connections[0].model(&model("reported")).is_none(),
-        "a model the server dropped goes"
-    );
-}
-
-/// An input a person added to an ability the server reports comes back after a refresh, and
-/// withdrawing takes back only that input.
-#[test]
-fn a_refresh_keeps_an_input_a_person_added_to_a_reported_ability() {
-    let w = world(Some(file()));
-    let mut wider = tool("fill");
-    wider.inputs.push(craft_ai_core::model::InputRole::Mask);
-    w.desk
-        .assign_model(
-            &wider,
-            &one(),
-            &model("reported"),
-            &ChoiceScope::Suite,
-            &declared(),
-        )
-        .unwrap();
-    let mut reported = craft_ai_core::ModelInfo::new(model("reported"), "Reported");
-    reported.capabilities.push(
-        craft_ai_core::model::CapabilitySpec::new("image.generate".parse().unwrap())
-            .accepting(craft_ai_core::model::InputRole::Prompt, 1),
-    );
-    refresh(&w, vec![reported]);
-    let state = w
-        .desk
-        .model_choice_state(&wider, &one(), &model("reported"))
-        .unwrap();
-    assert_eq!(state.available, Ok(()), "the added input came back");
-
-    let done = w
-        .desk
-        .withdraw_model(
-            &wider,
-            &one(),
-            &model("reported"),
-            &ChoiceScope::Suite,
-            Withdraw::ChoiceAndDeclaredAbility,
-        )
-        .unwrap();
-    assert!(done.ability_removed);
-    let store = saved(&w);
-    let spec = store.connections[0]
-        .model(&model("reported"))
-        .and_then(|m| m.spec_for(&"image.generate".parse().unwrap()))
-        .cloned()
-        .unwrap();
-    assert!(
-        spec.accepts
-            .contains_key(&craft_ai_core::model::InputRole::Prompt)
-    );
-    assert!(
-        !spec
-            .accepts
-            .contains_key(&craft_ai_core::model::InputRole::Mask)
-    );
-}
-
-#[test]
-fn a_refresh_reports_a_choice_it_could_not_keep_and_leaves_the_binding() {
-    let w = world(Some(file()));
-    w.desk
-        .assign_model(
-            &tool("fill"),
-            &one(),
-            &model("reported"),
-            &ChoiceScope::Suite,
-            &Ability::AlreadyListed,
-        )
-        .unwrap();
-    let report = refresh(
-        &w,
-        vec![craft_ai_core::ModelInfo::new(model("bare"), "Bare")],
-    );
-    assert_eq!(
-        report.unavailable_choices,
-        vec![UnavailableChoice {
-            scope: ChoiceScope::Suite,
-            tool: RoleId::new("fill").unwrap(),
-            model: model("reported"),
-        }]
-    );
-    assert_eq!(saved(&w).defaults.len(), 1, "no other model was chosen");
-}
-
-#[test]
-fn an_ability_the_server_now_reports_stops_counting_as_declared() {
-    let w = world(Some(file()));
-    w.desk
-        .assign_model(
-            &tool("fill"),
-            &one(),
-            &model("bare"),
-            &ChoiceScope::Suite,
-            &declared(),
-        )
-        .unwrap();
-    let spec = craft_ai_core::model::CapabilitySpec::new("image.generate".parse().unwrap())
-        .accepting(craft_ai_core::model::InputRole::Prompt, 4);
-    let now = craft_ai_core::ModelInfo::new(model("bare"), "Bare").with(spec);
-    refresh(&w, vec![now]);
-    let done = w
-        .desk
-        .withdraw_model(
-            &tool("fill"),
-            &one(),
-            &model("bare"),
-            &ChoiceScope::Suite,
-            Withdraw::ChoiceAndDeclaredAbility,
-        )
-        .unwrap();
-    assert!(done.choice_removed);
-    assert!(!done.ability_removed, "it is the server's now");
-    let store = saved(&w);
-    let bare = store.connections[0].model(&model("bare")).unwrap();
-    assert_eq!(bare.capabilities[0].accepts.values().next(), Some(&4));
-}
-
+/// A refused bind, choose or tool removal, and a choose that finds a choice already made, leave the
+/// file's exact bytes.
 #[test]
 fn every_refused_store_change_keeps_the_exact_bytes() {
     let w = world(Some(file()));
