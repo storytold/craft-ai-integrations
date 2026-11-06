@@ -161,3 +161,19 @@ fn a_truncated_source_is_refused_before_upload() {
     assert_eq!(err.kind, ErrorKind::InvalidRequest);
     assert_eq!(server.count(), 0);
 }
+
+/// A prompt that is not text is refused, not treated as a fill with no prompt.
+#[test]
+fn a_fill_with_a_non_text_prompt_is_refused() {
+    let server = Server::start(|_| Reply::Json(500, "unexpected".into()));
+    let p = provider(&server, 4);
+    let request = fill(png(8, 8), None).with_input(
+        InputRole::Prompt,
+        Payload::inline("image/png", png(8, 8)).unwrap(),
+    );
+    let err = p
+        .submit(&ModelId::new("nano_banana").unwrap(), &request)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidRequest);
+    assert_eq!(server.count(), 0);
+}

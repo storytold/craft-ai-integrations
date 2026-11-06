@@ -75,8 +75,8 @@ pub fn png_size(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Decodes every pixel of a PNG within `bounds` and returns its size, so a truncated or corrupt
-/// picture is refused here, before it is uploaded or paid for. `what` names it in errors. Memory is
-/// capped by the same limit [`binary`] uses.
+/// picture is refused here, before it is uploaded or paid for. `what` names it in errors. Rows are
+/// read one at a time, so only one row is held, whatever the picture's size.
 pub fn png_checked(data: &[u8], bounds: Bounds, what: &str) -> Result<(u32, u32), AiError> {
     let bad = || AiError::invalid(format!("the {what} is not a readable PNG image"));
     if !matches!(crate::sniff::media_type(data), Some(("image/png", _))) {
@@ -90,8 +90,14 @@ pub fn png_checked(data: &[u8], bounds: Bounds, what: &str) -> Result<(u32, u32)
         .map_err(|_| bad())?;
     let (width, height) = (reader.info().width, reader.info().height);
     bounds.check(width, height)?;
-    let mut buffer = vec![0u8; reader.output_buffer_size().ok_or_else(bad)?];
-    reader.next_frame(&mut buffer).map_err(|_| bad())?;
+    let mut rows = 0u32;
+    while reader.next_row().map_err(|_| bad())?.is_some() {
+        rows = rows.saturating_add(1);
+    }
+    // An interlaced picture yields each row once per pass, so only a shortfall is an error.
+    if rows < height {
+        return Err(bad());
+    }
     Ok((width, height))
 }
 

@@ -13,7 +13,14 @@
 //!
 //! A job runs on its own thread so it can be polled and cancelled. Cancelling stops waiting for
 //! the answer; a request already sent may still be billed by Google.
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 mod fill;
 
 pub use fill::fill_instruction;

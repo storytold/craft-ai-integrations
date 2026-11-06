@@ -3,7 +3,14 @@
 //! on the global address), otherwise at the configured origin; see `polling`. FLUX 3 media are
 //! short-lived remote handles; callers must persist them if they need durable assets. A fill is
 //! downloaded as soon as it is ready (BFL's links last ten minutes) and returned inline.
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 mod fill;
 mod http;
 mod polling;

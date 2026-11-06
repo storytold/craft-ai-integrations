@@ -125,7 +125,7 @@ fn try_builtin() -> Option<Vec<Feature>> {
         cloud(
             "artcraft-omni",
             "ArtCraft",
-            "Staff-enabled API key. Whether a subscription covers it is unverified. Nano Banana is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Built and tested offline only.",
+            "Staff-enabled API key. Whether a subscription covers it is unverified. Nano Banana is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Nano Banana 2 was run once from PhotoCraft and its result did not blend well; Nano Banana and Nano Banana Pro were not run live.",
         ),
     ];
 

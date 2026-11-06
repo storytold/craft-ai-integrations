@@ -13,7 +13,14 @@
 //! The app owns the directory, its retention and its cleanup. Downloads are synchronous inside
 //! `poll`, which the client already runs on a worker thread.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 
 /// Reading and writing the masks the inpainting adapters send.
 mod image_size;

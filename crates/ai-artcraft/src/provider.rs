@@ -168,14 +168,14 @@ impl Provider for ArtCraftProvider {
         } else {
             None
         };
-        let prompt = request
-            .inputs
-            .iter()
-            .find(|i| i.role == InputRole::Prompt)
-            .and_then(|i| match &i.payload {
+        let prompt = match request.inputs.iter().find(|i| i.role == InputRole::Prompt) {
+            None => None,
+            Some(input) => match &input.payload {
                 Payload::Text { text } => Some(text.as_str()),
-                _ => None,
-            });
+                // A prompt that is not text is a mistake, never an empty prompt.
+                _ => return Err(AiError::invalid("the ArtCraft Omni prompt must be text")),
+            },
+        };
         // A fill may leave the prompt out: the shared instruction then asks Omni to remove what the
         // mask covers. Generation always needs words.
         let prompt = match prompt {
