@@ -8,7 +8,6 @@ use craft_ai_client::{
     Ability, ChoiceScope, ConnectionManager, ProviderFactory, ToolDesk, Withdraw,
 };
 use craft_ai_core::model::{CapabilitySpec, InputRole};
-use craft_ai_core::store::MAX_STORE_BYTES;
 use craft_ai_core::{ConnectionDraft, ConnectionId, ErrorKind, ModelId, ModelInfo, Role};
 use craft_ai_native::secrets::MemoryStore;
 use craft_ai_native::shared::SharedStore;
@@ -227,22 +226,18 @@ fn saving_a_tested_form_keeps_the_declarations() {
     assert_still_usable(&desk, &tools);
 }
 
-/// A write that fails after the change was made in memory (here the file would grow past the
-/// store's size limit) leaves the exact bytes: no model, ability or choice lands on its own.
+/// A write that fails on the disk, after the change was made in memory, leaves the exact bytes: no
+/// model, ability or choice lands on its own. A folder stands where the store writes its temporary
+/// file, so opening that file fails with an I/O error on every system.
 #[test]
 fn a_failed_write_leaves_no_part_of_an_assignment() {
     let dir = tempfile::tempdir().unwrap();
     let shared = reported_store(&dir);
-    // How long the file is once the store has rewritten it, with an empty field it does not know.
-    let mut file: serde_json::Value = serde_json::from_slice(&bytes(&shared)).unwrap();
-    file["padding"] = json!("");
-    std::fs::write(shared.path(), file.to_string()).unwrap();
-    shared.update(|_| ()).unwrap();
-    let written = bytes(&shared).len();
-    // Room for the store's own rewrite, but not for a declared model, its ability and the choice.
-    file["padding"] = json!("x".repeat(MAX_STORE_BYTES - written - 40));
-    std::fs::write(shared.path(), file.to_string()).unwrap();
-    shared.update(|_| ()).unwrap();
+    let name = shared.path().file_name().unwrap().to_string_lossy();
+    let temporary = shared
+        .path()
+        .with_file_name(format!(".{name}.tmp-{}", std::process::id()));
+    std::fs::create_dir(&temporary).unwrap();
     let before = bytes(&shared);
 
     let failed = desk(&shared).assign_model(
@@ -257,13 +252,23 @@ fn a_failed_write_leaves_no_part_of_an_assignment() {
         &declared(),
     );
 
-    let error = failed.unwrap_err();
-    assert!(
-        error.message.contains("the limit is"),
-        "the write failed for its size: {}",
-        error.message
-    );
+    assert!(failed.is_err(), "the write failed on the disk");
     assert_eq!(bytes(&shared), before, "nothing landed");
+    assert!(temporary.is_dir(), "the store wrote nowhere else");
+    std::fs::remove_dir(&temporary).unwrap();
+    desk(&shared)
+        .assign_model(
+            &tool(
+                "brush",
+                "image.generate",
+                vec![InputRole::Prompt, InputRole::Mask],
+            ),
+            &one(),
+            &model("added"),
+            &ChoiceScope::Suite,
+            &declared(),
+        )
+        .expect("the same assignment lands once the disk takes it");
 }
 
 /// A form opened before the service listed a model does not drop that model on save: another app
