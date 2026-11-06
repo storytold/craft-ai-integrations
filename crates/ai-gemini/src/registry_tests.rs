@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use super::*;
+use crate::registry::MAX_TRACKED;
 
 /// A provider pointed at a closed local port, so nothing can reach a real service.
 fn provider() -> GeminiProvider {

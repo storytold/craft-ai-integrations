@@ -25,7 +25,7 @@ mod fill;
 mod registry;
 
 pub use fill::fill_instruction;
-use registry::{Jobs, MAX_TRACKED, Slot, lock};
+use registry::{Jobs, Slot, lock};
 
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
