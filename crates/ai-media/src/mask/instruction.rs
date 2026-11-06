@@ -26,3 +26,24 @@ pub fn fill_instruction(prompt: &str) -> String {
          Reply with the edited image only."
     )
 }
+
+/// [`fill_instruction`] for a request that also sends `references` reference pictures after the
+/// source and the mask (the third image onwards). With none it is [`fill_instruction`] unchanged.
+/// The references guide what the new content looks like; they are never pasted in whole and never
+/// change the area to keep.
+pub fn fill_instruction_with_references(prompt: &str, references: usize) -> String {
+    let base = fill_instruction(prompt);
+    let (which, them) = match references {
+        0 => return base,
+        1 => ("The third image is a reference picture".to_owned(), "it"),
+        n => (
+            format!("Images 3 to {} are reference pictures", n + 2),
+            "them",
+        ),
+    };
+    format!(
+        "{base} {which} from the person: use {them} only as a guide to what the new content in the \
+         white area should look like, such as its subject, style, colours or materials. Do not paste \
+         {them} in whole, and do not change the black area to match {them}."
+    )
+}

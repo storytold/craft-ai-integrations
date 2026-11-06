@@ -127,6 +127,14 @@ let request = Request::new(role.capability.clone())
 
 - **Inputs** are `prompt`, `system`, `source`, `mask`, `reference` and `context`. Send only the
   ones your `Role` lists. A model that cannot take them is never offered for your tool.
+- **Reference pictures for Generative fill** are optional `reference` inputs, added after the
+  source, mask and prompt, in the order you want them used. Gemini and ArtCraft Omni take up to
+  three; FLUX.1 Fill takes none. Ask `route_facts` or `plan` first: a model that cannot take them
+  refuses the request before the person is asked to agree, and nothing is dropped quietly. Each
+  reference must be inline PNG, JPEG or WebP data (PNG only for Omni), at most 10 MB, 8,192
+  pixels a side and 32 megapixels, and it must decode in full. A reference guides what the new
+  content looks like; it does not promise a result of any quality, and a listed model does not
+  mean the account can use it.
 - **Payloads** are `Payload::text`, `Payload::inline(media_type, bytes)` (up to 32 MiB by
   default) or `Payload::handle(uri, media_type, size)` for something too big to copy.
 - **Params** are named values. The consent prompt shows their names, never their values.

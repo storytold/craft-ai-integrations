@@ -167,6 +167,11 @@ impl GeminiProvider {
         fill::model_allowed(model)
     }
 
+    /// The most reference pictures one fill may carry after the source and the mask. `submit`
+    /// refuses more before anything is sent; the client's route check reads the same number.
+    pub const MAX_REFERENCES: usize = fill::REFERENCES.max_count;
+
+    /// This crate's own model list, each offered for Generative fill (see [`fill_spec`]).
     fn catalog() -> Vec<ModelInfo> {
         fill::MODELS
             .iter()
@@ -177,6 +182,7 @@ impl GeminiProvider {
 }
 
 /// Source and mask required; the prompt may be left out or empty (fill from the surroundings).
+/// Up to [`GeminiProvider::MAX_REFERENCES`] reference pictures may follow; none are required.
 fn fill_spec() -> Option<CapabilitySpec> {
     Some(
         CapabilitySpec::new(CapabilityId::parse("image.inpaint").ok()?)
@@ -184,7 +190,11 @@ fn fill_spec() -> Option<CapabilitySpec> {
             .requiring(InputRole::Source)
             .accepting(InputRole::Mask, 1)
             .requiring(InputRole::Mask)
-            .accepting(InputRole::Prompt, 1),
+            .accepting(InputRole::Prompt, 1)
+            .accepting(
+                InputRole::Reference,
+                u32::try_from(GeminiProvider::MAX_REFERENCES).ok()?,
+            ),
     )
 }
 
@@ -338,7 +348,7 @@ impl Provider for GeminiProvider {
         if let Some(other) = request.inputs.iter().find(|i| {
             !matches!(
                 i.role,
-                InputRole::Source | InputRole::Mask | InputRole::Prompt
+                InputRole::Source | InputRole::Mask | InputRole::Prompt | InputRole::Reference
             )
         }) {
             return Err(AiError::unsupported(format!(

@@ -11,7 +11,7 @@
 //! is treated as a placeholder to replace, not as content to keep.
 use craft_ai_core::payload::{base64_decode, base64_encode};
 use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request};
-use craft_ai_media::mask::{self, Bounds};
+use craft_ai_media::mask::{self, Bounds, ReferenceRule};
 use serde_json::{Value, json};
 
 /// Image models offered, best default first: (id, label).
@@ -46,6 +46,16 @@ const BOUNDS: Bounds = Bounds {
     service: "Gemini fill",
     max_side: MAX_SIDE,
     max_pixels: MAX_PIXELS,
+};
+
+/// Reference pictures one fill may carry after the source and the mask. The count and size are our
+/// own bounds, kept low because the service's picture limits differ by model and the source and
+/// mask already take two places. Read by the client's route check through
+/// `GeminiProvider::MAX_REFERENCES`, so the two cannot disagree.
+pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
+    max_count: 3,
+    max_bytes: 10 * 1024 * 1024,
+    png_only: false,
 };
 
 /// Whether `model` may be asked for: one of [`MODELS`], or any well-formed `gemini-…-image…` id so
@@ -167,14 +177,23 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
             "the mask must be the same size as the source image",
         ));
     }
+    // References are checked last and sent after the mask, in request order, so the instruction's
+    // "third image onwards" always names them.
+    let references = mask::references(request, BOUNDS, REFERENCES)?;
+    let mut input = vec![
+        json!({"type": "text", "text": mask::fill_instruction_with_references(prompt, references.len())}),
+        json!({"type": "image", "mime_type": media, "data": base64_encode(source)}),
+        json!({"type": "image", "mime_type": "image/png", "data": base64_encode(&mask)}),
+    ];
+    input.extend(
+        references
+            .iter()
+            .map(|r| json!({"type": "image", "mime_type": r.media, "data": base64_encode(r.data)})),
+    );
     let (a, b) = nearest_ratio(width, height);
     Ok(json!({
         "model": model,
-        "input": [
-            {"type": "text", "text": fill_instruction(prompt)},
-            {"type": "image", "mime_type": media, "data": base64_encode(source)},
-            {"type": "image", "mime_type": "image/png", "data": base64_encode(&mask)},
-        ],
+        "input": input,
         "response_format": {
             "type": "image",
             // The Interactions API returns JPEG only ("Supported values: 'image/jpeg'").
