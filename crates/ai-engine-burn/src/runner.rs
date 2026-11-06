@@ -35,7 +35,10 @@ const CARDS: [GpuVendor; 4] = [
 
 /// Every runner this crate offers, for an `EngineRegistry`.
 pub fn runners() -> Vec<Arc<dyn ModelRunner>> {
-    vec![Arc::new(Sam21Runner)]
+    vec![
+        Arc::new(Sam21Runner),
+        Arc::new(crate::inspyrenet::InspyrenetRunner::new()),
+    ]
 }
 
 /// SAM 2.1 on the Burn engine. It uses a graphics card when one answers, else the processor.

@@ -142,7 +142,8 @@ impl NativeRoute {
     }
 }
 
-/// Running a feature on this computer through ComfyUI.
+/// Running a feature on this computer: through ComfyUI, through the built-in runtimes in
+/// [`LocalRecipe::native`], or both.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalRecipe {
     /// What the model is called, for people: "SAM 3".
@@ -150,8 +151,14 @@ pub struct LocalRecipe {
     /// Apps can run it today. False when the files can be downloaded but no workflow runs them yet.
     #[serde(default = "yes")]
     pub usable: bool,
-    /// Id of the workflow template the adapter runs.
+    /// Id of the workflow template the adapter runs. For a recipe ComfyUI does not run, only the
+    /// recipe's id.
     pub workflow: String,
+    /// ComfyUI runs this recipe. False for a model only the built-in runtimes in
+    /// [`LocalRecipe::native`] run: it is then never a ComfyUI setup option, plan or connection,
+    /// and its `models` and `packs` are empty.
+    #[serde(default = "yes")]
+    pub comfyui: bool,
     pub models: Vec<ModelFile>,
     pub packs: Vec<NodePack>,
     /// Graphics memory the workflow needs, when known.

@@ -29,7 +29,7 @@ use std::{
     io::Read,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -43,7 +43,8 @@ pub const DEFAULT_MODEL: &str = "gemini-nano-banana-2.1";
 const MAX_REPLY: u64 = 48 * 1024 * 1024;
 /// The most of an error answer read, for its message.
 const MAX_ERROR_REPLY: u64 = 64 * 1024;
-/// Jobs still waiting on Google at once, and jobs remembered in all.
+/// Requests in flight to Google at once, cancelled ones included (see [`Permit`]), and jobs
+/// remembered in all.
 const MAX_RUNNING: usize = 32;
 const MAX_TRACKED: usize = 256;
 
@@ -70,15 +71,36 @@ struct Slot {
     state: JobState,
     /// Events not yet handed out by a poll.
     events: Vec<Event>,
+    /// Whether a poll has delivered the terminal state, including failure or cancellation.
+    terminal_delivered: bool,
 }
 
 type Jobs = Arc<Mutex<HashMap<JobId, Slot>>>;
+
+/// A place among the [`MAX_RUNNING`] requests in flight, held by the worker thread for its whole
+/// life. Cancelling ends a job but not its request, so the place is only given back when the worker
+/// exits, or when the worker never starts.
+struct Permit(Arc<AtomicUsize>);
+impl Permit {
+    fn acquire(in_flight: &Arc<AtomicUsize>) -> Option<Self> {
+        // Over the limit, dropping the permit takes the count back down. Submits racing at the
+        // limit may refuse one too many, never admit one too many.
+        let permit = Self(Arc::clone(in_flight));
+        (in_flight.fetch_add(1, Ordering::AcqRel) < MAX_RUNNING).then_some(permit)
+    }
+}
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 pub struct GeminiProvider {
     base: String,
     key: SecretString,
     agent: ureq::Agent,
     jobs: Jobs,
+    in_flight: Arc<AtomicUsize>,
     sequence: AtomicU64,
 }
 impl std::fmt::Debug for GeminiProvider {
@@ -127,6 +149,7 @@ impl GeminiProvider {
             key: config.api_key,
             agent,
             jobs: Arc::new(Mutex::new(HashMap::new())),
+            in_flight: Arc::new(AtomicUsize::new(0)),
             sequence: AtomicU64::new(0),
         })
     }
@@ -318,24 +341,30 @@ impl Provider for GeminiProvider {
             self.sequence.fetch_add(1, Ordering::Relaxed)
         ))
         .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
+        let permit = Permit::acquire(&self.in_flight).ok_or_else(|| {
+            AiError::new(
+                ErrorKind::RateLimited,
+                "too many Gemini fills are running; wait for one to finish",
+            )
+        })?;
         {
             let mut jobs = lock(&self.jobs)?;
-            let running = jobs.values().filter(|s| !s.state.is_terminal()).count();
-            if running >= MAX_RUNNING {
-                return Err(AiError::new(
-                    ErrorKind::RateLimited,
-                    "too many Gemini fills are running; wait for one to finish",
-                ));
-            }
             if jobs.len() >= MAX_TRACKED {
                 // Forget finished jobs whose results were already handed out.
-                jobs.retain(|_, s| !s.state.is_terminal() || !s.events.is_empty());
+                jobs.retain(|_, s| !s.terminal_delivered);
+                if jobs.len() >= MAX_TRACKED {
+                    return Err(AiError::new(
+                        ErrorKind::RateLimited,
+                        "too many Gemini results are waiting; check a finished fill first",
+                    ));
+                }
             }
             jobs.insert(
                 id.clone(),
                 Slot {
                     state: JobState::Running { percent: None },
                     events: Vec::new(),
+                    terminal_delivered: false,
                 },
             );
         }
@@ -349,6 +378,7 @@ impl Provider for GeminiProvider {
         let spawned = std::thread::Builder::new()
             .name("craft-ai-gemini".into())
             .spawn(move || {
+                let _permit = permit;
                 let result = run_fill(&agent, &url, &key, &body);
                 let Ok(mut jobs) = lock(&jobs) else { return };
                 // A cancelled (or forgotten) job keeps its state; the answer is dropped.
@@ -383,6 +413,7 @@ impl Provider for GeminiProvider {
             .ok_or_else(|| AiError::invalid("unknown Gemini job"))?;
         let mut snapshot = JobSnapshot::new(slot.state.clone());
         snapshot.events = std::mem::take(&mut slot.events);
+        slot.terminal_delivered |= slot.state.is_terminal();
         Ok(snapshot)
     }
 
@@ -397,3 +428,6 @@ impl Provider for GeminiProvider {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod registry_tests;

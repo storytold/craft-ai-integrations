@@ -13,16 +13,20 @@ use craft_ai_core::job::{Event, Output};
 use craft_ai_core::role::resolve;
 use craft_ai_core::segment;
 use craft_ai_core::{
-    AiError, AppId, Billing, Binding, ConnectionId, ConsentLedger, Disclosure, JobState, Locality,
-    ModelId, Payload, Request, Role, RoleId, StoreFile,
+    AiError, AppId, Billing, Binding, ConnectionId, Disclosure, JobState, Locality, ModelId,
+    Payload, Role, RoleId, StoreFile,
 };
 use craft_ai_native::ConsentFile;
 use craft_ai_native::shared::SharedStore;
 
-use craft_ai_features::{Feature, sample_request_for, setup_options};
+use craft_ai_features::{Feature, setup_options};
+
+#[path = "tools_sample.rs"]
+mod sample;
 
 use crate::client::{AiClient, Choice, Job, RoleStatus};
 use crate::popup::MissingModel;
+use crate::route_support::RouteSupport;
 
 /// What the launcher shows for one tool.
 #[derive(Clone, Debug)]
@@ -163,16 +167,27 @@ impl ToolDesk {
             model: model.clone(),
         };
         // Check inside the same store lock as the write: another app may change the tool or
-        // connection between an unlocked read and the update.
-        self.shared.update(|store| {
+        // connection between an unlocked read and the update. A provider this build has no adapter
+        // for is allowed here on purpose: this is the suite default, and the launcher may set up a
+        // model that only some apps can run. An app's own `bind` refuses it. `try_update` writes nothing when the
+        // check refuses, so a refusal leaves the file as it was.
+        self.shared.try_update(|store| {
             if only_if_unchosen && store.defaults.iter().any(|b| b.role == role.id) {
                 return Ok::<bool, AiError>(false);
             }
             store
                 .check_tool(role)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
-            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+            let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
+            if let RouteSupport::Unsupported { reason } = self.client.route_support(
+                resolved.connection,
+                model,
+                &role.capability,
+                &role.inputs,
+            ) {
+                return Err(AiError::unsupported(reason));
+            }
             set_default(store, binding);
             Ok(true)
         })?
@@ -290,73 +305,6 @@ impl ToolDesk {
         self.shared
             .update(|store| store.defaults.retain(|b| &b.role != role))?;
         Ok(())
-    }
-
-    /// Plans a sample. A remote destination the person has not agreed to yet comes back as
-    /// [`TestStart::NeedsConsent`] with nothing sent; pass `agreed` once they have said yes and
-    /// the agreement is recorded for the launcher, like any app's.
-    pub fn start_test(
-        &self,
-        role: &Role,
-        request: Request,
-        agreed: bool,
-    ) -> Result<TestStart, AiError> {
-        let plan = self.client.plan(role, request)?;
-        let mut ledger = self
-            .consent
-            .as_ref()
-            .map_or_else(ConsentLedger::default, ConsentFile::load_or_empty);
-        if plan.needs_consent(&ledger) {
-            if !agreed {
-                let billing = match self.client.status(role) {
-                    RoleStatus::Ready(ready) => ready.billing,
-                    RoleStatus::Unavailable { .. } => Billing::Metered,
-                };
-                return Ok(TestStart::NeedsConsent {
-                    disclosure: plan.disclosure().clone(),
-                    connection_label: plan.connection_label().to_owned(),
-                    billing,
-                });
-            }
-            ledger.grant(plan.disclosure());
-            if let Some(file) = &self.consent {
-                file.save(&ledger)?;
-            }
-        }
-        Ok(TestStart::Started(self.client.start(&plan, &ledger)?))
-    }
-
-    /// Starts the sample test that suits the tool's current choice. A built-in selection model
-    /// reads clicks, so it gets a click on the picture; every other route gets the description
-    /// sample. A tool with no choice made is refused before anything is sent, like
-    /// [`start_test`](Self::start_test).
-    pub fn start_sample(&self, feature: &Feature, agreed: bool) -> Result<TestStart, AiError> {
-        let role = feature
-            .role()
-            .ok_or_else(|| AiError::invalid("the tool id is not valid"))?;
-        // Built in means the connection this suite saves for the engine, holding the model the
-        // engine's recipe names: a custom connection may reuse the name, and connection
-        // management can put another model under that id, either of which may need words the
-        // click sample lacks.
-        let built_in = match self.client.local_route_for(&role) {
-            Ok(Some(route)) => feature
-                .engine_recipe(&route.provider)
-                .and_then(|recipe| {
-                    recipe
-                        .native
-                        .iter()
-                        .find(|native| native.provider == route.provider)
-                })
-                .is_some_and(|native| {
-                    route.connection.as_str()
-                        == crate::local::native_connection_id(&feature.id, &route.provider)
-                        && route.model.as_str() == native.model
-                }),
-            _ => false,
-        };
-        let request = sample_request_for(feature, built_in)
-            .ok_or_else(|| AiError::unsupported("there is no test for this tool yet"))?;
-        self.start_test(&role, request, agreed)
     }
 
     /// Waits for a started sample and says whether it produced something of the right kind.

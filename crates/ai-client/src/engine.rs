@@ -11,7 +11,8 @@ impl AiClient {
     /// The local engines `feature` can run on, best first, judged for `profile` (see
     /// `craft_ai_comfy_env::system::detect`). An engine this app has no adapter for is listed but
     /// never suggested. Every built-in engine some usable recipe lists is offered (each runs its own
-    /// recipe, [`Feature::engine_recipe`]), then ComfyUI; the memory limit is the first usable
+    /// recipe, [`Feature::engine_recipe`]), then ComfyUI when a usable recipe runs on it; the
+    /// memory limit is the first usable
     /// recipe's, the one [`ToolDesk::enable_local`](crate::ToolDesk::enable_local) registers. A tool
     /// with no usable recipe has no advice.
     pub fn engine_advice(&self, feature: &Feature, profile: &SystemProfile) -> Vec<EngineAdvice> {
@@ -19,7 +20,9 @@ impl AiClient {
             return Vec::new();
         };
         let mut providers: Vec<&str> = feature.engines();
-        providers.push("comfyui");
+        if feature.comfyui_recipes().any(|r| r.usable) {
+            providers.push("comfyui");
+        }
         let offers: Vec<EngineOffer> = providers
             .into_iter()
             .map(|p| EngineOffer {

@@ -54,6 +54,7 @@ pub(super) fn sam3() -> LocalRecipe {
         // PhotoCraft runs it today (Object Selection, `Sam3Session` through ComfyUI).
         usable: true,
         workflow: "sam3-segment".to_owned(),
+        comfyui: true,
         models: vec![ModelFile {
             folder: "sam3".to_owned(),
             filename: "sam3.safetensors".to_owned(),

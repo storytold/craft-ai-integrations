@@ -348,14 +348,15 @@ fn the_next_recipe_that_can_run_supplies_the_built_in_runtime() {
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
-/// Every other tool refuses a built-in runtime and writes nothing.
+/// Every tool other than Select subject and Remove background refuses a built-in runtime and
+/// writes nothing.
 #[test]
 fn a_tool_without_a_built_in_runtime_is_refused() {
     let w = World::new();
     let file = w.weights("sam3.safetensors");
     let others = craft_ai_features::builtin()
         .into_iter()
-        .filter(|f| f.id != "select-subject");
+        .filter(|f| f.id != "select-subject" && f.id != "remove-background");
     for f in others {
         assert!(
             w.desk("launcher").enable_native(&f, &file).is_err(),

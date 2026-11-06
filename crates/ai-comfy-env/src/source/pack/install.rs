@@ -8,12 +8,13 @@ use craft_ai_core::{AiError, ErrorKind};
 use sha2::{Digest, Sha256};
 
 use super::{
-    PackCandidate, PackConsent, PackEntry, PackError, PackLimits, PackRefusal, unpack,
+    PackCandidate, PackConsent, PackEntry, PackError, PackLimits, PackRefusal, simple_name, unpack,
     unsafe_archive,
 };
 use crate::download::Downloader;
 use crate::source::hosts::SourceKind;
 use crate::source::install::Installer;
+use crate::source::resolve::api::{is_hex, join};
 use crate::source::spec::plain_name;
 
 impl Installer {
@@ -44,9 +45,16 @@ impl Installer {
                 "install cancelled",
             )));
         }
+        // The archive is fetched from the repository and commit the consent names, never from an
+        // address carried alongside them.
+        let archive_url = self.pack_archive_url(candidate)?;
+        if candidate.archive_url != archive_url {
+            return Err(unsafe_archive(
+                "the archive address is not the one for this commit",
+            ));
+        }
         let downloader = Downloader::new(self.settings.download_config(SourceKind::NodePack));
-        let archive =
-            downloader.get_bytes(&candidate.archive_url, self.pack_limits.max_download, None)?;
+        let archive = downloader.get_bytes(&archive_url, self.pack_limits.max_download, None)?;
         let digest: String = Sha256::digest(&archive)
             .iter()
             .map(|b| format!("{b:02x}"))
@@ -118,6 +126,27 @@ impl Installer {
         }
         self.registry.remove_pack(folder)?;
         Ok(files)
+    }
+
+    /// The archive of exactly `candidate.commit` of `owner/repo`, as `resolve_pack` builds it.
+    fn pack_archive_url(&self, candidate: &PackCandidate) -> Result<String, PackError> {
+        if !simple_name(&candidate.owner) || !simple_name(&candidate.repo) {
+            return Err(unsafe_archive("the repository name is not a plain name"));
+        }
+        if !is_hex(&candidate.commit, 40)
+            || candidate.commit.bytes().any(|b| b.is_ascii_uppercase())
+        {
+            return Err(unsafe_archive("the commit is not a full commit id"));
+        }
+        Ok(join(
+            &self.settings.bases.github_web,
+            &[
+                &candidate.owner,
+                &candidate.repo,
+                "archive",
+                &format!("{}.tar.gz", candidate.commit),
+            ],
+        )?)
     }
 
     fn pack_stage(&self, candidate: &PackCandidate) -> std::path::PathBuf {

@@ -92,11 +92,16 @@ pub const DEVICE_ENV: &str = "CRAFT_AI_BURN_DEVICE";
 
 /// The graphics card when one answers, else the processor. `CRAFT_AI_BURN_DEVICE=cpu` forces the
 /// processor.
-fn pick_device() -> Device {
+pub(crate) fn pick_device() -> Device {
     let forced_processor = std::env::var_os(DEVICE_ENV).is_some_and(|v| v == "cpu");
     if !forced_processor && graphics_card_answers() {
         return WgpuDevice::default().into();
     }
+    processor()
+}
+
+/// The processor, through Burn's `ndarray` backend.
+pub(crate) fn processor() -> Device {
     #[allow(deprecated)]
     let cpu = NdArrayDevice::Cpu;
     cpu.into()

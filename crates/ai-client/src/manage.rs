@@ -323,7 +323,8 @@ impl ConnectionManager {
     }
 
     /// Tests a saved connection. With `remember`, the models found replace the saved list, so apps
-    /// offer what the server really has.
+    /// offer what the server really has. A remembered answer is refused if the saved connection
+    /// changed or was removed while the test ran; the newer settings are kept.
     pub fn test_saved(&self, id: &ConnectionId, remember: bool) -> Result<TestReport, AiError> {
         let current = self.load()?;
         let connection = current
@@ -333,16 +334,27 @@ impl ConnectionManager {
             .cloned()
             .ok_or_else(|| not_found(id))?;
         let secret = secret_for(self.secrets.as_ref(), &connection)?;
-        let report = self.ask(connection, secret)?;
+        let report = self.ask(connection.clone(), secret)?;
         // Only a list the server reported itself is remembered; a custom connection's models
         // are the ones a person declared, and a test never replaces them with guesses.
         if remember && report.probe.is_none() {
             let models = report.models.clone();
-            self.shared.update(|file| {
-                if let Some(c) = file.connections.iter_mut().find(|c| &c.id == id) {
-                    c.models = models;
+            self.shared.try_update(|file| {
+                let saved = file
+                    .connections
+                    .iter_mut()
+                    .find(|c| &c.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                // Compare and write under the same lock. The probe ran without that lock, so
+                // another app could have changed any part of the connection in the meantime.
+                if *saved != connection {
+                    return Err(AiError::invalid(
+                        "the connection changed during its test; test it again",
+                    ));
                 }
-            })?;
+                saved.models = models;
+                Ok(())
+            })??;
         }
         Ok(report)
     }

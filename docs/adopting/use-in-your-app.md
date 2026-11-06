@@ -137,7 +137,9 @@ let request = Request::new(role.capability.clone())
 ## 6. Plan
 
 `plan` checks the request against the chosen model and builds the disclosure: what would leave
-this computer, and where it would go. It sends nothing and reads no key.
+this computer, and where it would go. It sends nothing and reads no key. For a `file:` handle on
+this computer it shows the file's size on disk, not the `size` you passed. A file it cannot look
+at, or a handle address that does not parse, shows no size.
 
 <!-- snippet: plan -->
 ```rust
@@ -305,6 +307,13 @@ so you draw them and run the work on a thread:
    on the test picture, because every built-in route reads clicks and some read no words. A
    selection that chose nothing fails the test, and so does a selection that returned a mask with
    no result beside it, because the contract gives every route both.
+
+For a sample, call `start_sample(feature, None)` first. If it returns
+`TestStart::NeedsConsent`, show and retain that disclosure. After the person agrees, pass
+`Some(&disclosure)` to `start_sample`. If settings or the sample have changed, a different
+disclosure comes back for review, with nothing sent or remembered. `start_test` follows the
+same pattern for a caller-supplied request. This replaces the former boolean approval argument;
+an approval callback must retain the disclosure rather than reconstruct it from current settings.
 
 Nothing in these steps binds a model, downloads anything or starts a job without the person
 pressing the button.

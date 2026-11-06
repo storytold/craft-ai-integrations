@@ -18,6 +18,8 @@ pub struct ArtCraftConfig {
     pub max_active_jobs: usize,
 }
 impl ArtCraftConfig {
+    /// A config for `base_url` with `api_key`, the default timeouts and at most 16 tracked jobs.
+    /// Nothing is checked until the adapter is built.
     pub fn new(base_url: impl Into<String>, api_key: SecretString) -> Self {
         Self {
             base_url: base_url.into(),
@@ -41,6 +43,7 @@ struct Job {
 /// submits cannot all pass the limit before any of them is recorded.
 struct Reservation<'a>(&'a AtomicUsize);
 impl Drop for Reservation<'_> {
+    /// Frees the slot when the submit ends, whether it recorded a job or failed.
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
@@ -52,11 +55,24 @@ pub struct ArtCraftProvider {
     max_active: usize,
 }
 impl std::fmt::Debug for ArtCraftProvider {
+    /// Names the adapter only, so a debug print never shows the key.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ArtCraftProvider(Omni API key)")
     }
 }
 impl ArtCraftProvider {
+    /// Whether [`new`](Self::new) accepts `base_url`: the official address or a test server on this
+    /// computer, with no query or fragment. It reads no key and contacts nothing, so the client's
+    /// support check asks it before anything is built.
+    pub fn address_allowed(base_url: &str) -> bool {
+        let base = base_url.trim_end_matches('/');
+        !base.contains(['?', '#'])
+            && Endpoint::parse(base)
+                .is_ok_and(|e| e.is_loopback() || base == "https://api.storyteller.ai")
+    }
+
+    /// Checks the key is one line and the address is one [`address_allowed`](Self::address_allowed)
+    /// accepts, then builds the adapter. It contacts nothing.
     pub fn new(config: ArtCraftConfig) -> Result<Self, AiError> {
         if config.api_key.is_empty()
             || config
@@ -70,11 +86,8 @@ impl ArtCraftProvider {
             ));
         }
         let base = config.base_url.trim_end_matches('/');
-        let endpoint = Endpoint::parse(base)
-            .map_err(|_| AiError::invalid("invalid ArtCraft Omni API address"))?;
-        if base.contains(['?', '#'])
-            || (!endpoint.is_loopback() && base != "https://api.storyteller.ai")
-        {
+        Endpoint::parse(base).map_err(|_| AiError::invalid("invalid ArtCraft Omni API address"))?;
+        if !Self::address_allowed(base) {
             return Err(AiError::invalid(
                 "ArtCraft Omni API must use its official address",
             ));

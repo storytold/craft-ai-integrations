@@ -2,6 +2,7 @@
 //! label. Outputs must be the media their file name says; source and mask images may arrive inline
 //! or as a local file handle, are bounded, and must be the PNG or JPEG they are declared to be
 //! before a single byte is sent. Scripted localhost servers and temporary folders only.
+mod media_support;
 #[path = "../../ai-openai/tests/support/mod.rs"]
 mod support;
 
@@ -10,6 +11,7 @@ use craft_ai_core::capability::CapabilityId;
 use craft_ai_core::model::InputRole;
 use craft_ai_core::payload::Payload;
 use craft_ai_core::{ErrorKind, JobState, ModelId, Provider, Request};
+use media_support::file_handle;
 use serde_json::json;
 use support::{Reply, Server, http_bytes};
 
@@ -276,12 +278,7 @@ fn submit(
     p: &ComfyProvider,
     request: &Request,
 ) -> Result<craft_ai_core::JobId, craft_ai_core::AiError> {
-    p.submit(&ModelId::new("repair").unwrap(), request)
-}
-
-fn file_handle(path: &std::path::Path, media: &str) -> Payload {
-    let uri = url::Url::from_file_path(path).unwrap().to_string();
-    Payload::handle(&uri, media, None).unwrap()
+    media_support::submit(p, "repair", request)
 }
 
 /// The case only Unix can make: a character device opens like a file and reads as no bytes at all,
@@ -348,29 +345,7 @@ fn an_input_that_is_not_the_image_it_claims_is_never_uploaded() {
     let secrets = write(&dir, "notes.png", b"the password is hunter2");
     let wrong_kind = write(&dir, "photo.png", JPEG);
     let empty = write(&dir, "empty.png", b"");
-    let cases: Vec<(&str, Payload)> = vec![
-        (
-            "a text file declared as png",
-            file_handle(&secrets, "image/png"),
-        ),
-        (
-            "jpeg bytes declared as png",
-            file_handle(&wrong_kind, "image/png"),
-        ),
-        ("an empty file", file_handle(&empty, "image/png")),
-        (
-            "inline text declared as png",
-            Payload::inline("image/png", b"the password is hunter2".to_vec()).unwrap(),
-        ),
-        (
-            "inline html declared as jpeg",
-            Payload::inline("image/jpeg", b"<html></html>".to_vec()).unwrap(),
-        ),
-        (
-            "a format ComfyUI would receive mislabelled",
-            Payload::inline("image/webp", b"RIFF\0\0\0\0WEBPVP8 ".to_vec()).unwrap(),
-        ),
-    ];
+    let cases = media_support::invalid_image_cases(&secrets, &wrong_kind, &empty, None);
     for (why, bad) in cases {
         for swap in [false, true] {
             let server = inpaint_server();

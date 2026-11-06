@@ -43,6 +43,7 @@
 
 mod client;
 mod declarative;
+mod disclosed_size;
 mod engine;
 mod engines;
 mod factory;
@@ -54,6 +55,7 @@ mod picker;
 mod picker_groups;
 mod picker_presets;
 mod popup;
+mod route_support;
 mod runner;
 mod setup_flow;
 mod tools;
@@ -79,6 +81,7 @@ pub use picker::{
 };
 pub use picker_presets::pick_label;
 pub use popup::MissingModel;
+pub use route_support::{RouteFacts, RouteQuery, RouteSupport, SupportFn};
 pub use runner::{TestRunner, TestTarget};
 pub use setup_flow::{SetupBlock, SetupRequest, SetupSession, SetupTask, SetupTicket};
 pub use tools::{Accepted, SampleReport, Skipped, TestStart, ToolDesk, ToolView};

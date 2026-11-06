@@ -132,7 +132,12 @@ fn the_runner_is_the_burn_sam21_the_catalogue_names() {
     assert_eq!(spec.requires, vec![InputRole::Source]);
     assert!(spec.accepts.contains_key(&InputRole::Prompt));
     assert!(runner.accelerators().contains(&GpuVendor::Nvidia));
-    assert_eq!(runners().len(), 1);
+    // SAM 2.1 for `image.segment`, InSPyReNet for `image.matte`.
+    let ids: Vec<String> = runners()
+        .iter()
+        .map(|r| r.model().id.as_str().to_owned())
+        .collect();
+    assert_eq!(ids, ["sam21", "inspyrenet"]);
 }
 
 /// The downloaded ONNX file is not what this engine reads, and it is not the supported export

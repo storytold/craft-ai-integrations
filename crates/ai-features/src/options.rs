@@ -49,7 +49,7 @@ pub struct SetupOption {
     pub size_bytes: Option<u64>,
 }
 
-/// Every local model first, one per recipe in catalogue order, then every tool's built-in
+/// Every local model first, one per recipe ComfyUI runs in catalogue order, then every tool's built-in
 /// runtimes (one per runtime, from its first usable recipe), then hosted services in the order the
 /// features first name them.
 pub fn setup_options(features: &[Feature]) -> Vec<SetupOption> {
@@ -57,7 +57,7 @@ pub fn setup_options(features: &[Feature]) -> Vec<SetupOption> {
     let mut natives = Vec::new();
     let mut services: Vec<SetupOption> = Vec::new();
     for feature in features {
-        for recipe in &feature.locals {
+        for recipe in feature.comfyui_recipes() {
             locals.push(SetupOption {
                 id: format!("local:{}:{}", feature.id, recipe.workflow),
                 title: recipe.label.clone(),
