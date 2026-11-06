@@ -115,7 +115,7 @@ const PAINT_BY_ALPHA: u8 = 2;
 fn mark_row(row: &[u8], channels: usize, width: usize, marks: &mut Vec<u8>) -> bool {
     let mut translucent = false;
     for p in row.chunks_exact(channels).take(width) {
-        let alpha = if channels % 2 == 0 {
+        let alpha = if channels.is_multiple_of(2) {
             p.last().copied().unwrap_or(255)
         } else {
             255
