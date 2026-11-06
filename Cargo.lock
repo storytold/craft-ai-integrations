@@ -2225,6 +2225,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-mcp"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-client",
+ "craft-ai-core",
+ "craft-ai-features",
+ "craft-ai-http",
+ "craft-ai-media",
+ "craft-ai-native",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq 3.5.0",
+]
+
+[[package]]
 name = "craft-ai-media"
 version = "0.1.0"
 dependencies = [

@@ -11,7 +11,11 @@ repository = "https://github.com/storytold/craft-ai-integrations"
 
 [workspace.dependencies]
 craft-ai-core = { path = "crates/ai-core" }
+    craft-ai-client = { path = "crates/ai-client" }
+craft-ai-features = { path = "crates/ai-features" }
 craft-ai-http = { path = "crates/ai-http" }
+craft-ai-native = { path = "crates/ai-native" }
+craft-ai-media = { path = "crates/ai-media" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # All date/time conversion goes through chrono (no hand-rolled calendar code; CONTRIBUTING.md).
