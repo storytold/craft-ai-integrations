@@ -225,6 +225,19 @@ impl ConnectionDraft {
         true
     }
 
+    /// Records that a test at `address`, the field value when the test started, confirmed the
+    /// models the form already holds, without replacing them. A custom connection's test lists no
+    /// models: the ones a person declared are what it offers, so they now belong to this address
+    /// and a save keeps them. Refused, changing nothing, for an address no longer in the form.
+    #[must_use]
+    pub fn confirm_models_for(&mut self, address: &str) -> bool {
+        if address.trim() != self.endpoint.trim() {
+            return false;
+        }
+        self.models_for = Some(self.endpoint.trim().to_owned());
+        true
+    }
+
     /// Known provenance must match the saved address, including after repeated edits.
     /// A new custom draft can carry manually declared models without prior provenance.
     fn models_fit(&self, address: &str) -> bool {
