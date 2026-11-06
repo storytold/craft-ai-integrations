@@ -15,6 +15,8 @@
 //!   [`ToolDesk::choose`]. A provider with no adapter in this build is not refused here.
 //! - Withdrawing refuses while another binding still needs the ability, rather than leaving that
 //!   binding stale or silently deleting someone's choice.
+//! - An app's own choice is not refused for a provider this build has no adapter for: the launcher
+//!   assigning it is a different build from the app, so only the route check above applies.
 //! - A suite choice never touches an app's own override, and an app choice never touches the suite
 //!   default. The other layer is reported so a host can show it.
 
@@ -32,7 +34,7 @@ use crate::tools::ToolDesk;
 
 mod refresh;
 pub use refresh::UnavailableChoice;
-pub(crate) use refresh::{refreshed_models, unavailable_choices};
+pub(crate) use refresh::{refreshed_models, unavailable_choices, without_withdrawn};
 
 /// Marks a model the connection did not list, added only because a person assigned it to a tool.
 const DECLARED_MODEL: &str = "declared-model";
@@ -354,9 +356,13 @@ fn forget_declared(
     if !declared {
         return Ok(false);
     }
-    if let Some(user) = binding_needing(store, role, connection, model) {
+    if let Some((user, scope)) = binding_needing(store, role, connection, model) {
+        let place = match scope {
+            ChoiceScope::Suite => "the choice for every app".to_owned(),
+            ChoiceScope::App(app) => format!("{app}'s own choice"),
+        };
         return Err(AiError::invalid(format!(
-            "another choice still uses this model ({user}); change that choice first"
+            "another choice still uses this model ({user}, {place}); change that choice first"
         )));
     }
     let saved = connection_mut(store, connection)?;
@@ -383,24 +389,44 @@ fn forget_declared(
     Ok(true)
 }
 
-/// A binding on this model that needs `role`'s capability, in any scope. A binding for a tool this
-/// build does not know counts as needing it, since the ability might be what it relies on.
+/// A binding on this model that needs what withdrawing would remove, and the scope it is in. When a
+/// person declared the whole ability, any binding with that capability needs it. When only inputs
+/// were added to a reported ability, only a binding whose tool takes one of them does. A binding
+/// for a tool this build does not know counts as needing it, since it might be what it relies on.
 fn binding_needing(
     store: &StoreFile,
     role: &Role,
     connection: &ConnectionId,
     model: &ModelId,
-) -> Option<RoleId> {
+) -> Option<(RoleId, ChoiceScope)> {
     let features = builtin();
-    let needs = |tool: &RoleId| {
-        known_tool(store, &features, tool).is_none_or(|known| known.capability == role.capability)
-    };
-    store
-        .defaults
+    let info = store
+        .connections
         .iter()
-        .chain(store.apps.values().flat_map(|a| a.overrides.iter()))
-        .find(|b| (&b.connection, &b.model) == (connection, model) && needs(&b.role))
-        .map(|b| b.role.clone())
+        .find(|c| &c.id == connection)
+        .and_then(|c| c.model(model))?;
+    let whole = info.tags.contains(&declared_tag(&role.capability));
+    let needs = |tool: &RoleId| {
+        known_tool(store, &features, tool).is_none_or(|known| {
+            known.capability == role.capability
+                && (whole
+                    || known.inputs.iter().any(|input| {
+                        info.tags
+                            .contains(&declared_input_tag(&role.capability, input))
+                    }))
+        })
+    };
+    let here = |b: &Binding| (&b.connection, &b.model) == (connection, model) && needs(&b.role);
+    if let Some(b) = store.defaults.iter().find(|b| here(b)) {
+        return Some((b.role.clone(), ChoiceScope::Suite));
+    }
+    store.apps.iter().find_map(|(app, settings)| {
+        settings
+            .overrides
+            .iter()
+            .find(|b| here(b))
+            .map(|b| (b.role.clone(), ChoiceScope::App(app.clone())))
+    })
 }
 
 /// The tool a binding is for: a custom tool saved in the store, else a built-in one. `None` for a

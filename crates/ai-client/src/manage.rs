@@ -27,7 +27,9 @@ use craft_ai_core::{
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
 use craft_ai_native::shared::SharedStore;
 
-use crate::assignments::{UnavailableChoice, refreshed_models, unavailable_choices};
+use crate::assignments::{
+    UnavailableChoice, refreshed_models, unavailable_choices, without_withdrawn,
+};
 use crate::factory::ProviderFactory;
 
 mod probe;
@@ -223,6 +225,7 @@ impl ConnectionManager {
                             && slot.endpoint == again.connection.endpoint
                         {
                             let listed = std::mem::take(&mut again.connection.models);
+                            let listed = without_withdrawn(listed, &slot.models);
                             let mut models = refreshed_models(&slot.models, listed);
                             // A model listed after the form opened is news from elsewhere, not one
                             // the form removed.
@@ -301,36 +304,40 @@ impl ConnectionManager {
 
     /// Turns a connection on or off without losing it.
     pub fn set_enabled(&self, id: &ConnectionId, enabled: bool) -> Result<(), AiError> {
-        let found = self.shared.update(|file| {
-            file.connections
+        // An unknown id writes nothing, so it never creates a file or rewrites one.
+        self.shared.try_update(|saved| {
+            saved
+                .connections
                 .iter_mut()
                 .find(|c| &c.id == id)
                 .map(|c| c.enabled = enabled)
-                .is_some()
-        })?;
-        if found { Ok(()) } else { Err(not_found(id)) }
+                .ok_or_else(|| not_found(id))
+        })?
     }
 
     /// Removes a connection, the choices that used it, and its key.
     pub fn delete(&self, id: &ConnectionId) -> Result<Removed, AiError> {
-        let (gone, bindings_removed, key_still_used) = self
-            .shared
-            .update(|file| {
-                let pos = file.connections.iter().position(|c| &c.id == id)?;
-                let gone = file.connections.remove(pos);
-                let before = count_bindings(file, id);
-                file.defaults.retain(|b| &b.connection != id);
-                for app in file.apps.values_mut() {
-                    app.overrides.retain(|b| &b.connection != id);
-                }
-                let key_still_used = gone.auth.secret_ref().is_some_and(|r| {
-                    file.connections
-                        .iter()
-                        .any(|c| c.auth.secret_ref() == Some(r))
-                });
-                Some((gone, before, key_still_used))
-            })?
-            .ok_or_else(|| not_found(id))?;
+        // An unknown id writes nothing, so the file's bytes stay as they were.
+        let (gone, bindings_removed, key_still_used) = self.shared.try_update(|saved| {
+            let pos = saved
+                .connections
+                .iter()
+                .position(|c| &c.id == id)
+                .ok_or_else(|| not_found(id))?;
+            let gone = saved.connections.remove(pos);
+            let before = count_bindings(saved, id);
+            saved.defaults.retain(|b| &b.connection != id);
+            for app in saved.apps.values_mut() {
+                app.overrides.retain(|b| &b.connection != id);
+            }
+            let key_still_used = gone.auth.secret_ref().is_some_and(|r| {
+                saved
+                    .connections
+                    .iter()
+                    .any(|c| c.auth.secret_ref() == Some(r))
+            });
+            Ok::<_, AiError>((gone, before, key_still_used))
+        })??;
         let key_removed = match gone.auth.secret_ref() {
             Some(r) if !key_still_used => self.secrets.delete(r).is_ok(),
             _ => true,

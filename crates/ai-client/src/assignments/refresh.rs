@@ -33,6 +33,70 @@ pub(crate) fn refreshed_models(old: &[ModelInfo], reported: Vec<ModelInfo>) -> V
     models
 }
 
+/// The form's list with every declaration the saved connection no longer has taken out: a declared
+/// model it no longer lists, a declared ability and a declared input it no longer marks. A form holds
+/// a copy from when it opened, so without this a save after a withdrawal would put the withdrawn
+/// declaration back. Where the saved model now reports the ability or input itself, the saved
+/// version is used. Declarations made after the form opened are added back by [`refreshed_models`].
+pub(crate) fn without_withdrawn(form: Vec<ModelInfo>, saved: &[ModelInfo]) -> Vec<ModelInfo> {
+    form.into_iter()
+        .filter_map(|mut m| {
+            let now = saved.iter().find(|s| s.id == m.id);
+            if m.tags.iter().any(|t| t == DECLARED_MODEL)
+                && !now.is_some_and(|s| s.tags.iter().any(|t| t == DECLARED_MODEL))
+            {
+                return now.cloned();
+            }
+            let still = |tag: &String| now.is_some_and(|s| s.tags.contains(tag));
+            let gone: Vec<String> = m.tags.iter().filter(|t| !still(t)).cloned().collect();
+            for tag in &gone {
+                if let Some(input) = parse_input_tag(tag) {
+                    drop_input(&mut m, now, &input);
+                } else if let Some(capability) = tag.strip_prefix("declared:") {
+                    let Ok(capability) = capability.parse::<CapabilityId>() else {
+                        continue;
+                    };
+                    m.capabilities.retain(|s| s.capability != capability);
+                    if let Some(reported) = now.and_then(|s| s.spec_for(&capability)) {
+                        m.capabilities.push(reported.clone());
+                    }
+                } else {
+                    continue;
+                }
+                m.tags.retain(|t| t != tag);
+            }
+            Some(m)
+        })
+        .collect()
+}
+
+/// Takes a withdrawn declared input off the form's copy of the ability, or uses the saved model's
+/// own answer for it when that model now reports the input.
+fn drop_input(
+    m: &mut ModelInfo,
+    now: Option<&ModelInfo>,
+    (capability, input): &(CapabilityId, InputRole),
+) {
+    let reported = now
+        .and_then(|s| s.spec_for(capability))
+        .and_then(|s| s.accepts.get(input))
+        .copied();
+    if let Some(spec) = m
+        .capabilities
+        .iter_mut()
+        .find(|s| &s.capability == capability)
+    {
+        match reported {
+            Some(most) => {
+                spec.accepts.insert(input.clone(), most);
+            }
+            None => {
+                spec.accepts.remove(input);
+            }
+        }
+    }
+}
+
 /// Puts what a person declared on `before` back onto `now`. A whole declared ability the provider
 /// does not report comes back as it was. Where the provider reports the ability, only the inputs a
 /// person declared and the provider lacks are added, each tagged so it can be taken back later.
