@@ -25,10 +25,14 @@ use craft_ai_core::{
     AiError, AppId, Binding, CapabilityId, Connection, ConnectionId, ModelId, Role, RoleId,
     StoreFile,
 };
-use craft_ai_features::builtin;
+use craft_ai_features::{Feature, builtin};
 
 use crate::route_support::RouteSupport;
 use crate::tools::ToolDesk;
+
+mod refresh;
+pub use refresh::UnavailableChoice;
+pub(crate) use refresh::{refreshed_models, unavailable_choices};
 
 /// Marks a model the connection did not list, added only because a person assigned it to a tool.
 const DECLARED_MODEL: &str = "declared-model";
@@ -244,6 +248,7 @@ impl ToolDesk {
     }
 }
 
+/// The bindings of `scope`, creating an app's settings when it has none yet.
 fn layer_mut<'a>(store: &'a mut StoreFile, scope: &ChoiceScope) -> &'a mut Vec<Binding> {
     match scope {
         ChoiceScope::Suite => &mut store.defaults,
@@ -266,6 +271,7 @@ fn apps_on(store: &StoreFile, role: &RoleId, test: impl Fn(&Binding) -> bool) ->
         .collect()
 }
 
+/// The saved connection `id`, or an error a person can read when it has been removed.
 fn connection_mut<'a>(
     store: &'a mut StoreFile,
     id: &ConnectionId,
@@ -385,19 +391,7 @@ fn binding_needing(
 ) -> Option<RoleId> {
     let features = builtin();
     let needs = |tool: &RoleId| {
-        let known = store
-            .custom_tools
-            .iter()
-            .find(|t| &t.id == tool)
-            .map(|t| t.capability.clone())
-            .or_else(|| {
-                features
-                    .iter()
-                    .find(|f| f.id == tool.as_str())
-                    .and_then(|f| f.role())
-                    .map(|r| r.capability)
-            });
-        known.is_none_or(|capability| capability == role.capability)
+        known_tool(store, &features, tool).is_none_or(|known| known.capability == role.capability)
     };
     store
         .defaults
@@ -407,97 +401,18 @@ fn binding_needing(
         .map(|b| b.role.clone())
 }
 
-/// A saved list after a refresh or a saved form: the new list, plus what a person declared on top of
-/// the old one. A declared ability or input the new list already has stops being marked as
-/// declared, since the provider now reports it.
-pub(crate) fn refreshed_models(old: &[ModelInfo], reported: Vec<ModelInfo>) -> Vec<ModelInfo> {
-    let mut models = reported;
-    for before in old {
-        match models.iter_mut().find(|m| m.id == before.id) {
-            Some(now) => carry_declared(before, now),
-            None if before.tags.iter().any(|t| t == DECLARED_MODEL) => models.push(before.clone()),
-            None => {}
-        }
-    }
-    models
-}
-
-/// Puts what a person declared on `before` back onto `now`. A whole declared ability the provider
-/// does not report comes back as it was. Where the provider reports the ability, only the inputs a
-/// person declared and the provider lacks are added, each tagged so it can be taken back later.
-fn carry_declared(before: &ModelInfo, now: &mut ModelInfo) {
-    for spec in &before.capabilities {
-        let tag = declared_tag(&spec.capability);
-        let whole = before.tags.contains(&tag);
-        if now.tags.contains(&tag) {
-            continue;
-        }
-        match now
-            .capabilities
-            .iter_mut()
-            .find(|s| s.capability == spec.capability)
-        {
-            None if whole => {
-                now.capabilities.push(spec.clone());
-                now.tags.push(tag);
-            }
-            None => {}
-            Some(reported) => {
-                for (input, most) in &spec.accepts {
-                    let input_tag = declared_input_tag(&spec.capability, input);
-                    let declared = whole || before.tags.contains(&input_tag);
-                    if declared && !reported.accepts.contains_key(input) {
-                        reported.accepts.insert(input.clone(), *most);
-                        if !now.tags.contains(&input_tag) {
-                            now.tags.push(input_tag);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// A person's choice whose model the connection no longer offers. The choice is kept, so it works
-/// again if the model comes back, and it is reported so a host can say so.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UnavailableChoice {
-    pub scope: ChoiceScope,
-    pub tool: RoleId,
-    pub model: ModelId,
-}
-
-/// Every choice on `connection` whose model it no longer lists.
-pub(crate) fn unavailable_choices(
-    store: &StoreFile,
-    connection: &ConnectionId,
-) -> Vec<UnavailableChoice> {
-    let Some(saved) = store.connections.iter().find(|c| &c.id == connection) else {
-        return Vec::new();
-    };
-    let gone = |b: &&Binding| &b.connection == connection && saved.model(&b.model).is_none();
-    let mut out: Vec<UnavailableChoice> = store
-        .defaults
+/// The tool a binding is for: a custom tool saved in the store, else a built-in one. `None` for a
+/// tool this build does not know.
+fn known_tool(store: &StoreFile, features: &[Feature], tool: &RoleId) -> Option<Role> {
+    store
+        .custom_tools
         .iter()
-        .filter(gone)
-        .map(|b| UnavailableChoice {
-            scope: ChoiceScope::Suite,
-            tool: b.role.clone(),
-            model: b.model.clone(),
-        })
-        .collect();
-    for (app, settings) in &store.apps {
-        out.extend(
-            settings
-                .overrides
+        .find(|t| &t.id == tool)
+        .cloned()
+        .or_else(|| {
+            features
                 .iter()
-                .filter(gone)
-                .map(|b| UnavailableChoice {
-                    scope: ChoiceScope::App(app.clone()),
-                    tool: b.role.clone(),
-                    model: b.model.clone(),
-                }),
-        );
-    }
-    out
+                .find(|f| f.id == tool.as_str())
+                .and_then(|f| f.role())
+        })
 }

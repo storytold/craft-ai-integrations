@@ -67,6 +67,7 @@ pub enum SaveError {
 }
 
 impl std::fmt::Display for SaveError {
+    /// The message of the draft or store error, which is safe to show.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(e) => e.fmt(f),
@@ -382,6 +383,8 @@ impl ConnectionManager {
         Ok(report)
     }
 
+    /// Asks the server for its models, or runs the custom-connection probe, with nothing saved.
+    /// For a listed service the saved list is cleared first, so the answer comes from the server.
     fn ask(
         &self,
         mut connection: Connection,
