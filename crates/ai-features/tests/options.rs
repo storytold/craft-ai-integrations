@@ -33,9 +33,12 @@ fn a_service_unlocks_every_tool_that_names_it_once() {
     let bfl = options.iter().find(|o| o.id == "service:bfl").unwrap();
     assert_eq!(
         bfl.unlocks,
-        ["generate-image", "generate-video"],
-        "named by two tools, listed once each"
+        ["generative-fill", "generate-image", "generate-video"],
+        "named by three tools, listed once each"
     );
+    let gemini = options.iter().find(|o| o.id == "service:gemini").unwrap();
+    assert_eq!(gemini.unlocks, ["generative-fill"]);
+    assert_eq!(gemini.title, "Google Gemini");
 }
 
 #[test]

@@ -20,6 +20,8 @@ pub struct SeedanceConfig {
     pub request_timeout: Duration,
 }
 impl SeedanceConfig {
+    /// A config for `base_url` with `api_key` and the default timeouts. Nothing is checked until
+    /// the adapter is built.
     pub fn new(base_url: impl Into<String>, api_key: SecretString) -> Self {
         Self {
             base_url: base_url.into(),
@@ -38,11 +40,25 @@ pub struct SeedanceProvider {
     jobs: Mutex<HashMap<JobId, Job>>,
 }
 impl std::fmt::Debug for SeedanceProvider {
+    /// Names the adapter only, so a debug print never shows the key.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SeedanceProvider")
     }
 }
 impl SeedanceProvider {
+    /// Whether [`new`](Self::new) accepts `base_url`: the official address or a test server on this
+    /// computer, with no query or fragment. It reads no key and contacts nothing, so the client's
+    /// support check asks it before anything is built.
+    pub fn address_allowed(base_url: &str) -> bool {
+        let base = base_url.trim_end_matches('/');
+        !base.contains(['?', '#'])
+            && Endpoint::parse(base).is_ok_and(|e| {
+                e.is_loopback() || base == "https://ark.ap-southeast.bytepluses.com/api/v3"
+            })
+    }
+
+    /// Checks the key is one line and the address is one [`address_allowed`](Self::address_allowed)
+    /// accepts, then builds the adapter. It contacts nothing.
     pub fn new(config: SeedanceConfig) -> Result<Self, AiError> {
         if config.api_key.is_empty()
             || config
@@ -56,11 +72,8 @@ impl SeedanceProvider {
             ));
         }
         let base = config.base_url.trim_end_matches('/');
-        let endpoint =
-            Endpoint::parse(base).map_err(|_| AiError::invalid("invalid ModelArk API address"))?;
-        if base.contains(['?', '#'])
-            || (!endpoint.is_loopback() && base != "https://ark.ap-southeast.bytepluses.com/api/v3")
-        {
+        Endpoint::parse(base).map_err(|_| AiError::invalid("invalid ModelArk API address"))?;
+        if !Self::address_allowed(base) {
             return Err(AiError::invalid(
                 "Seedance must use the official BytePlus ModelArk address",
             ));
@@ -75,7 +88,8 @@ impl SeedanceProvider {
             jobs: Mutex::new(HashMap::new()),
         })
     }
-    fn catalog() -> Vec<ModelInfo> {
+    /// The models this adapter serves, and what each can do.
+    pub fn catalog() -> Vec<ModelInfo> {
         match (ModelId::new(MODEL), CapabilityId::parse("video.generate")) {
             (Ok(id), Ok(cap)) => vec![
                 ModelInfo::new(id, "Seedance 2.0").with(

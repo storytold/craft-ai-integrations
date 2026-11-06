@@ -17,11 +17,16 @@ use craft_ai_bfl::{BflConfig, BflProvider};
 use craft_ai_comfyui::{ComfyConfig, ComfyProvider, WorkflowLibrary};
 use craft_ai_core::{AiError, Connection, Locality, Provider, SecretString};
 use craft_ai_features::GpuVendor;
+use craft_ai_gemini::{GeminiConfig, GeminiProvider};
 use craft_ai_media::{MediaStore, MediaStoreConfig, PersistingProvider};
 use craft_ai_openai::{OpenAiConfig, OpenAiProvider};
 use craft_ai_sam3::{Sam3Config, Sam3Provider};
 use craft_ai_seedance::{SeedanceConfig, SeedanceProvider};
 use craft_ai_vertex::{VertexConfig, VertexProvider};
+
+use crate::route_support::{
+    AddressRule, RouteQuery, RouteSupport, SupportFn, at_address, list_check, vertex_check,
+};
 
 /// Builds a provider for one connection.
 pub type BuildFn =
@@ -44,6 +49,8 @@ pub struct ProviderFactory {
     builders: HashMap<String, Arc<BuildFn>>,
     /// The card makers an app states its build of an engine can use (see `declare_accelerators`).
     accelerators: HashMap<String, Vec<GpuVendor>>,
+    /// What each adapter says about its own limits (see `route_support`). No entry means untested.
+    support: HashMap<String, Arc<SupportFn>>,
     /// Where the ComfyUI builder reads workflow files; the shared default when `None`.
     comfyui_library: Option<std::path::PathBuf>,
     /// Where the settings files for data-described services are read; the shared default when `None`.
@@ -78,6 +85,8 @@ impl ProviderFactory {
         Self::built(None, Some(dir.into()))
     }
 
+    /// The standard factory with the given timeouts and ComfyUI workflow library: every built-in
+    /// adapter registered, and the support checks of those that serve a fixed list.
     fn built(
         timeouts: Option<(Duration, Duration)>,
         comfyui_library: Option<std::path::PathBuf>,
@@ -85,6 +94,7 @@ impl ProviderFactory {
         let mut f = Self {
             builders: HashMap::new(),
             accelerators: HashMap::new(),
+            support: HashMap::new(),
             comfyui_library,
             declarative_specs: None,
             comfyui_output_dir: None,
@@ -126,6 +136,21 @@ impl ProviderFactory {
                 cfg.request_timeout = request;
             }
             Ok(Arc::new(BflProvider::new(cfg)?))
+        });
+        f.register("gemini", move |c, s| {
+            let base = c
+                .endpoint
+                .as_deref()
+                .ok_or_else(|| AiError::invalid("Gemini API address is required"))?;
+            let key = s.ok_or_else(|| {
+                AiError::new(craft_ai_core::ErrorKind::Auth, "Gemini API key is required")
+            })?;
+            let mut cfg = GeminiConfig::new(base, key);
+            if let Some((connect, request)) = timeouts {
+                cfg.connect_timeout = connect;
+                cfg.request_timeout = request;
+            }
+            Ok(Arc::new(GeminiProvider::new(cfg)?))
         });
         f.register("seedance", move |c, s| {
             let base = c
@@ -184,6 +209,7 @@ impl ProviderFactory {
         );
         f.register_declarative();
         f.register_engines(crate::engines::built_in());
+        f.declare_built_in_support();
         f
     }
 
@@ -199,8 +225,9 @@ impl ProviderFactory {
         + 'static,
     ) {
         let name = name.to_ascii_lowercase();
-        // A different build of the adapter is not the one whose cards were declared.
+        // A different build of the adapter is not the one whose cards or limits were declared.
         self.accelerators.remove(&name);
+        self.support.remove(&name);
         self.builders.insert(name, Arc::new(build));
     }
 
@@ -211,6 +238,7 @@ impl ProviderFactory {
         let name = name.to_ascii_lowercase();
         self.builders.remove(&name);
         self.accelerators.remove(&name);
+        self.support.remove(&name);
     }
 
     /// Points data-described services at a specific folder of settings files (one file per
@@ -265,6 +293,8 @@ impl ProviderFactory {
         Ok(self)
     }
 
+    /// Registers the ComfyUI adapter, which needs a workflow library and may save outputs to
+    /// `output_dir`.
     fn register_comfyui(
         &mut self,
         comfyui_library: Option<std::path::PathBuf>,
@@ -301,6 +331,53 @@ impl ProviderFactory {
             }
             Ok(Arc::new(ComfyProvider::new(cfg)?))
         });
+    }
+
+    /// States what the adapter `name` can carry out, for its status to be honest before anyone
+    /// agrees to send anything. The check must not read a key, build a provider or contact anything.
+    /// Call it after [`register`](Self::register), which forgets what was said about the old adapter.
+    pub fn declare_support(
+        &mut self,
+        name: &str,
+        check: impl Fn(&RouteQuery<'_>) -> RouteSupport + Send + Sync + 'static,
+    ) {
+        self.support
+            .insert(name.to_ascii_lowercase(), Arc::new(check));
+    }
+
+    /// What the adapter for this connection says about this request path. An adapter that says
+    /// nothing is [`RouteSupport::Untested`].
+    pub fn route_support(&self, query: &RouteQuery<'_>) -> RouteSupport {
+        self.support
+            .get(&query.connection.provider.to_ascii_lowercase())
+            .map_or(RouteSupport::Untested, |check| check(query))
+    }
+
+    /// The built-in adapters that serve a fixed list of models say so. Those that take any model
+    /// the service offers, and adapters added later, stay untested.
+    fn declare_built_in_support(&mut self) {
+        let lists: [(&str, Vec<_>, AddressRule); 3] = [
+            (
+                "artcraft-omni",
+                ArtCraftProvider::documented_models(),
+                ArtCraftProvider::address_allowed,
+            ),
+            ("bfl", BflProvider::catalog(), BflProvider::address_allowed),
+            (
+                "seedance",
+                SeedanceProvider::catalog(),
+                SeedanceProvider::address_allowed,
+            ),
+        ];
+        for (name, models, allowed) in lists {
+            self.support
+                .insert(name.to_owned(), at_address(allowed, list_check(models)));
+        }
+        let vertex: Arc<SupportFn> = Arc::new(vertex_check);
+        self.support.insert(
+            "vertex-express".to_owned(),
+            at_address(VertexProvider::address_allowed, vertex),
+        );
     }
 
     pub fn knows(&self, name: &str) -> bool {
@@ -405,9 +482,16 @@ mod tests {
     }
 
     #[test]
-    fn standard_knows_the_openai_family_and_bfl() {
+    fn standard_knows_the_openai_family_bfl_and_gemini() {
         let f = ProviderFactory::standard();
-        for n in ["openai", "OLLAMA", "lmstudio", "openrouter", "bfl"] {
+        for n in [
+            "openai",
+            "OLLAMA",
+            "lmstudio",
+            "openrouter",
+            "bfl",
+            "gemini",
+        ] {
             assert!(f.knows(n), "{n}");
         }
         assert!(!f.knows("fal"));

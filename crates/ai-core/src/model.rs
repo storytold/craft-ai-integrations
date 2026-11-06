@@ -119,7 +119,9 @@ pub struct ModelInfo {
     /// When the model was released, in Unix seconds, where the provider reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub released: Option<u64>,
-    /// Labels from the curated catalog, such as `recommended`.
+    /// Labels from the curated catalog, such as `recommended`. Also holds the shared layer's own
+    /// markers for what a person declared, which a host must not show as labels: `declared-model`,
+    /// and tags starting `declared:` or `declared-input:` (see `docs/STORE-SCHEMA.md`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// Where the weights are on this computer, for a model an app runs itself (a native adapter

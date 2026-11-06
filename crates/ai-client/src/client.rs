@@ -20,12 +20,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use craft_ai_core::job::Event;
+use craft_ai_core::model::InputRole;
 use craft_ai_core::picks::{Candidate, choose};
 use craft_ai_core::role::eligible;
 use craft_ai_core::{
     AiError, AppId, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger, Disclosure,
-    ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality, ModelId, Pick, PickedBy,
-    Provider, Request, Role, RoleId, Usage,
+    ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality, ModelId, Outcome, Pick,
+    PickedBy, Provider, Request, Role, RoleId, Usage,
 };
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
 use craft_ai_native::shared::SharedStore;
@@ -33,6 +34,7 @@ use craft_ai_native::{CatalogFile, HistoryFile};
 
 use crate::factory::ProviderFactory;
 use crate::history::Recorder;
+use crate::route_support::{RouteFacts, RouteQuery, RouteSupport};
 
 #[path = "client_run.rs"]
 mod run;
@@ -118,6 +120,14 @@ impl Plan {
 
     pub fn connection_label(&self) -> &str {
         &self.connection.label
+    }
+
+    /// The adapter name as stored on the connection, for adapter-specific params.
+    ///
+    /// The factory matches names case-insensitively. This accessor preserves the original
+    /// spelling, so compare with `eq_ignore_ascii_case` (for example against `"bfl"`).
+    pub fn provider(&self) -> &str {
+        &self.connection.provider
     }
 
     pub fn model(&self) -> &ModelId {
@@ -325,6 +335,15 @@ impl AiClient {
         if !self.factory.knows(&resolved.connection.provider) {
             return unavailable(NO_ADAPTER.to_owned());
         }
+        // Before the key: a model this build would refuse is not ready, whatever is saved.
+        if let RouteSupport::Unsupported { reason } = self.route_support(
+            resolved.connection,
+            &resolved.model.id,
+            &role.capability,
+            &role.inputs,
+        ) {
+            return unavailable(reason);
+        }
         if let Err(e) = secret_for(&*self.secrets, resolved.connection) {
             return unavailable(e.message);
         }
@@ -347,7 +366,90 @@ impl AiClient {
         })
     }
 
-    /// Every model that could fill `role`, for a picker.
+    /// What this build's adapter says about a tool's path, asked as status and the picker ask it:
+    /// one output, no streaming and no options. Reads no key and contacts nothing.
+    pub(crate) fn route_support(
+        &self,
+        connection: &Connection,
+        model: &ModelId,
+        capability: &craft_ai_core::CapabilityId,
+        inputs: &[InputRole],
+    ) -> RouteSupport {
+        self.factory.route_support(&RouteQuery {
+            connection,
+            model,
+            capability,
+            inputs,
+            outputs: 1,
+            stream: false,
+            has_options: false,
+        })
+    }
+
+    /// The saved choice for `role`, what this build can do with it, and what has really worked, as
+    /// separate facts. Reads no key and contacts nothing.
+    pub fn route_facts(&self, role: &Role) -> RouteFacts {
+        let not_configured = |why: String| RouteFacts {
+            configured: Err(why),
+            executable: RouteSupport::Untested,
+            last_success_ms: None,
+        };
+        let store = match self.shared.load() {
+            Ok(store) => store,
+            Err(e) => return not_configured(e.to_string()),
+        };
+        let resolved = match store.resolve(&self.app, role) {
+            Ok(resolved) => resolved,
+            Err(e) => return not_configured(e.to_string()),
+        };
+        let executable = if self.factory.knows(&resolved.connection.provider) {
+            self.route_support(
+                resolved.connection,
+                &resolved.model.id,
+                &role.capability,
+                &role.inputs,
+            )
+        } else {
+            RouteSupport::Unsupported {
+                reason: NO_ADAPTER.to_owned(),
+            }
+        };
+        RouteFacts {
+            configured: Ok(()),
+            executable,
+            last_success_ms: self.last_success(resolved.connection, &resolved.model.id),
+        }
+    }
+
+    /// When this connection and model last finished a real job at the connection's current address,
+    /// from request history if it is on. Editing the address keeps the connection's id, so a job
+    /// sent to the old address does not count.
+    fn last_success(&self, connection: &Connection, model: &ModelId) -> Option<u64> {
+        let destination = Disclosure::destination_for(connection);
+        self.history()
+            .ok()?
+            .entries
+            .iter()
+            .filter(|e| e.start.connection == connection.id.as_str())
+            .filter(|e| e.start.model == model.as_str())
+            .filter(|e| e.start.destination == destination)
+            .filter_map(|e| e.end.as_ref())
+            .filter(|end| end.outcome == Outcome::Done)
+            .map(|end| end.at_ms)
+            .max()
+    }
+
+    /// Whether this app cannot run this model for `role`, so it must not be offered here: this
+    /// build has no adapter for the connection, or the adapter would refuse it.
+    fn known_unsupported(&self, role: &Role, connection: &Connection, model: &ModelId) -> bool {
+        !self.factory.knows(&connection.provider)
+            || matches!(
+                self.route_support(connection, model, &role.capability, &role.inputs),
+                RouteSupport::Unsupported { .. }
+            )
+    }
+
+    /// Every model that could fill `role`, for a picker. One the adapter would refuse is left out.
     pub fn choices(&self, role: &Role) -> Result<Vec<Choice>, AiError> {
         let store = self.shared.load()?;
         store
@@ -355,6 +457,7 @@ impl AiClient {
             .map_err(|e| AiError::invalid(e.to_string()))?;
         Ok(eligible(role, &store.connections)
             .into_iter()
+            .filter(|r| !self.known_unsupported(role, r.connection, &r.model.id))
             .map(|r| Choice {
                 connection: r.connection.id.clone(),
                 connection_label: r.connection.label.clone(),
@@ -374,7 +477,8 @@ impl AiClient {
         store
             .check_tool(role)
             .map_err(|e| AiError::invalid(e.to_string()))?;
-        let eligible = eligible(role, &store.connections);
+        let mut eligible = eligible(role, &store.connections);
+        eligible.retain(|r| !self.known_unsupported(role, r.connection, &r.model.id));
         let candidates: Vec<Candidate<'_>> = eligible
             .iter()
             .map(|r| Candidate {
@@ -436,7 +540,7 @@ impl AiClient {
             connection: connection.clone(),
             model: model.clone(),
         };
-        self.shared.update(|store| {
+        self.shared.try_update(|store| {
             store
                 .check_tool(role)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
@@ -445,7 +549,18 @@ impl AiClient {
                 &[std::slice::from_ref(&binding)],
                 &store.connections,
             )
-            .map_err(|e| AiError::invalid(e.to_string()))?;
+            .map_err(|e| AiError::invalid(e.to_string()))
+            .and_then(|resolved| {
+                // This app's own choice must be one it can run, unlike the suite default.
+                if !self.factory.knows(&resolved.connection.provider) {
+                    return Err(AiError::unsupported(NO_ADAPTER));
+                }
+                match self.route_support(resolved.connection, model, &role.capability, &role.inputs)
+                {
+                    RouteSupport::Unsupported { reason } => Err(AiError::unsupported(reason)),
+                    _ => Ok(()),
+                }
+            })?;
             set_override(store, &self.app, binding);
             Ok::<(), AiError>(())
         })??;
@@ -454,10 +569,16 @@ impl AiClient {
 
     /// Removes this app's own choice, so the launcher default applies again.
     pub fn clear_binding(&self, role: &RoleId) -> Result<(), AiError> {
-        self.shared.update(|store| {
-            if let Some(settings) = store.apps.get_mut(&self.app) {
-                settings.overrides.retain(|b| &b.role != role);
+        // With no choice to remove, nothing is written: no file is created and no bytes change.
+        // `Err(())` from the closure only means there was nothing to clear.
+        let _ = self.shared.try_update(|file| {
+            let settings = file.apps.get_mut(&self.app).ok_or(())?;
+            let before = settings.overrides.len();
+            settings.overrides.retain(|b| &b.role != role);
+            if settings.overrides.len() == before {
+                return Err(());
             }
+            Ok(())
         })?;
         Ok(())
     }

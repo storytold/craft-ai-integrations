@@ -26,6 +26,7 @@ mod sample;
 
 use crate::client::{AiClient, Choice, Job, RoleStatus};
 use crate::popup::MissingModel;
+use crate::route_support::RouteSupport;
 
 /// What the launcher shows for one tool.
 #[derive(Clone, Debug)]
@@ -166,19 +167,40 @@ impl ToolDesk {
             model: model.clone(),
         };
         // Check inside the same store lock as the write: another app may change the tool or
-        // connection between an unlocked read and the update.
-        self.shared.update(|store| {
+        // connection between an unlocked read and the update. A provider this build has no adapter
+        // for is allowed here on purpose: this is the suite default, and the launcher may set up a
+        // model that only some apps can run. An app's own `bind` refuses it. A route this build
+        // declares unsupported is refused. Stopping writes nothing at all, so a refused or unneeded
+        // choice leaves the file's bytes as they were.
+        enum Stop {
+            AlreadyChosen,
+            Refused(AiError),
+        }
+        let written = self.shared.try_update(|store| {
             if only_if_unchosen && store.defaults.iter().any(|b| b.role == role.id) {
-                return Ok::<bool, AiError>(false);
+                return Err(Stop::AlreadyChosen);
             }
             store
                 .check_tool(role)
-                .map_err(|e| AiError::invalid(e.to_string()))?;
-            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
-                .map_err(|e| AiError::invalid(e.to_string()))?;
+                .map_err(|e| Stop::Refused(AiError::invalid(e.to_string())))?;
+            let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+                .map_err(|e| Stop::Refused(AiError::invalid(e.to_string())))?;
+            if let RouteSupport::Unsupported { reason } = self.client.route_support(
+                resolved.connection,
+                model,
+                &role.capability,
+                &role.inputs,
+            ) {
+                return Err(Stop::Refused(AiError::unsupported(reason)));
+            }
             set_default(store, binding);
-            Ok(true)
-        })?
+            Ok(())
+        })?;
+        match written {
+            Ok(()) => Ok(true),
+            Err(Stop::AlreadyChosen) => Ok(false),
+            Err(Stop::Refused(error)) => Err(error),
+        }
     }
 
     /// What could be chosen for every tool with no model chosen: the best connected one, on this
@@ -262,7 +284,7 @@ impl ToolDesk {
                 "that tool name is already used by a built-in tool",
             ));
         }
-        self.shared.update(|store| {
+        self.shared.try_update(|store| {
             if store.custom_tools.iter().any(|old| old.id == role.id) {
                 return Err(AiError::invalid("that tool name is already in use"));
             }
@@ -274,7 +296,7 @@ impl ToolDesk {
 
     /// Remove a custom tool and its stored choices from every app. Built-in tools cannot be removed.
     pub fn remove_tool(&self, id: &RoleId) -> Result<(), AiError> {
-        self.shared.update(|store| {
+        self.shared.try_update(|store| {
             if !store.custom_tools.iter().any(|tool| &tool.id == id) {
                 return Err(AiError::invalid("that custom tool does not exist"));
             }

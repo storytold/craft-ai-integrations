@@ -271,3 +271,33 @@ fn whitespace_in_a_saved_address_does_not_drop_its_models() {
         models("a-only")
     );
 }
+
+#[test]
+/// Confirming the form's models for the address they were tested at moves them to that address,
+/// so a save keeps them. Confirming them for an address the form has since left changes nothing.
+fn confirming_models_moves_them_only_to_the_address_still_in_the_form() {
+    let mut draft = draft("https://a.example/v1");
+    assert!(draft.set_models("https://a.example/v1", models("declared")));
+    draft.endpoint = "https://b.example/v1".into();
+
+    assert!(
+        !draft.confirm_models_for("https://a.example/v1"),
+        "an answer for the old address confirms nothing"
+    );
+    assert!(
+        draft.prepare(&[]).unwrap().connection.models.is_empty(),
+        "the models still belong to the old address"
+    );
+
+    assert!(draft.confirm_models_for("  https://b.example/v1  "));
+    assert_eq!(
+        draft.models,
+        models("declared"),
+        "the models are not replaced"
+    );
+    assert_eq!(
+        draft.prepare(&[]).unwrap().connection.models,
+        models("declared"),
+        "the save keeps them for the tested address"
+    );
+}

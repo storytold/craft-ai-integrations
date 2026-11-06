@@ -2009,6 +2009,8 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "craft-ai-media",
+ "png",
  "serde_json",
  "ureq 3.5.0",
 ]
@@ -2042,6 +2044,7 @@ dependencies = [
  "craft-ai-engine-candle",
  "craft-ai-engine-rten",
  "craft-ai-features",
+ "craft-ai-gemini",
  "craft-ai-media",
  "craft-ai-native",
  "craft-ai-openai",
@@ -2198,6 +2201,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-gemini"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-core",
+ "craft-ai-http",
+ "craft-ai-media",
+ "png",
+ "serde_json",
+ "ureq 3.5.0",
+]
+
+[[package]]
 name = "craft-ai-http"
 version = "0.1.0"
 dependencies = [
@@ -2227,6 +2242,7 @@ version = "0.1.0"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "png",
  "serde_json",
  "tempfile",
  "ureq 3.5.0",
