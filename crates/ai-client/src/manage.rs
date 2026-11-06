@@ -213,6 +213,16 @@ impl ConnectionManager {
                 let new_ref = again.connection.auth.secret_ref().cloned();
                 let old_ref = match file.connections.iter_mut().find(|c| c.id == id) {
                     Some(slot) => {
+                        // The form's model list may be older than the file (another app assigned a
+                        // model since it opened) or a raw test answer. What a person declared for a
+                        // tool is not the form's to drop while the connection still points at the
+                        // same service, or a choice would stay selected with nothing to resolve.
+                        if slot.provider == again.connection.provider
+                            && slot.endpoint == again.connection.endpoint
+                        {
+                            let listed = std::mem::take(&mut again.connection.models);
+                            again.connection.models = refreshed_models(&slot.models, listed);
+                        }
                         let old = slot.auth.secret_ref().cloned();
                         *slot = again.connection;
                         old

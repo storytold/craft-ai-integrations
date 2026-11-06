@@ -116,8 +116,9 @@ CA = [
      'if complete && outputs && stream && !query.has_options {',
      CL, 'route_support', 'inputs_a_listed_model'),
     ('assign-skips-the-final-check', 'crates/ai-client/src/assignments.rs',
-     '''resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
+     '''let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
+            refuse_unsupported(self, role, resolved.connection, model)?;
             let layer = layer_mut(store, scope);''',
      'let layer = layer_mut(store, scope);',
      CL, 'model_assignment', 'a_model_that_cannot_do_the_job'),
@@ -140,6 +141,40 @@ CA = [
     ('refresh-drops-declared-abilities', 'crates/ai-client/src/manage.rs',
      'saved.models = refreshed_models(&saved.models, models);', 'saved.models = models;',
      CL, 'model_assignment', 'a_refresh_keeps_declared'),
+    ('assign-ignores-a-refused-route', 'crates/ai-client/src/assignments.rs',
+     'refuse_unsupported(self, role, resolved.connection, model)?;', 'let _ = resolved;',
+     CL, 'assignment_guards', 'assigning_a_route_the_adapter_refuses'),
+    ('state-offers-a-refused-route', 'crates/ai-client/src/assignments.rs',
+     'refuse_unsupported(self, role, resolved.connection, model).map_err(|e| e.message)',
+     '''let _ = resolved;
+                Ok(())''',
+     CL, 'assignment_guards', 'assigning_a_route_the_adapter_refuses'),
+    ('refused-route-blocks-an-adapterless-default', 'crates/ai-client/src/assignments.rs',
+     'RouteSupport::Supported | RouteSupport::Untested => Ok(()),',
+     'RouteSupport::Supported => Ok(()),\n        RouteSupport::Untested => Err(AiError::unsupported("untested")),',
+     CL, 'assignment_guards', 'a_provider_with_no_adapter'),
+    ('withdraw-trusts-a-replaced-tool', 'crates/ai-client/src/assignments.rs',
+     '''// caller holding the old one must not take back the new choice or its ability.
+            store
+                .check_tool(role)
+                .map_err(|e| AiError::invalid(e.to_string()))?;''',
+     '// caller holding the old one must not take back the new choice or its ability.',
+     CL, 'assignment_guards', 'withdrawing_with_a_tool_that_was_replaced'),
+    ('refresh-drops-a-declared-input', 'crates/ai-client/src/assignments.rs',
+     'if declared && !reported.accepts.contains_key(input) {',
+     'if false && declared && !reported.accepts.contains_key(input) {',
+     CL, 'model_assignment', 'a_refresh_keeps_an_input'),
+    ('declared-input-not-marked', 'crates/ai-client/src/assignments.rs',
+     'info.tags.push(declared_input_tag(&role.capability, input));', '',
+     CL, 'model_assignment', 'a_refresh_keeps_an_input'),
+    ('save-drops-declarations', 'crates/ai-client/src/manage.rs',
+     'again.connection.models = refreshed_models(&slot.models, listed);',
+     'again.connection.models = listed;',
+     CL, 'assignment_guards', 'saving_a_'),
+    ('probe-answer-wipes-declared-models', 'crates/ai-egui/src/panel.rs',
+     'Some(_) => tested.trim() == self.form.draft.endpoint.trim(),',
+     'Some(_) => self.form.draft.set_models(tested, Vec::new()),',
+     'craft-ai-egui', 'lib', 'a_custom_connection_test_keeps_the_declared_models'),
     ('refresh-hides-a-lost-choice', 'crates/ai-client/src/manage.rs',
      'Ok(unavailable_choices(file, id))', 'Ok(Vec::new())',
      CL, 'model_assignment', 'a_refresh_reports'),
