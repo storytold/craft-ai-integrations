@@ -4,12 +4,14 @@
 //! for a tool (a model, an ability, an input) is put back on top of the new list, and every choice
 //! the new list can no longer serve is reported, never removed.
 
-use craft_ai_core::model::ModelInfo;
+use craft_ai_core::model::{CapabilitySpec, InputRole, ModelInfo};
 use craft_ai_core::role::{ResolveError, resolve};
-use craft_ai_core::{Binding, ConnectionId, ModelId, RoleId, StoreFile};
+use craft_ai_core::{Binding, CapabilityId, ConnectionId, ModelId, RoleId, StoreFile};
 use craft_ai_features::builtin;
 
-use super::{ChoiceScope, DECLARED_MODEL, declared_input_tag, declared_tag, known_tool};
+use super::{
+    ChoiceScope, DECLARED_INPUT, DECLARED_MODEL, declared_input_tag, declared_tag, known_tool,
+};
 
 /// A saved list after a refresh or a saved form: the new list, plus what a person declared on top of
 /// the old one. A declared ability or input the new list already has stops being marked as
@@ -29,11 +31,12 @@ pub(crate) fn refreshed_models(old: &[ModelInfo], reported: Vec<ModelInfo>) -> V
 /// Puts what a person declared on `before` back onto `now`. A whole declared ability the provider
 /// does not report comes back as it was. Where the provider reports the ability, only the inputs a
 /// person declared and the provider lacks are added, each tagged so it can be taken back later.
+/// While the provider does not report the ability at all, a declared input's tag is kept on its
+/// own, so the input comes back with the ability.
 fn carry_declared(before: &ModelInfo, now: &mut ModelInfo) {
     for spec in &before.capabilities {
         let tag = declared_tag(&spec.capability);
-        let whole = before.tags.contains(&tag);
-        if now.tags.contains(&tag) {
+        if !before.tags.contains(&tag) || now.tags.contains(&tag) {
             continue;
         }
         match now
@@ -41,25 +44,56 @@ fn carry_declared(before: &ModelInfo, now: &mut ModelInfo) {
             .iter_mut()
             .find(|s| s.capability == spec.capability)
         {
-            None if whole => {
+            None => {
                 now.capabilities.push(spec.clone());
                 now.tags.push(tag);
             }
-            None => {}
             Some(reported) => {
                 for (input, most) in &spec.accepts {
-                    let input_tag = declared_input_tag(&spec.capability, input);
-                    let declared = whole || before.tags.contains(&input_tag);
-                    if declared && !reported.accepts.contains_key(input) {
-                        reported.accepts.insert(input.clone(), *most);
-                        if !now.tags.contains(&input_tag) {
-                            now.tags.push(input_tag);
-                        }
-                    }
+                    add_input(reported, &mut now.tags, input, *most);
                 }
             }
         }
     }
+    for tag in &before.tags {
+        let Some((capability, input)) = parse_input_tag(tag) else {
+            continue;
+        };
+        let most = before
+            .spec_for(&capability)
+            .and_then(|s| s.accepts.get(&input))
+            .copied()
+            .unwrap_or(1);
+        match now
+            .capabilities
+            .iter_mut()
+            .find(|s| s.capability == capability)
+        {
+            Some(reported) => add_input(reported, &mut now.tags, &input, most),
+            None if !now.tags.contains(tag) => now.tags.push(tag.clone()),
+            None => {}
+        }
+    }
+}
+
+/// Adds a declared input the reported ability lacks, tagged as declared. An input the provider
+/// reports itself is left as the provider's.
+fn add_input(reported: &mut CapabilitySpec, tags: &mut Vec<String>, input: &InputRole, most: u32) {
+    if reported.accepts.contains_key(input) {
+        return;
+    }
+    reported.accepts.insert(input.clone(), most);
+    let tag = declared_input_tag(&reported.capability, input);
+    if !tags.contains(&tag) {
+        tags.push(tag);
+    }
+}
+
+/// The ability and input a [`declared_input_tag`] names, or `None` for any other tag.
+fn parse_input_tag(tag: &str) -> Option<(CapabilityId, InputRole)> {
+    let rest = tag.strip_prefix(DECLARED_INPUT)?;
+    let (capability, input) = rest.rsplit_once(':')?;
+    Some((capability.parse().ok()?, InputRole::parse(input).ok()?))
 }
 
 /// A person's choice the connection can no longer serve: its model is gone, or still listed but no

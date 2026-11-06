@@ -265,3 +265,44 @@ fn a_failed_write_leaves_no_part_of_an_assignment() {
     );
     assert_eq!(bytes(&shared), before, "nothing landed");
 }
+
+/// A form opened before the service listed a model does not drop that model on save: another app
+/// declared an ability on it and chose it in the meantime, and the choice still resolves.
+#[test]
+fn saving_a_form_opened_before_a_model_was_listed_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = reported_store(&dir);
+    let desk = desk(&shared);
+    let manager = ConnectionManager::new(shared.clone(), Arc::new(MemoryStore::new()));
+    let mut draft = ConnectionDraft::from_connection(&shared.load().unwrap().connections[0]);
+    // A refresh elsewhere lists a new model, then another app gives it a job and chooses it.
+    shared
+        .update(|store| {
+            store.connections[0]
+                .models
+                .push(ModelInfo::new(model("late"), "Late"))
+        })
+        .unwrap();
+    let caption = tool("caption", "text.generate", vec![InputRole::Prompt]);
+    desk.assign_model(
+        &caption,
+        &one(),
+        &model("late"),
+        &ChoiceScope::Suite,
+        &declared(),
+    )
+    .unwrap();
+
+    draft.label = "Renamed".to_owned();
+    manager.save(&draft).unwrap();
+
+    let state = desk
+        .model_choice_state(&caption, &one(), &model("late"))
+        .unwrap();
+    assert!(state.suite_selected);
+    assert_eq!(
+        state.available,
+        Ok(()),
+        "the later model and its ability stay"
+    );
+}

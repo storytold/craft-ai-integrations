@@ -42,9 +42,12 @@ fn declared_tag(capability: &CapabilityId) -> String {
     format!("declared:{capability}")
 }
 
+/// The start of every [`declared_input_tag`].
+const DECLARED_INPUT: &str = "declared-input:";
+
 /// The start of every [`declared_input_tag`] for `capability`.
 fn declared_input_prefix(capability: &CapabilityId) -> String {
-    format!("declared-input:{capability}:")
+    format!("{DECLARED_INPUT}{capability}:")
 }
 
 /// Marks an input a person added to an ability the provider reported.
@@ -345,9 +348,8 @@ fn forget_declared(
         .find(|c| &c.id == connection)
         .and_then(|c| c.model(model))
         .is_some_and(|m| {
-            m.tags.contains(&tag)
-                || m.spec_for(&role.capability)
-                    .is_some_and(|s| s.accepts.keys().any(|i| m.tags.contains(&input_tag(i))))
+            let prefix = declared_input_prefix(&role.capability);
+            m.tags.iter().any(|t| t == &tag || t.starts_with(&prefix))
         });
     if !declared {
         return Ok(false);

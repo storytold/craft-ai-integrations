@@ -222,7 +222,17 @@ impl ConnectionManager {
                             && slot.endpoint == again.connection.endpoint
                         {
                             let listed = std::mem::take(&mut again.connection.models);
-                            again.connection.models = refreshed_models(&slot.models, listed);
+                            let mut models = refreshed_models(&slot.models, listed);
+                            // A model listed after the form opened is news from elsewhere, not one
+                            // the form removed.
+                            for later in &slot.models {
+                                if !draft.opened_with().contains(&later.id)
+                                    && models.iter().all(|m| m.id != later.id)
+                                {
+                                    models.push(later.clone());
+                                }
+                            }
+                            again.connection.models = models;
                         }
                         let old = slot.auth.secret_ref().cloned();
                         *slot = again.connection;
