@@ -58,16 +58,26 @@ pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
     png_only: false,
 };
 
-/// The most one fill request may carry once its pictures are base64 encoded, instruction included.
-/// Google documents a 20 MB total request size for inline data (text and every file) on the
-/// Gemini API; its Interactions pages state no figure, so the documented one is used here, in
-/// decimal megabytes to stay on the safe side. Three references within [`REFERENCES`] can reach
-/// 30 MB before encoding, so this is what stops a request the service would refuse.
+/// The most one fill request body may be, as the bytes sent. Google documents a 20 MB total
+/// request size for inline data (text and every file) on the Gemini API; its Interactions pages
+/// state no figure, so the documented one is used here, in decimal megabytes to stay on the safe
+/// side. Three references within [`REFERENCES`] can reach 30 MB before encoding, so this is what
+/// stops a request the service would refuse.
 pub(crate) const MAX_REQUEST_BYTES: usize = 20_000_000;
 
-/// The length of `n` bytes once base64 encoded with padding.
-fn encoded_len(n: usize) -> usize {
-    n.div_ceil(3).saturating_mul(4)
+/// The request body for one fill as the JSON bytes to send, refused when longer than
+/// [`MAX_REQUEST_BYTES`]. The serialised bytes are measured, so base64 padding, the escaping of
+/// the prompt and every field around the pictures all count. Nothing has been sent when it refuses.
+pub(crate) fn encoded_body(model: &str, request: &Request) -> Result<Vec<u8>, AiError> {
+    let bytes = serde_json::to_vec(&body(model, request)?)
+        .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
+    if bytes.len() > MAX_REQUEST_BYTES {
+        return Err(AiError::invalid(
+            "the source, mask, reference pictures and prompt add up to more than Gemini's 20 MB \
+             request limit; send fewer or smaller reference pictures, or a shorter prompt",
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Whether `model` may be asked for: one of [`MODELS`], or any well-formed `gemini-…-image…` id so
@@ -192,20 +202,8 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
     // References are checked last and sent after the mask, in request order, so the instruction's
     // "third image onwards" always names them.
     let references = mask::references(request, BOUNDS, REFERENCES)?;
+    // Each picture is within its own limit here; their total is checked in [`encoded_body`].
     let instruction = mask::fill_instruction_with_references(prompt, references.len());
-    // Each picture is within its own limit, but together they can pass the service's request
-    // size: measured as encoded, before anything is encoded or sent.
-    let total = [source.len(), mask.len()]
-        .into_iter()
-        .chain(references.iter().map(|r| r.data.len()))
-        .map(encoded_len)
-        .fold(instruction.len(), usize::saturating_add);
-    if total > MAX_REQUEST_BYTES {
-        return Err(AiError::invalid(
-            "the source, mask and reference pictures add up to more than Gemini's 20 MB request \
-             limit; send fewer or smaller reference pictures",
-        ));
-    }
     let mut input = vec![
         json!({"type": "text", "text": instruction}),
         json!({"type": "image", "mime_type": media, "data": base64_encode(source)}),
@@ -304,3 +302,6 @@ pub(crate) fn clip(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod size_tests;

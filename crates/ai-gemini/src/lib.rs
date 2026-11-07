@@ -366,8 +366,7 @@ impl Provider for GeminiProvider {
         for input in &request.inputs {
             input.payload.check(&Limits::default())?;
         }
-        let body = serde_json::to_vec(&fill::body(model.as_str(), request)?)
-            .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
+        let body = fill::encoded_body(model.as_str(), request)?;
         let id = JobId::new(format!(
             "gemini-{}",
             self.sequence.fetch_add(1, Ordering::Relaxed)
