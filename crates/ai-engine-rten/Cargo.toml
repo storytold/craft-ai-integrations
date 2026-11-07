@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-engine-rten"
-description = "SAM 2.1 on the rten engine for Craft AI: a built-in runner for image.segment that reads the published ONNX files as they are. Native only."
+description = "Built-in rten runners for Craft AI, reading the published ONNX files as they are: SAM 2.1 for image.segment and BEN2 + ViTMatte for image.matte. Native only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ publish = false
 craft-ai-core.workspace = true
 craft-ai-engine = { path = "../ai-engine", package = "craft-ai-engine" }
 serde_json.workspace = true
-# Pure Rust, no C or C++. ONNX only: the contrib operators this model does not use stay out.
+# Pure Rust, no C or C++. ONNX only: the contrib operators these models do not use stay out.
 rten = { version = "=0.27.0", default-features = false, features = ["onnx_format"] }
 rten-tensor = "=0.27.0"
 png = "0.18"
