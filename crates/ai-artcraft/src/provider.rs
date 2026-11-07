@@ -210,6 +210,12 @@ impl Provider for ArtCraftProvider {
         };
         let mut body = json!({"model":model.as_str(),"prompt":prompt,"idempotency_token":uuid::Uuid::new_v4().to_string()});
         if let Some(fill) = &fill {
+            // shortcut: if a later upload fails, the earlier ones stay on the account as private
+            // intermediate files, because the Omni API (upload, generate, job status) has no call
+            // to delete an upload; ArtCraft's own media-file delete takes a desktop session, not an
+            // API key. Every input is checked before the first upload, so only a service or network
+            // failure mid-way leaves files. Delete the earlier tokens here once Omni documents an
+            // API-key delete.
             let mut tokens = vec![
                 self.http.upload_png(fill.source)?,
                 self.http.upload_png(&fill.mask)?,

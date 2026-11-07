@@ -28,6 +28,12 @@ tells the model to use them only as a guide, never to change the black region to
 A connection saved before references were mapped gains them, as an optional input, when the
 store is read.
 
+Known limit: if the service or network fails part-way through the uploads, the pictures
+already uploaded stay on the account as private intermediate files. The Omni API has no call
+to delete an upload (ArtCraft's own media-file delete needs a desktop session, not an API
+key), so the adapter cannot remove them. Each reference adds one more upload that could be
+left this way.
+
 Omni receives two ordinary image references. There is no dedicated mask parameter or
 pixel-preservation guarantee from this request. The host app must composite the result
 through its own selection mask. Generation parameters are not mapped by this adapter. A
