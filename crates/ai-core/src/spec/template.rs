@@ -130,6 +130,10 @@ pub fn value_slots(template: &Value) -> Result<Vec<Slot>, String> {
     Ok(out)
 }
 
+/// Why a call is refused when its substitutions do not fit the call budget. A caller can tell
+/// this apart from a spec's own mistakes, since it is the caller's value that is too large.
+pub const TOO_LARGE: &str = "the call is too large once its values are filled in";
+
 /// Renders `text`, taking every inserted value's bytes from `budget` (start one call at
 /// [`Values::budget`]) so a call cannot grow past it however many slots it names.
 pub fn render_text(text: &str, values: &Values<'_>, budget: &mut usize) -> Result<String, String> {
@@ -141,9 +145,7 @@ pub fn render_text(text: &str, values: &Values<'_>, budget: &mut usize) -> Resul
                 let value = values
                     .get(slot)
                     .ok_or_else(|| format!("{{{name}}} is not available in this call"))?;
-                *budget = budget
-                    .checked_sub(value.len())
-                    .ok_or("the call is too large once its values are filled in")?;
+                *budget = budget.checked_sub(value.len()).ok_or(TOO_LARGE)?;
                 out.push_str(value);
             }
         }

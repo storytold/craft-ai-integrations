@@ -117,7 +117,9 @@ fn a_template_cannot_multiply_a_large_prompt_past_the_call_budget() {
         prompt: Some(&big),
         ..values()
     };
-    // Once is always fine; twice fits in the slack; three times is over the budget.
+    // A prompt of exactly one template's worth of slack fits twice; three times is over the
+    // budget. A larger prompt fits only once, since the budget is each value once plus one
+    // template's worth of slack.
     let template = json!({"a": "{prompt}", "b": "{prompt}", "c": "{prompt}"});
     let why = render_value(&template, &v, &mut v.budget()).unwrap_err();
     assert!(why.contains("too large"), "{why}");
@@ -126,5 +128,8 @@ fn a_template_cannot_multiply_a_large_prompt_past_the_call_budget() {
     assert!(budget < MAX_TEMPLATE_BYTES);
     // Short values may be repeated freely.
     let mut budget = values().budget();
-    render_text(&"{model}{job_id}".repeat(64), &values(), &mut budget).unwrap();
+    assert_eq!(
+        render_text(&"{model}{job_id}".repeat(64), &values(), &mut budget).unwrap(),
+        "img-1job-7".repeat(64)
+    );
 }

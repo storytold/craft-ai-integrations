@@ -2,7 +2,7 @@
 
 use craft_ai_core::endpoint::Endpoint;
 use craft_ai_core::payload::base64_decode;
-use craft_ai_core::spec::template::{Values, render_text, render_value};
+use craft_ai_core::spec::template::{TOO_LARGE, Values, render_text, render_value};
 use craft_ai_core::spec::{Call, Extract, ExtractAs, Method};
 use craft_ai_core::{AiError, ErrorKind, Payload};
 use craft_ai_media::sniff;
@@ -18,28 +18,33 @@ pub(crate) struct Filled {
 
 /// Fills in a call. The spec was checked when it was loaded, so a failure here is a bug.
 pub(crate) fn fill(call: &Call, values: &Values<'_>) -> Result<Filled, AiError> {
-    let internal = |why: String| {
-        AiError::new(
-            ErrorKind::Internal,
-            format!("could not fill in a call: {why}"),
-        )
+    let fill_error = |why: String| {
+        // A call whose values do not fit the budget is caller input, not a broken spec.
+        if why == TOO_LARGE {
+            AiError::invalid(format!("could not fill in a call: {why}"))
+        } else {
+            AiError::new(
+                ErrorKind::Internal,
+                format!("could not fill in a call: {why}"),
+            )
+        }
     };
     let mut budget = values.budget();
     Ok(Filled {
         method: call.method,
-        path: render_text(&call.path, values, &mut budget).map_err(internal)?,
+        path: render_text(&call.path, values, &mut budget).map_err(fill_error)?,
         query: call
             .query
             .iter()
             .map(|(k, v)| Ok((k.clone(), render_text(v, values, &mut budget)?)))
             .collect::<Result<_, String>>()
-            .map_err(internal)?,
+            .map_err(fill_error)?,
         body: call
             .body
             .as_ref()
             .map(|b| render_value(b, values, &mut budget))
             .transpose()
-            .map_err(internal)?,
+            .map_err(fill_error)?,
     })
 }
 
