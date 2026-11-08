@@ -194,3 +194,20 @@ fn the_history_file_is_private_to_the_user_even_if_it_was_not_before() {
     assert_eq!(mode(&file.rotated_path()), 0o600);
     assert_eq!(mode(&path), 0o600);
 }
+
+/// A readable file an older version wrote, caught over the cap on its first append: the rotation
+/// renames it, so it must be tightened before that happens, not after.
+#[cfg(unix)]
+#[test]
+fn a_legacy_readable_file_that_rotates_is_private_before_it_is_renamed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jobs.jsonl");
+    let file = HistoryFile::new(&path).with_max_bytes(1024);
+    fs::write(&path, vec![b'a'; 1024]).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    file.append(&end("b")).unwrap();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&file.rotated_path()), 0o600);
+    assert_eq!(mode(&path), 0o600);
+}
