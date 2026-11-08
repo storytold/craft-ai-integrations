@@ -89,11 +89,10 @@ fn gemini_refuses_what_submit_would_refuse() {
         refused(ask(&c, model, "image.inpaint", &two_masks, 1)),
         "two masks"
     );
-    let mut too_many_references = vec![InputRole::Source, InputRole::Mask];
-    too_many_references.extend(std::iter::repeat_n(InputRole::Reference, 4));
+    let references_without_mask = [InputRole::Source, InputRole::Reference];
     assert!(
-        refused(ask(&c, model, "image.inpaint", &too_many_references, 1)),
-        "four references"
+        refused(ask(&c, model, "image.inpaint", &references_without_mask, 1)),
+        "references do not stand in for the mask"
     );
 }
 

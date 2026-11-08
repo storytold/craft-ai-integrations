@@ -27,7 +27,8 @@ fn old_fill() -> CapabilitySpec {
         .accepting(InputRole::Prompt, 1)
 }
 
-/// The saved fill gains up to three optional references; everything else it said stays.
+/// The saved fill gains optional references with no count of its own; everything else it said
+/// stays.
 #[test]
 fn old_omni_fill_gains_optional_references() {
     let old = old_fill();
@@ -39,7 +40,7 @@ fn old_omni_fill_gains_optional_references() {
     let model = &read.connections[0].models[0];
     assert_eq!(model.id, ModelId::new("nano_banana_2").unwrap());
     let spec = model.spec_for(&old.capability).unwrap();
-    assert_eq!(spec.accepts.get(&InputRole::Reference), Some(&3));
+    assert_eq!(spec.accepts.get(&InputRole::Reference), Some(&u32::MAX));
     assert!(
         !spec.requires.contains(&InputRole::Reference),
         "never required"
@@ -82,5 +83,5 @@ fn a_required_input_is_never_added() {
         .spec_for(&saved.capability)
         .unwrap();
     assert!(!spec.accepts.contains_key(&InputRole::Mask));
-    assert_eq!(spec.accepts.get(&InputRole::Reference), Some(&3));
+    assert_eq!(spec.accepts.get(&InputRole::Reference), Some(&u32::MAX));
 }

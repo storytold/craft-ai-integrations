@@ -168,11 +168,7 @@ impl Provider for ArtCraftProvider {
             ));
         }
         let fill = if request.capability.as_str() == "image.inpaint" {
-            let max_references = spec
-                .accepts
-                .get(&InputRole::Reference)
-                .map_or(0, |n| usize::try_from(*n).unwrap_or(0));
-            Some(crate::fill::prepare(request, max_references)?)
+            Some(crate::fill::prepare(request)?)
         } else {
             None
         };

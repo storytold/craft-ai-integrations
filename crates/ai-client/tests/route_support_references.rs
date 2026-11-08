@@ -1,5 +1,5 @@
-//! What each fill service's route check says about reference pictures: Gemini and Omni take up to
-//! three, FLUX.1 Fill takes none. The check reads no key and builds no provider.
+//! What each fill service's route check says about reference pictures: Gemini and Omni state no
+//! count of their own (the service judges it), FLUX.1 Fill takes none. The check reads no key and builds no provider.
 
 use craft_ai_client::{ProviderFactory, RouteQuery, RouteSupport};
 use craft_ai_core::model::InputRole;
@@ -41,33 +41,33 @@ fn refused(s: &RouteSupport) -> bool {
     matches!(s, RouteSupport::Unsupported { .. })
 }
 
-/// Gemini takes none to three references and refuses a fourth.
+/// Gemini is supported with no references and with many, for a listed and an unlisted model.
 #[test]
-fn gemini_takes_up_to_three_references() {
+fn gemini_states_no_reference_count() {
     let c = connection("gemini", "https://generativelanguage.googleapis.com/v1beta");
-    for n in 0..=3 {
-        assert_eq!(
-            ask(&c, "gemini-3-pro-image", &fill(n)),
-            RouteSupport::Supported,
-            "{n}"
-        );
-    }
-    assert!(refused(&ask(&c, "gemini-3-pro-image", &fill(4))));
-}
-
-/// Omni's Banana models take none to three references and refuse a fourth.
-#[test]
-fn omni_takes_up_to_three_references() {
-    let c = connection("artcraft-omni", "https://api.storyteller.ai");
-    for model in ["nano_banana", "nano_banana_2", "nano_banana_pro"] {
-        for n in 0..=3 {
+    for model in ["gemini-3-pro-image", "gemini-3.1-flash-lite-image"] {
+        for n in [0, 1, 20] {
             assert_eq!(
                 ask(&c, model, &fill(n)),
                 RouteSupport::Supported,
                 "{model} {n}"
             );
         }
-        assert!(refused(&ask(&c, model, &fill(4))), "{model}");
+    }
+}
+
+/// Omni's Banana models are supported with no references and with many.
+#[test]
+fn omni_states_no_reference_count() {
+    let c = connection("artcraft-omni", "https://api.storyteller.ai");
+    for model in ["nano_banana", "nano_banana_2", "nano_banana_pro"] {
+        for n in [0, 1, 20] {
+            assert_eq!(
+                ask(&c, model, &fill(n)),
+                RouteSupport::Supported,
+                "{model} {n}"
+            );
+        }
     }
 }
 

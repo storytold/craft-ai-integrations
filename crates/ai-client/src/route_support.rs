@@ -147,9 +147,8 @@ pub(crate) fn vertex_check(query: &RouteQuery<'_>) -> RouteSupport {
     }
 }
 
-/// Gemini fills only: one source, one mask, at most one prompt, at most
-/// [`GeminiProvider::MAX_REFERENCES`](craft_ai_gemini::GeminiProvider::MAX_REFERENCES) reference
-/// pictures, one output, no streaming. Any well-formed Gemini image model is taken, because
+/// Gemini fills only: one source, one mask, at most one prompt, any number of reference pictures
+/// (the service says how many its model takes), one output, no streaming. Any well-formed Gemini image model is taken, because
 /// `submit` takes one (see `GeminiProvider::model_allowed`), so a list check would refuse a newer
 /// model that works.
 /// Options are allowed: `image_size` is the one Gemini reads, and `submit` checks its value.
@@ -165,7 +164,6 @@ pub(crate) fn gemini_check(query: &RouteQuery<'_>) -> RouteSupport {
         && count(InputRole::Source) == 1
         && count(InputRole::Mask) == 1
         && count(InputRole::Prompt) <= 1
-        && count(InputRole::Reference) <= craft_ai_gemini::GeminiProvider::MAX_REFERENCES
         && query.outputs == 1
         && !query.stream;
     if fill

@@ -111,16 +111,13 @@ fn references_are_uploaded_and_listed_after_the_source_and_mask() {
     );
 }
 
-/// Too many, a JPEG (Omni uploads PNG only), a broken PNG and a link are refused before any upload.
+/// A JPEG (Omni uploads PNG only), a broken PNG and a link are refused before any upload. The count
+/// is Omni's to judge, so it is not checked here.
 #[test]
 fn bad_references_are_refused_before_any_upload() {
     let server = Server::start(|_| Reply::Json(500, "unexpected".into()));
     let p = provider(&server);
     let model = ModelId::new("nano_banana_2").unwrap();
-    let ok = Payload::inline("image/png", png_rgb(FIRST)).unwrap();
-    let err = p.submit(&model, &request(&vec![ok; 4])).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Unsupported, "{}", err.message);
-
     let mut cut = png_rgb(SECOND);
     cut.truncate(cut.len() - 20);
     // Refused for its format, before its body is read: the error names PNG, not a broken file.
@@ -145,7 +142,8 @@ fn bad_references_are_refused_before_any_upload() {
     assert_eq!(server.count(), 0, "nothing was uploaded");
 }
 
-/// Each Banana model declares up to three optional references for a fill, and none for generation.
+/// Each Banana model declares optional references for a fill with no count of its own, and none
+/// for generation.
 #[test]
 fn banana_fill_declares_optional_references() {
     let fill = CapabilityId::parse("image.inpaint").unwrap();
@@ -156,7 +154,11 @@ fn banana_fill_declares_optional_references() {
             .find(|m| m.id.as_str() == name)
             .unwrap();
         let spec = model.spec_for(&fill).unwrap();
-        assert_eq!(spec.accepts.get(&InputRole::Reference), Some(&3), "{name}");
+        assert_eq!(
+            spec.accepts.get(&InputRole::Reference),
+            Some(&u32::MAX),
+            "{name}"
+        );
         assert!(!spec.requires.contains(&InputRole::Reference), "{name}");
         let generate = model.spec_for(&generate).unwrap();
         assert!(

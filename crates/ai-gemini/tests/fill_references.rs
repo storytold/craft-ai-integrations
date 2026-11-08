@@ -136,25 +136,23 @@ fn a_fill_without_references_is_unchanged() {
     assert!(!input[0]["text"].as_str().unwrap().contains("reference"));
 }
 
-/// Too many, a link, a broken picture and a picture too large in pixels are all refused before
-/// anything is sent.
+/// Many references are sent as they are, because the count is Google's to judge; a link, a broken
+/// picture and a picture that is not one are refused before anything is sent.
 #[test]
 fn bad_references_are_refused_before_sending() {
     let server = Server::start(|_| Reply::Json(500, "unexpected".into()));
     let p = provider(&server.url);
     let model = ModelId::new(DEFAULT_MODEL).unwrap();
     let ok = Payload::inline("image/png", png_rgb([1, 1, 1])).unwrap();
-    let mut too_many = vec![ok.clone(); GeminiProvider::MAX_REFERENCES + 1];
-    let err = p.submit(&model, &request(&too_many)).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Unsupported, "{}", err.message);
-    too_many.pop();
     let answers = answer_server();
-    let at_limit =
-        run_lifecycle_paced(&provider(&answers.url), &model, &request(&too_many), &pause);
+    let many = vec![ok.clone(); 20];
+    let sent = run_lifecycle_paced(&provider(&answers.url), &model, &request(&many), &pause);
+    assert_eq!(sent.unwrap().state, JobState::Succeeded, "no count of ours");
+    let input = answers.recorded()[0].body_json()["input"].clone();
     assert_eq!(
-        at_limit.unwrap().state,
-        JobState::Succeeded,
-        "the limit itself is allowed"
+        input.as_array().unwrap().len(),
+        3 + 20,
+        "every reference was sent"
     );
 
     let mut cut = png_rgb([5, 5, 5]);
@@ -185,7 +183,8 @@ fn bad_references_are_refused_before_sending() {
     );
 }
 
-/// The catalogue the adapter offers declares references as optional, up to the same limit.
+/// The catalogue the adapter offers declares references as optional and states no count of its
+/// own (the largest the contract holds).
 #[test]
 fn the_offered_fill_spec_accepts_optional_references() {
     let server = Server::start(|_| Reply::Json(200, json!({"models": []}).to_string()));
@@ -195,7 +194,7 @@ fn the_offered_fill_spec_accepts_optional_references() {
         let spec = m.spec_for(&cap).unwrap();
         assert_eq!(
             spec.accepts.get(&InputRole::Reference).copied(),
-            Some(u32::try_from(GeminiProvider::MAX_REFERENCES).unwrap())
+            Some(u32::MAX)
         );
         assert!(!spec.requires.contains(&InputRole::Reference));
     }

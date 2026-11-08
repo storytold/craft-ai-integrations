@@ -48,12 +48,10 @@ const BOUNDS: Bounds = Bounds {
     max_pixels: MAX_PIXELS,
 };
 
-/// Reference pictures one fill may carry after the source and the mask. The count and size are our
-/// own bounds, kept low because the service's picture limits differ by model and the source and
-/// mask already take two places. Read by the client's route check through
-/// `GeminiProvider::MAX_REFERENCES`, so the two cannot disagree.
+/// How each reference picture is checked: PNG, JPEG or WebP, at most 10 MB (our own bound). There
+/// is no count: Google's limit differs by model and the service refuses a request with too many,
+/// so that decision is left to it. The request as a whole is held to [`MAX_REQUEST_BYTES`].
 pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
-    max_count: 3,
     max_bytes: 10 * 1024 * 1024,
     png_only: false,
 };
@@ -61,8 +59,8 @@ pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
 /// The most one fill request body may be, as the bytes sent. Google documents a 20 MB total
 /// request size for inline data (text and every file) on the Gemini API; its Interactions pages
 /// state no figure, so the documented one is used here, in decimal megabytes to stay on the safe
-/// side. Three references within [`REFERENCES`] can reach 30 MB before encoding, so this is what
-/// stops a request the service would refuse.
+/// side. References within [`REFERENCES`] can pass that many times over before encoding, so this
+/// is what stops a request the service would refuse.
 pub(crate) const MAX_REQUEST_BYTES: usize = 20_000_000;
 
 /// The refusal for a body over [`MAX_REQUEST_BYTES`], the same from [`preflight`] and
@@ -91,7 +89,7 @@ pub(crate) fn lower_bound(request: &Request) -> usize {
 }
 
 /// Refuses a fill whose [`lower_bound`] already passes [`MAX_REQUEST_BYTES`], before any picture
-/// is decoded or a base64 copy is made. Three references near their 10 MB limit would otherwise
+/// is decoded or a base64 copy is made. A few references near their 10 MB limit would otherwise
 /// cost over 100 MB of copies just to be refused. A body that passes here is still measured in
 /// full by [`encoded_body`].
 pub(crate) fn preflight(request: &Request) -> Result<(), AiError> {

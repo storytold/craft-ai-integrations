@@ -22,10 +22,10 @@ pub(crate) struct Fill<'a> {
     pub references: Vec<Reference<'a>>,
 }
 
-/// A PNG source, a normalized, non-empty PNG mask with matching dimensions, and at most
-/// `max_references` PNG reference pictures (the model's declared limit), all checked before any
-/// upload. Omni uploads every picture as PNG, so another format is refused, not converted.
-pub(crate) fn prepare(request: &Request, max_references: usize) -> Result<Fill<'_>, AiError> {
+/// A PNG source, a normalized, non-empty PNG mask with matching dimensions, and the PNG reference
+/// pictures, all checked before any upload. How many references a model takes is Omni's to say.
+/// Omni uploads every picture as PNG, so another format is refused, not converted.
+pub(crate) fn prepare(request: &Request) -> Result<Fill<'_>, AiError> {
     let source = mask::inline(request, BOUNDS, InputRole::Source, "source picture")?;
     // Decode the whole source, not only its header, so a broken file never reaches an upload.
     let source_size = mask::png_checked(source, BOUNDS, "Omni fill source")?;
@@ -40,7 +40,6 @@ pub(crate) fn prepare(request: &Request, max_references: usize) -> Result<Fill<'
         request,
         BOUNDS,
         ReferenceRule {
-            max_count: max_references,
             max_bytes: REFERENCE_BYTES,
             png_only: true,
         },

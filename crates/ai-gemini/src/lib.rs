@@ -167,10 +167,6 @@ impl GeminiProvider {
         fill::model_allowed(model)
     }
 
-    /// The most reference pictures one fill may carry after the source and the mask. `submit`
-    /// refuses more before anything is sent; the client's route check reads the same number.
-    pub const MAX_REFERENCES: usize = fill::REFERENCES.max_count;
-
     /// This crate's own model list, each offered for Generative fill (see [`fill_spec`]).
     fn catalog() -> Vec<ModelInfo> {
         fill::MODELS
@@ -182,7 +178,8 @@ impl GeminiProvider {
 }
 
 /// Source and mask required; the prompt may be left out or empty (fill from the surroundings).
-/// Up to [`GeminiProvider::MAX_REFERENCES`] reference pictures may follow; none are required.
+/// Any number of reference pictures may follow, none required: the service says how many its model
+/// takes and refuses more, so the spec states no count of its own ([`ANY_NUMBER`]).
 fn fill_spec() -> Option<CapabilitySpec> {
     Some(
         CapabilitySpec::new(CapabilityId::parse("image.inpaint").ok()?)
@@ -191,12 +188,13 @@ fn fill_spec() -> Option<CapabilitySpec> {
             .accepting(InputRole::Mask, 1)
             .requiring(InputRole::Mask)
             .accepting(InputRole::Prompt, 1)
-            .accepting(
-                InputRole::Reference,
-                u32::try_from(GeminiProvider::MAX_REFERENCES).ok()?,
-            ),
+            .accepting(InputRole::Reference, ANY_NUMBER),
     )
 }
+
+/// The count a spec gives an input the service limits itself: the largest the shared contract can
+/// hold, so no check here refuses a request the service would take.
+const ANY_NUMBER: u32 = u32::MAX;
 
 /// Reads at most `max` bytes of a body; more is `None`.
 fn read_bounded(body: ureq::Body, max: u64) -> Result<Option<Vec<u8>>, AiError> {

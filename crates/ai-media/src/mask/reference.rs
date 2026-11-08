@@ -5,6 +5,9 @@
 //! after them, in the order the request lists them, and its instruction says what it is for (see
 //! [`super::fill_instruction_with_references`]).
 //!
+//! There is no count here: how many references a model takes is the service's to say, and it
+//! refuses a request with too many (Jeremy's decision, 08/11/2026). Each picture is still checked.
+//!
 //! Invariants: every check here runs before an adapter uploads or sends anything, so a refused
 //! reference means nothing left this computer. Each picture is decoded in full, so a broken file
 //! is refused here and not by the service after it has been paid for.
@@ -15,8 +18,6 @@ use craft_ai_core::{AiError, InputRole, Payload, Request};
 /// What one adapter accepts as references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReferenceRule {
-    /// The most references one request may carry. Zero means the adapter takes none.
-    pub max_count: usize,
     /// The largest file accepted for one reference, in bytes.
     pub max_bytes: usize,
     /// Whether only PNG is accepted (an adapter that uploads every picture as PNG).
@@ -31,31 +32,20 @@ pub struct Reference<'a> {
     pub media: &'static str,
 }
 
-/// The request's references in request order, each checked against `rule` and `bounds`: the count,
-/// inline data only, the byte size, the format read from the bytes, the size in pixels and a full
+/// The request's references in request order, each checked against `rule` and `bounds`: inline data
+/// only, the byte size, the format read from the bytes, the size in pixels and a full
 /// decode. The first failure is returned and nothing is sent.
 pub fn references<'a>(
     request: &'a Request,
     bounds: Bounds,
     rule: ReferenceRule,
 ) -> Result<Vec<Reference<'a>>, AiError> {
-    let service = bounds.service;
     let inputs: Vec<&Payload> = request
         .inputs
         .iter()
         .filter(|i| i.role == InputRole::Reference)
         .map(|i| &i.payload)
         .collect();
-    if inputs.len() > rule.max_count {
-        return Err(AiError::unsupported(if rule.max_count == 0 {
-            format!("{service} takes no reference pictures")
-        } else {
-            format!(
-                "{service} takes at most {} reference pictures",
-                rule.max_count
-            )
-        }));
-    }
     inputs
         .into_iter()
         .enumerate()

@@ -11,7 +11,6 @@ const BOUNDS: Bounds = Bounds {
 };
 
 const RULE: ReferenceRule = ReferenceRule {
-    max_count: 2,
     max_bytes: 4096,
     png_only: false,
 };
@@ -89,21 +88,11 @@ fn each_rule_refuses() {
     let kind = |refs: Vec<Payload>, rule: ReferenceRule| {
         references(&request(refs), BOUNDS, rule).unwrap_err().kind
     };
-    assert_eq!(
-        kind(vec![ok(), ok(), ok()], RULE),
-        ErrorKind::Unsupported,
-        "count"
-    );
-    let none = ReferenceRule {
-        max_count: 0,
-        ..RULE
-    };
-    let err = references(&request(vec![ok()]), BOUNDS, none).unwrap_err();
-    assert!(
-        err.message.contains("takes no reference pictures"),
-        "{}",
-        err.message
-    );
+    // No count: twenty good references all pass, because how many a model takes is the service's
+    // to say.
+    let twenty = request(vec![ok(); 20]);
+    let many = references(&twenty, BOUNDS, RULE).unwrap();
+    assert_eq!(many.len(), 20);
     let link = Payload::handle("https://example.com/r.png", "image/png", None).unwrap();
     assert_eq!(kind(vec![link], RULE), ErrorKind::Unsupported, "a link");
     let big = ReferenceRule {

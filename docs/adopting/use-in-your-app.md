@@ -128,9 +128,12 @@ let request = Request::new(role.capability.clone())
 - **Inputs** are `prompt`, `system`, `source`, `mask`, `reference` and `context`. Send only the
   ones your `Role` lists. A model that cannot take them is never offered for your tool.
 - **Reference pictures for Generative fill** are optional `reference` inputs, added after the
-  source, mask and prompt, in the order you want them used. Gemini and ArtCraft Omni take up to
-  three; FLUX.1 Fill takes none. Ask `route_facts` or `plan` first: a model that cannot take them
-  refuses the request before the person is asked to agree, and nothing is dropped quietly. Each
+  source, mask and prompt, in the order you want them used. Gemini and ArtCraft Omni take them;
+  FLUX.1 Fill takes none. Ask `route_facts` or `plan` first: a model that cannot take references
+  at all refuses the request before the person is asked to agree, and nothing is dropped
+  quietly. The shared layer sets no count: each model's limit is the service's (Google documents
+  14 pictures per request for Nano Banana Pro, 2 and 2.1, the source and mask included), and a
+  request with too many is refused by the service after the person has agreed to send it. Each
   reference must be inline PNG, JPEG or WebP data (PNG only for Omni), at most 10 MB, 8,192
   pixels a side and 32 megapixels, and it must decode in full. For Gemini, the whole request as
   sent (the base64 source, normalized mask and references, plus the generated instruction with

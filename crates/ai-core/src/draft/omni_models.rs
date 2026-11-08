@@ -17,13 +17,14 @@ use crate::{CapabilityId, ModelId};
 /// The provider name the Omni preset saves.
 const PROVIDER: &str = "artcraft-omni";
 
-/// Reference pictures one Omni fill may carry after the source and the mask. Our own bound: Omni
-/// documents no count, and every reference is one more paid upload.
-const FILL_REFERENCES: u32 = 3;
+/// The count an Omni fill spec gives reference pictures: the largest the contract can hold, so no
+/// count of ours is applied. The model's own limit is the service's to enforce, and it refuses a
+/// request with too many (Jeremy's decision, 08/11/2026).
+const FILL_REFERENCES: u32 = u32::MAX;
 
 /// The Omni models the adapter runs. Generative fill takes the picture and mask; the prompt is
-/// optional, because an empty prompt asks Omni to remove what the mask covers. Up to
-/// [`FILL_REFERENCES`] reference pictures may follow; none are required.
+/// optional, because an empty prompt asks Omni to remove what the mask covers. Any number of
+/// reference pictures may follow ([`FILL_REFERENCES`]); none are required.
 pub fn documented() -> Vec<ModelInfo> {
     let image = [
         ("nano_banana", "Nano Banana (unverified)"),

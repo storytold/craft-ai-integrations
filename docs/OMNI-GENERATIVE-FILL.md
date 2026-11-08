@@ -19,8 +19,9 @@ the black region and match the scene. An empty prompt asks it to continue the su
 
 ## Reference pictures
 
-A fill may carry up to three `reference` inputs. This count is our own bound: Omni documents
-none, and every reference is one more upload. Each must be inline PNG data of at most 10 MB,
+A fill may carry `reference` inputs. The adapter sets no count: how many a model takes is
+Omni's to say, and it refuses a request with too many. That refusal comes after the uploads,
+because Omni only judges the request when it is asked to generate. Each must be inline PNG data of at most 10 MB,
 within the same pixel bounds as the source, and must decode in full. All of them are checked
 before the first upload, so a refused reference means nothing was sent. They are uploaded after
 the source and mask in request order, and the instruction names them as images 3 onwards and
