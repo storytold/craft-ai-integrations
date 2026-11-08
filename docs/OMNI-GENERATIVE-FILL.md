@@ -21,8 +21,8 @@ the black region and match the scene. An empty prompt asks it to continue the su
 
 A fill may carry `reference` inputs. The adapter sets no count: how many a model takes is
 Omni's to say, and it refuses a request with too many. That refusal comes after the uploads,
-because Omni only judges the request when it is asked to generate. Each must be inline PNG data of at most 10 MB,
-within the same pixel bounds as the source, and must decode in full. All of them are checked
+because Omni only judges the request when it is asked to generate. Each must be inline PNG
+data of at most 10 MB, within the same pixel bounds as the source, and must decode in full. All of them are checked
 before the first upload, so a refused reference means nothing was sent. They are uploaded after
 the source and mask in request order, and the instruction names them as images 3 onwards and
 tells the model to use them only as a guide, never to change the black region to match them.
@@ -35,9 +35,9 @@ to delete an upload (ArtCraft's own media-file delete needs a desktop session, n
 key), so the adapter cannot remove them. Each reference adds one more upload that could be
 left this way.
 
-Omni receives two ordinary image references. There is no dedicated mask parameter or
-pixel-preservation guarantee from this request. The host app must composite the result
-through its own selection mask. Generation parameters are not mapped by this adapter. A
+Omni receives the source and mask as its first two ordinary image references, followed by
+any reference pictures. There is no dedicated mask parameter or pixel-preservation guarantee
+from this request. The host app must composite the result through its own selection mask. Generation parameters are not mapped by this adapter. A
 host may request several variations through separate jobs.
 
 Fill results are retrieved as bounded image bytes from the documented HTTPS CDN, without

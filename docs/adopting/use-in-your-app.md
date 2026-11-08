@@ -138,8 +138,7 @@ let request = Request::new(role.capability.clone())
   pixels a side and 32 megapixels, and it must decode in full. For Gemini, the whole request as
   sent (the base64 source, normalized mask and references, plus the generated instruction with
   your prompt) must be at most 20,000,000 bytes, roughly 15 MB of pictures, or it is refused
-  before sending. A reference guides what the new
-  content looks like; it does not promise a result of any quality, and a listed model does not
+  before sending. A reference guides what the new content looks like; it does not promise a result of any quality, and a listed model does not
   mean the account can use it.
 - **Payloads** are `Payload::text`, `Payload::inline(media_type, bytes)` (up to 32 MiB by
   default) or `Payload::handle(uri, media_type, size)` for something too big to copy.

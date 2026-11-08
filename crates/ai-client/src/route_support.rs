@@ -148,9 +148,9 @@ pub(crate) fn vertex_check(query: &RouteQuery<'_>) -> RouteSupport {
 }
 
 /// Gemini fills only: one source, one mask, at most one prompt, any number of reference pictures
-/// (the service says how many its model takes), one output, no streaming. Any well-formed Gemini image model is taken, because
-/// `submit` takes one (see `GeminiProvider::model_allowed`), so a list check would refuse a newer
-/// model that works.
+/// (the service says how many its model takes), one output, no streaming. Any well-formed Gemini
+/// image model is taken, because `submit` takes one (see `GeminiProvider::model_allowed`), so a
+/// list check would refuse a newer model that works.
 /// Options are allowed: `image_size` is the one Gemini reads, and `submit` checks its value.
 pub(crate) fn gemini_check(query: &RouteQuery<'_>) -> RouteSupport {
     let count = |role: InputRole| query.inputs.iter().filter(|r| **r == role).count();
