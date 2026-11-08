@@ -65,17 +65,52 @@ pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
 /// stops a request the service would refuse.
 pub(crate) const MAX_REQUEST_BYTES: usize = 20_000_000;
 
+/// The refusal for a body over [`MAX_REQUEST_BYTES`], the same from [`preflight`] and
+/// [`encoded_body`].
+fn too_large() -> AiError {
+    AiError::invalid(
+        "the source, mask, reference pictures and prompt add up to more than Gemini's 20 MB \
+         request limit; send fewer or smaller reference pictures, or a shorter prompt",
+    )
+}
+
+/// A lower bound on the body's length, read from the input sizes without decoding or encoding
+/// anything: the padded base64 length of the inline source and of every inline reference, each of
+/// which the body carries exactly once. The mask (re-encoded before sending), the prompt and the
+/// fields around them are left out, so the real body is never shorter than this.
+pub(crate) fn lower_bound(request: &Request) -> usize {
+    request
+        .inputs
+        .iter()
+        .filter(|i| matches!(i.role, InputRole::Source | InputRole::Reference))
+        .filter_map(|i| match &i.payload {
+            Payload::Inline { data, .. } => Some(data.len().div_ceil(3).saturating_mul(4)),
+            _ => None,
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// Refuses a fill whose [`lower_bound`] already passes [`MAX_REQUEST_BYTES`], before any picture
+/// is decoded or a base64 copy is made. Three references near their 10 MB limit would otherwise
+/// cost over 100 MB of copies just to be refused. A body that passes here is still measured in
+/// full by [`encoded_body`].
+pub(crate) fn preflight(request: &Request) -> Result<(), AiError> {
+    if lower_bound(request) > MAX_REQUEST_BYTES {
+        return Err(too_large());
+    }
+    Ok(())
+}
+
 /// The request body for one fill as the JSON bytes to send, refused when longer than
-/// [`MAX_REQUEST_BYTES`]. The serialised bytes are measured, so base64 padding, the escaping of
+/// [`MAX_REQUEST_BYTES`]. It runs [`preflight`] first, so a body that cannot fit is refused before
+/// it is built. Otherwise the serialised bytes are measured, so base64 padding, the escaping of
 /// the prompt and every field around the pictures all count. Nothing has been sent when it refuses.
 pub(crate) fn encoded_body(model: &str, request: &Request) -> Result<Vec<u8>, AiError> {
+    preflight(request)?;
     let bytes = serde_json::to_vec(&body(model, request)?)
         .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
     if bytes.len() > MAX_REQUEST_BYTES {
-        return Err(AiError::invalid(
-            "the source, mask, reference pictures and prompt add up to more than Gemini's 20 MB \
-             request limit; send fewer or smaller reference pictures, or a shorter prompt",
-        ));
+        return Err(too_large());
     }
     Ok(bytes)
 }
@@ -303,5 +338,7 @@ pub(crate) fn clip(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod preflight_tests;
 #[cfg(test)]
 mod size_tests;

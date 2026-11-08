@@ -366,18 +366,22 @@ impl Provider for GeminiProvider {
         for input in &request.inputs {
             input.payload.check(&Limits::default())?;
         }
-        let body = fill::encoded_body(model.as_str(), request)?;
-        let id = JobId::new(format!(
-            "gemini-{}",
-            self.sequence.fetch_add(1, Ordering::Relaxed)
-        ))
-        .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
+        // A body that cannot fit is refused from the input sizes alone. The place is taken before
+        // the body is built, so at most MAX_RUNNING bodies and their base64 copies are ever in
+        // memory at once; a refusal while building gives the place back when `permit` drops.
+        fill::preflight(request)?;
         let permit = Permit::acquire(&self.in_flight).ok_or_else(|| {
             AiError::new(
                 ErrorKind::RateLimited,
                 "too many Gemini fills are running; wait for one to finish",
             )
         })?;
+        let body = fill::encoded_body(model.as_str(), request)?;
+        let id = JobId::new(format!(
+            "gemini-{}",
+            self.sequence.fetch_add(1, Ordering::Relaxed)
+        ))
+        .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
         {
             let mut jobs = lock(&self.jobs)?;
             registry::admit(&mut jobs, Instant::now())?;
@@ -452,3 +456,5 @@ impl Provider for GeminiProvider {
 mod registry_limits_tests;
 #[cfg(test)]
 mod registry_tests;
+#[cfg(test)]
+mod submit_order_tests;
