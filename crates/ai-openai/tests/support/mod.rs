@@ -111,7 +111,12 @@ fn read_request(stream: &mut TcpStream) -> Option<Recorded> {
     let mut searched = 0;
     let header_end = loop {
         if let Some(i) = buf[searched..].windows(4).position(|w| w == b"\r\n\r\n") {
-            break searched + i;
+            let end = searched + i;
+            // A delimiter that starts past the limit does not make an oversized head acceptable.
+            if end > MAX_HEADER_BYTES {
+                return None;
+            }
+            break end;
         }
         searched = buf.len().saturating_sub(3);
         if buf.len() > MAX_HEADER_BYTES {

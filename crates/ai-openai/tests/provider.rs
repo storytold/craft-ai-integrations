@@ -638,9 +638,9 @@ fn the_test_server_bounds_a_request_head() {
     }
     let _ = sent; // the server may close before the last write
     let mut rest = Vec::new();
-    hostile
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .unwrap();
+    // macOS answers `EINVAL` here once the server has closed the socket, which is expected: the
+    // point is only that no reply arrives.
+    let _ = hostile.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     let _ = hostile.read_to_end(&mut rest);
     assert!(rest.is_empty(), "an oversized head got a reply");
     assert_eq!(server.count(), 0);
