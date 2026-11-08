@@ -265,19 +265,16 @@ fn main() -> eframe::Result {
     )
 }
 
-/// Writes `history-export.csv` without following whatever is already at that name: an old export
-/// or a link someone planted is removed (the link itself, never its target) and a new file is
-/// created in its place, readable only by this user.
+/// Replaces `history-export.csv` once the whole new export is on disk. The temporary file is
+/// created exclusively in the same folder (and owner-only on Unix, as it holds retained
+/// history), so a link planted at the export name is replaced by the rename rather than
+/// followed, and an export that fails part way leaves the previous file in place.
 fn export(csv: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     const NAME: &str = "history-export.csv";
-    match std::fs::remove_file(NAME) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(NAME)?.write_all(csv)
+    let mut temporary = tempfile::NamedTempFile::new_in(".")?;
+    temporary.write_all(csv)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(NAME).map_err(|error| error.error)?;
+    Ok(())
 }
