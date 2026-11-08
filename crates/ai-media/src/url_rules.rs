@@ -19,6 +19,11 @@ fn unsafe_link(why: &str) -> AiError {
     AiError::new(ErrorKind::Provider, format!("media link refused: {why}"))
 }
 
+/// What a link is answered with when its name reaches an address a VPN or a fake-IP proxy hands
+/// out. A public name can legitimately resolve to one of these on such a setup, so the person is
+/// told what to change rather than that the address is private.
+const SHARED_ADDRESS: &str = "its name points at a shared address (100.64.0.0/10 for Tailscale, or 198.18.0.0/15 for a fake-IP proxy mode), so nothing was downloaded; turn that off, then try again";
+
 /// Checks one URL. `allow_loopback` permits `http` and `https` to a loopback host.
 pub fn check(url: &Url, allow_loopback: bool) -> Result<(), AiError> {
     if !url.username().is_empty() || url.password().is_some() {
@@ -39,6 +44,7 @@ pub fn check(url: &Url, allow_loopback: bool) -> Result<(), AiError> {
         };
     }
     match url.host() {
+        Some(Host::Ipv4(ip)) if shared_v4(ip) => Err(unsafe_link(SHARED_ADDRESS)),
         Some(Host::Ipv4(ip)) if internal_v4(ip) => {
             Err(unsafe_link("it points at a private address"))
         }
@@ -72,8 +78,13 @@ pub fn check_resolved(url: &Url, allow_loopback: bool) -> Result<(), AiError> {
     let addrs = (name, port)
         .to_socket_addrs()
         .map_err(|_| AiError::new(ErrorKind::Network, "could not look up the media host"))?;
-    if addrs.map(|a| a.ip()).any(internal_addr) {
-        return Err(unsafe_link("its name points at a private address"));
+    for ip in addrs.map(|a| a.ip()) {
+        if shared_addr(ip) {
+            return Err(unsafe_link(SHARED_ADDRESS));
+        }
+        if internal_addr(ip) {
+            return Err(unsafe_link("its name points at a private address"));
+        }
     }
     Ok(())
 }
@@ -117,13 +128,20 @@ impl Resolver for GuardedResolver {
             uri.host()
                 .is_some_and(|host| bare(host).eq_ignore_ascii_case(bare(proxy.host())))
         });
-        if to_proxy || addrs.iter().all(|a| self.allowed(a.ip())) {
-            Ok(addrs)
-        } else {
-            Err(ureq::Error::Io(std::io::Error::new(
+        if to_proxy {
+            return Ok(addrs);
+        }
+        let blocked = addrs.iter().map(|a| a.ip()).find(|ip| !self.allowed(*ip));
+        match blocked {
+            None => Ok(addrs),
+            Some(ip) if shared_addr(ip) => Err(ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                SHARED_ADDRESS,
+            ))),
+            Some(_) => Err(ureq::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "the link's name points at a private address",
-            )))
+            ))),
         }
     }
 }
@@ -140,6 +158,22 @@ fn internal_addr(ip: IpAddr) -> bool {
         IpAddr::V4(v4) => internal_v4(v4),
         IpAddr::V6(v6) => internal_v6(v6),
     }
+}
+
+/// An address a VPN or a fake-IP proxy puts in place of the real one: carrier-grade NAT
+/// (100.64.0.0/10, which Tailscale uses) and the benchmarking range some fake-IP proxy modes
+/// answer with (198.18.0.0/15). They stay refused, since a shared or make-believe address says
+/// nothing about who answers there, but they get the message that says what to change.
+fn shared_addr(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => shared_v4(v4),
+        IpAddr::V6(v6) => embedded_v4(v6).is_some_and(shared_v4),
+    }
+}
+
+fn shared_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    (a == 100 && (64..128).contains(&b)) || (a == 198 && (18..20).contains(&b))
 }
 
 /// Resolves a `Location` header against the current link. A redirect may not leave https; the
@@ -283,10 +317,12 @@ mod tests {
         port
     }
 
-    fn agent(allow_loopback: bool, proxy: Option<&str>) -> ureq::Agent {
+    /// The agent the downloaders build, with the shared TLS and proxy settings.
+    fn agent(allow_loopback: bool) -> ureq::Agent {
         ureq::Agent::with_parts(
             ureq::Agent::config_builder()
-                .proxy(proxy.map(|p| ureq::Proxy::new(p).unwrap()))
+                .tls_config(craft_ai_http::tls_config())
+                .proxy(craft_ai_http::loopback_proxy())
                 .build(),
             ureq::unversioned::transport::DefaultConnector::new(),
             GuardedResolver::new(allow_loopback),
@@ -298,18 +334,22 @@ mod tests {
         let port = answering_server();
         let url = format!("http://localhost:{port}/");
         // `localhost` stands in for any name whose answer is internal: no address is connected to.
-        let err = agent(false, None).get(&url).call().unwrap_err();
+        let err = agent(false).get(&url).call().unwrap_err();
         assert!(err.to_string().contains("private address"), "{err}");
-        assert_eq!(agent(true, None).get(&url).call().unwrap().status(), 200);
+        assert_eq!(agent(true).get(&url).call().unwrap().status(), 200);
     }
 
     #[test]
     fn the_environments_proxy_is_still_reached() {
         let port = answering_server();
         let proxy = format!("http://localhost:{port}");
-        // The link's name is looked up by the proxy, never here, so it may be anything.
-        let resp = agent(false, Some(&proxy))
+        // The link's name is looked up by the proxy, never here, so it may be anything. The proxy
+        // is set per request, as the store sets the environment's proxy hop by hop.
+        let resp = agent(false)
             .get("http://media.example.invalid/x")
+            .config()
+            .proxy(Some(ureq::Proxy::new(&proxy).unwrap()))
+            .build()
             .call()
             .unwrap();
         assert_eq!(resp.status(), 200);
@@ -354,6 +394,37 @@ mod tests {
     fn credentials_in_the_link_are_refused() {
         assert!(!ok("https://user:pw@cdn.example.com/a.png", false));
         assert!(!ok("https://user@cdn.example.com/a.png", false));
+    }
+
+    #[test]
+    fn a_shared_vpn_address_says_what_to_change() {
+        for u in ["https://100.64.0.1/a", "https://198.18.0.1/a"] {
+            let error = check(&Url::parse(u).unwrap(), false).unwrap_err();
+            assert!(error.message.contains("shared address"), "{u}: {error:?}");
+            assert!(error.message.contains("Tailscale"), "{u}: {error:?}");
+            assert!(error.message.contains("turn that off"), "{u}: {error:?}");
+        }
+        // A genuinely private address keeps the plain wording.
+        let error = check(&Url::parse("https://10.0.0.5/a").unwrap(), false).unwrap_err();
+        assert!(error.message.contains("private address"), "{error:?}");
+        for shared in [
+            "100.64.0.1",
+            "100.127.255.254",
+            "198.18.0.1",
+            "198.19.255.255",
+            "::ffff:100.64.0.1",
+        ] {
+            assert!(shared_addr(shared.parse().unwrap()), "{shared}");
+        }
+        for ordinary in [
+            "100.63.255.255",
+            "100.128.0.1",
+            "198.17.255.255",
+            "198.20.0.1",
+            "8.8.8.8",
+        ] {
+            assert!(!shared_addr(ordinary.parse().unwrap()), "{ordinary}");
+        }
     }
 
     #[test]
