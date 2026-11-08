@@ -73,22 +73,32 @@ fn hex(bytes: &[u8]) -> String {
 /// Opens an original for reading without blocking on a pipe or device at its name (`O_NONBLOCK`
 /// on Unix) and refuses anything but a plain file, judged on the open handle. A pipe would
 /// otherwise stall preparation forever while it holds the model's lock.
-fn open_plain_file(path: &Path) -> std::io::Result<File> {
+fn open_plain_file(path: &Path) -> Result<File, AiError> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("not a plain file"));
+    let file = options.open(path).map_err(file_error)?;
+    if !file.metadata().map_err(file_error)?.is_file() {
+        return Err(mismatch());
     }
     Ok(file)
 }
 
-fn file_error(_: impl std::fmt::Display) -> AiError {
+/// Only a successfully opened entry that is not a plain file means the originals are the wrong
+/// ones. An entry that cannot even be opened is reported as what it is: file access.
+fn mismatch() -> AiError {
     AiError::unsupported(
-        "The saved model files could not be read or written. Check the model folder and try again.",
+        "The original model files do not match this option. Check them in Set up AI first.",
     )
+}
+
+/// A filesystem failure, kept distinct from a mismatch in the originals' contents. The operating
+/// system's description is appended; it names the kind of trouble, never a path.
+fn file_error(error: impl std::fmt::Display) -> AiError {
+    AiError::unsupported(format!(
+        "The saved model files could not be read or written. Check the model folder and try again. ({error})"
+    ))
 }
 
 /// What a damaged saved copy is answered with. It is public so a host can recognise it and say where
@@ -251,19 +261,13 @@ pub(crate) fn prepare(
     let output = scratch(output_role)?;
     for file in &bundle.files {
         let snapshot = work.path().join(&file.name);
-        let input = open_plain_file(&source.join(&file.name)).map_err(|_| {
-            AiError::unsupported(
-                "The original model files do not match this option. Check them in Set up AI first.",
-            )
-        })?;
+        let input = open_plain_file(&source.join(&file.name))?;
         let mut target = File::create(&snapshot).map_err(file_error)?;
         let copied = std::io::copy(&mut input.take(file.size.saturating_add(1)), &mut target)
             .map_err(file_error)?;
         drop(target);
         if copied != file.size || hash_file(&snapshot)? != file.sha256 {
-            return Err(AiError::unsupported(
-                "The original model files do not match this option. Check them in Set up AI first.",
-            ));
+            return Err(mismatch());
         }
     }
     check_cancelled(cancelled)?;

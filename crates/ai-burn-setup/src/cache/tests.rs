@@ -85,6 +85,29 @@ fn a_source_hash_mismatch_never_reaches_the_converter() {
     assert_eq!(fake.0.get(), 0);
 }
 
+/// An original that exists but cannot be opened is a file-access failure, not a claim that its
+/// contents differ. The test ends quietly where the permission is not enforced (a run as the
+/// superuser).
+#[cfg(unix)]
+#[test]
+fn an_unreadable_original_is_reported_as_file_access() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = Rig::new();
+    let encoder = r.source.join("encoder.onnx");
+    fs::set_permissions(&encoder, fs::Permissions::from_mode(0o000)).unwrap();
+    if File::open(&encoder).is_ok() {
+        return;
+    }
+    let fake = Fake::default();
+    let error = r.prepare(&fake).unwrap_err();
+    assert!(
+        error.message.contains("could not be read or written"),
+        "{error:?}"
+    );
+    assert!(!error.message.contains("do not match"), "{error:?}");
+    assert_eq!(fake.0.get(), 0);
+}
+
 /// A saved file changed without changing its size must not be reused.
 #[test]
 fn damaged_saved_weights_are_refused_without_overwriting_them() {
@@ -253,8 +276,20 @@ fn a_pipe_in_place_of_an_original_is_refused_without_blocking() {
         eprintln!("skipped: mkfifo is not available");
         return;
     }
-    let fake = Fake::default();
-    let error = r.prepare(&fake).unwrap_err();
-    assert!(error.message.contains("original model files"), "{error:?}");
-    assert_eq!(fake.0.get(), 0);
+    // Run the preparation away from the test thread: a regression that makes the open block on
+    // the pipe then fails these assertions instead of hanging the test run.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let fake = Fake::default();
+        let outcome = match r.prepare(&fake) {
+            Ok(_) => ("prepared despite the pipe".to_owned(), fake.0.get()),
+            Err(error) => (error.message, fake.0.get()),
+        };
+        let _ = sender.send(outcome);
+    });
+    let (message, conversions) = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("prepare blocked on the pipe instead of refusing it");
+    assert!(message.contains("original model files"), "{message}");
+    assert_eq!(conversions, 0);
 }
