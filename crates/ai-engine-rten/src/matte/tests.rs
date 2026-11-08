@@ -1,38 +1,89 @@
 use super::*;
 use craft_ai_core::{ErrorKind, Request};
 
-fn request(quality: Option<&str>) -> Request {
-    let mut r = Request::new(CapabilityId::parse(CAPABILITY).unwrap());
-    if let Some(q) = quality {
-        r.params.insert("quality".into(), serde_json::json!(q));
+/// Models that are never asked: a run that reaches them fails the test.
+struct Unused;
+
+impl pipeline::Models for Unused {
+    fn subject(&mut self, _: Vec<f32>) -> Result<Vec<f32>, AiError> {
+        panic!("the subject model was run")
     }
-    r
+    fn matte(&mut self, _: bool, _: Vec<f32>, _: usize, _: usize) -> Result<Vec<f32>, AiError> {
+        panic!("a matting model was run")
+    }
 }
 
 #[test]
-fn quality_defaults_to_max_and_refuses_others() {
-    assert_eq!(read_quality(&request(None)).unwrap(), Quality::Max);
-    assert_eq!(read_quality(&request(Some("high"))).unwrap(), Quality::High);
-    assert_eq!(read_quality(&request(Some("max"))).unwrap(), Quality::Max);
-    assert_eq!(
-        read_quality(&request(Some("ultra"))).unwrap_err().kind,
-        ErrorKind::InvalidRequest
-    );
+fn a_request_without_a_picture_is_refused_before_any_model_runs() {
+    let mut model = Loaded::new(Unused);
+    let r = Request::new(CapabilityId::parse(CAPABILITY).unwrap());
+    let e = model.run(&r, &RunContext::detached()).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+}
+
+#[test]
+fn an_answer_over_the_inline_limit_is_refused_in_words() {
+    let limits = Limits {
+        max_inline_bytes: 100,
+        ..Limits::default()
+    };
+    assert!(answer(vec![0; 100], &limits).is_ok());
+    let e = answer(vec![0; 101], &limits).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::InvalidRequest);
+    assert!(e.message.contains("101 bytes"), "{}", e.message);
+}
+
+fn missing_files(e: &AiError) -> bool {
+    e.message.contains("together in one folder")
 }
 
 #[test]
 fn loading_without_the_three_files_says_what_is_missing() {
+    // Each file missing in turn, the others present (and not models).
+    for missing in [BEN2_FILE, MATTE_SMALL_FILE, MATTE_BASE_FILE] {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [BEN2_FILE, MATTE_SMALL_FILE, MATTE_BASE_FILE] {
+            if file != missing {
+                std::fs::write(dir.path().join(file), b"x").unwrap();
+            }
+        }
+        let Err(e) = MatteRunner.load(&dir.path().join(BEN2_FILE)) else {
+            panic!("loaded without {missing}")
+        };
+        assert!(missing_files(&e), "without {missing}: {}", e.message);
+    }
     let dir = tempfile::tempdir().unwrap();
-    let ben2 = dir.path().join(BEN2_FILE);
-    std::fs::write(&ben2, b"x").unwrap();
-    let Err(e) = MatteRunner.load(&ben2) else {
-        panic!("loaded without the matting models")
+    for file in [BEN2_FILE, MATTE_SMALL_FILE, MATTE_BASE_FILE] {
+        std::fs::write(dir.path().join(file), b"x").unwrap();
+    }
+    // The matting models beside a weights file other than ben2.onnx are not enough.
+    let Err(e) = MatteRunner.load(&dir.path().join(MATTE_BASE_FILE)) else {
+        panic!("loaded from the wrong weights file")
     };
-    assert!(e.message.contains("vitmatte-small.onnx"), "{}", e.message);
-    // The other files present but not models: refused, not a panic.
-    std::fs::write(dir.path().join(MATTE_SMALL_FILE), b"x").unwrap();
-    std::fs::write(dir.path().join(MATTE_BASE_FILE), b"x").unwrap();
-    assert!(MatteRunner.load(&ben2).is_err());
+    assert!(missing_files(&e), "{}", e.message);
+    // All three present but not models: refused, not a panic.
+    let Err(e) = MatteRunner.load(&dir.path().join(BEN2_FILE)) else {
+        panic!("loaded files that are not models")
+    };
+    assert!(!missing_files(&e), "{}", e.message);
+}
+
+#[test]
+fn a_file_over_512_mb_is_refused_before_it_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    // A sparse file: its length is over the bound but nothing is written.
+    let big = std::fs::File::create(dir.path().join(MATTE_BASE_FILE)).unwrap();
+    big.set_len(MAX_FILE_BYTES + 1).unwrap();
+    drop(big);
+    let Err(e) = Rten::read(dir.path(), MATTE_BASE_FILE) else {
+        panic!("read a file over the bound")
+    };
+    assert_eq!(e.kind, ErrorKind::Unsupported, "{}", e.message);
+    assert!(
+        e.message.contains("not the BEN2 + ViTMatte models"),
+        "{}",
+        e.message
+    );
 }
 
 #[test]

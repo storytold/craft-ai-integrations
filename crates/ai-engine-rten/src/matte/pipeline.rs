@@ -1,14 +1,15 @@
 //! The cutout recipe: what is the subject (BEN2), then exactly how much of each edge pixel is
-//! subject (ViTMatte). Tuned on 67-megapixel photos against hard cases: pineapple leaves and pine
-//! needles on a backdrop of their own colour, hair, a car's roof rails, 3D lettering.
+//! subject (ViTMatte). Tuned on 67-megapixel photos against hard cases (pineapple leaves and pine
+//! needles on a backdrop of their own colour, hair, a car's roof rails, 3D lettering), then scored
+//! on AIM-500, a public set of photos with hand-made mattes.
 //!
 //! 1. **BEN2, whole picture** (its 1024 px square): finds the subject.
 //! 2. **BEN2 again along the contour**, in 1024 px tiles of a working picture of 3072 px. The
 //!    closer look may sharpen and remove (backdrop caught between leaves) but adds only where the
 //!    first look already saw something, so a gap it rejected stays rejected (roof rails).
-//! 3. **ViTMatte along the contour**, at up to 6144 px, from a trimap of that matte. With
-//!    [`Quality::Max`], tiles whose contour breaks into strands (hair) are matted again with the
-//!    larger model.
+//! 3. **ViTMatte along the contour**, at up to 6144 px, from a trimap of that matte. Each tile is
+//!    matted by both the small and the base ViTMatte and the two alphas are averaged: on AIM-500
+//!    the pair beat either model alone, hair and hard edges alike.
 
 use craft_ai_core::AiError;
 
@@ -21,22 +22,21 @@ pub const WORK_SIDE: usize = 3072;
 /// ViTMatte's picture: edges are matted at up to this size, then scaled to the picture.
 pub const MATTE_SIDE: usize = 6144;
 
-/// How hard the edge is matted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Quality {
-    /// The small matting model everywhere: best on products, lettering and hard-edged objects.
-    High,
-    /// Also the larger matting model wherever the edge breaks into strands: for people with hair.
-    Max,
-}
+/// How far BEN2's matte is steepened around 50% before the trimap is cut from it.
+const FIRM: f32 = 1.5;
+
+/// The trimap's three values, one byte a pixel.
+const BACKDROP: u8 = 0;
+const UNKNOWN: u8 = 1;
+const SUBJECT: u8 = 2;
 
 /// The models the recipe runs. The real one is rten; tests give a fake.
 pub trait Models {
-    /// BEN2 on a 1 × 3 × 1024 × 1024 picture (0–1, planar): the subject's matte, 1024 × 1024,
-    /// as probabilities or logits.
+    /// BEN2 on a 1 × 3 × 1024 × 1024 picture (0–1, planar): the subject's matte, 1024 × 1024, as
+    /// probabilities (0–1). The pinned `BEN2_Base.onnx` ends in a sigmoid.
     fn subject(&mut self, input: Vec<f32>) -> Result<Vec<f32>, AiError>;
     /// ViTMatte on a 1 × 4 × `h` × `w` input (normalised RGB and trimap): the alpha, `h` × `w`.
-    /// `large` asks for the base model.
+    /// `large` asks for the base model, otherwise the small one.
     fn matte(
         &mut self,
         large: bool,
@@ -61,15 +61,35 @@ pub struct Rgb {
 }
 
 impl Rgb {
-    /// From 8-bit RGB bytes.
-    pub fn from_bytes(w: usize, h: usize, bytes: &[u8]) -> Self {
-        let px = bytes
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .map(|p| p.map(|v| f32::from(v) / 255.0))
-            .collect();
-        Self { w, h, px }
+    /// 8-bit RGB `bytes` shrunk to fit `side` on the longer side, as [`Rgb::fit`] would, but
+    /// without a full-size float copy: one channel at a time. The bytes are dropped here.
+    pub fn fit_bytes(w: usize, h: usize, bytes: Vec<u8>, side: usize) -> Self {
+        let long = w.max(h);
+        if long <= side || side == 0 {
+            let px = bytes
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|p| p.map(|v| f32::from(v) / 255.0))
+                .collect();
+            return Self { w, h, px };
+        }
+        let (nw, nh) = (
+            (w * side).div_ceil(long).max(1),
+            (h * side).div_ceil(long).max(1),
+        );
+        let r = long / side / 2;
+        let mut px = vec![[0.0; 3]; nw * nh];
+        for c in 0..3 {
+            let mut plane = Plane::from_fn(w, h, |i| f32::from(bytes[i * 3 + c]) / 255.0);
+            plane.box_blur_in_place(r);
+            let small = bilinear(&plane.v, w, h, nw, nh);
+            drop(plane);
+            for (p, v) in px.iter_mut().zip(small) {
+                p[c] = v;
+            }
+        }
+        Self { w: nw, h: nh, px }
     }
 
     /// This picture shrunk to fit `side` on its longer side (box-filtered, then bilinear), or
@@ -110,34 +130,34 @@ impl Rgb {
     }
 }
 
-/// The subject's alpha at the size of `picture`.
+/// The subject's alpha for a `w` × `h` picture given as 8-bit RGB `bytes`, at that size. The
+/// bytes are dropped as soon as the matting picture is made from them.
 pub fn cutout(
-    picture: &Rgb,
+    w: usize,
+    h: usize,
+    bytes: Vec<u8>,
     models: &mut dyn Models,
-    quality: Quality,
     ctl: &Ctl,
 ) -> Result<Plane, AiError> {
-    if picture.w < 8 || picture.h < 8 || picture.px.len() != picture.w * picture.h {
+    if w < 8 || h < 8 || Some(bytes.len()) != w.checked_mul(h).and_then(|n| n.checked_mul(3)) {
         return Err(AiError::invalid("The picture is too small to cut out."));
     }
-    let matting = picture.fit(MATTE_SIDE);
-    let work = matting.fit(WORK_SIDE);
-    let coarse = subject(&work, models, ctl)?.resized(matting.w, matting.h);
+    let matting = Rgb::fit_bytes(w, h, bytes, MATTE_SIDE);
+    let coarse = {
+        let work = matting.fit(WORK_SIDE);
+        subject(&work, models, ctl)?.resized(matting.w, matting.h)
+    };
     (ctl.progress)(0.45);
-    let alpha = matte(&matting, &coarse, models, quality, ctl)?;
-    Ok(alpha.resized(picture.w, picture.h))
+    let alpha = matte(&matting, coarse, models, ctl)?;
+    drop(matting);
+    Ok(alpha.resized(w, h))
 }
 
-fn sigmoid_if_logits(mut v: Vec<f32>) -> Vec<f32> {
-    let logits = v.iter().any(|x| *x < -1e-3 || *x > 1.0 + 1e-3);
+/// BEN2's answer as a matte: its probabilities, clamped, with anything not finite as backdrop.
+fn probabilities(mut v: Vec<f32>) -> Vec<f32> {
     for x in &mut v {
-        let y = if logits {
-            1.0 / (1.0 + (-*x).exp())
-        } else {
-            *x
-        };
-        *x = if y.is_finite() {
-            y.clamp(0.0, 1.0)
+        *x = if x.is_finite() {
+            x.clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -164,7 +184,7 @@ fn ben2(models: &mut dyn Models, img: &Rgb) -> Result<Plane, AiError> {
     Ok(Plane {
         w: SIDE,
         h: SIDE,
-        v: sigmoid_if_logits(out),
+        v: probabilities(out),
     }
     .resized(img.w, img.h))
 }
@@ -181,7 +201,7 @@ fn subject(img: &Rgb, models: &mut dyn Models, ctl: &Ctl) -> Result<Plane, AiErr
     let (w, h) = (img.w, img.h);
     let d = ((w.max(h) as f32 * 0.012).round() as usize).max(6);
     let inside = mask(w, h, |i| g.v[i] > 0.5);
-    let (grown, shrunk) = (dilate(&inside, d), erode(&inside, d));
+    let (grown, shrunk) = (dilate(inside.clone(), d), erode(inside, d));
     let band = mask(w, h, |i| grown.v[i] > 0.5 && shrunk.v[i] < 0.5);
     let ov = 192;
     let todo: Vec<Tile> = tiles(w, h, SIDE, ov)
@@ -193,18 +213,18 @@ fn subject(img: &Rgb, models: &mut dyn Models, ctl: &Ctl) -> Result<Plane, AiErr
     for (k, t) in todo.iter().enumerate() {
         (ctl.check)()?;
         let m = ben2(models, &img.crop(*t))?;
-        add_tile(&mut acc, &mut ws, *t, &m, &ramp_weight(*t, ov));
+        add_tile(&mut acc, &mut ws, *t, &m, &ramp_weight(*t, ov, w, h));
         (ctl.progress)(0.05 + 0.4 * (k + 1) as f32 / todo.len().max(1) as f32);
     }
     Ok(firm(&combine_close_look(&g, &acc, &ws, &band)))
 }
 
 fn any_in(m: &Plane, t: Tile) -> bool {
-    (t.y..t.y + t.h).any(|y| {
-        m.v[y * m.w + t.x..y * m.w + t.x + t.w]
-            .iter()
-            .any(|v| *v > 0.5)
-    })
+    any_where(&m.v, m.w, t, |v| *v > 0.5)
+}
+
+fn any_where<T>(v: &[T], w: usize, t: Tile, f: impl Fn(&T) -> bool) -> bool {
+    (t.y..t.y + t.h).any(|y| v[y * w + t.x..y * w + t.x + t.w].iter().any(&f))
 }
 
 fn add_tile(acc: &mut Plane, ws: &mut Plane, t: Tile, m: &Plane, wt: &Plane) {
@@ -241,25 +261,26 @@ fn combine_close_look(g: &Plane, acc: &Plane, ws: &Plane, band: &Plane) -> Plane
     })
 }
 
-/// Steepens a matte around 50% (`(v − ½) · 2.5 + ½`): BEN2's edge, scaled up, spreads over
-/// several pixels; the trimap needs to know where it is.
+/// Steepens a matte around 50% (`(v − ½) · 1.5 + ½`): BEN2's edge, scaled up, spreads over
+/// several pixels; the trimap needs to know where it is. Steeper (2.5 was tried) marks too much
+/// of a soft edge as certain, and ViTMatte never sees it.
 fn firm(p: &Plane) -> Plane {
     Plane {
         w: p.w,
         h: p.h,
         v: p.v
             .iter()
-            .map(|v| ((v - 0.5) * 2.5 + 0.5).clamp(0.0, 1.0))
+            .map(|v| ((v - 0.5) * FIRM + 0.5).clamp(0.0, 1.0))
             .collect(),
     }
 }
 
-/// ViTMatte on one tile of `img` with its trimap (0, 0.5, 1), padded to a multiple of 32.
+/// ViTMatte on one tile of `img` with its trimap, padded to a multiple of 32.
 fn vitmatte(
     models: &mut dyn Models,
     large: bool,
     img: &Rgb,
-    tri: &Plane,
+    tri: &[u8],
     t: Tile,
 ) -> Result<Plane, AiError> {
     let (pw, ph) = (t.w.div_ceil(32) * 32, t.h.div_ceil(32) * 32);
@@ -272,7 +293,11 @@ fn vitmatte(
             for c in 0..3 {
                 input[c * n + d] = (p[c].clamp(0.0, 1.0) - 0.5) / 0.5;
             }
-            input[3 * n + d] = tri.v[s];
+            input[3 * n + d] = match tri[s] {
+                SUBJECT => 1.0,
+                BACKDROP => 0.0,
+                _ => 0.5,
+            };
         }
     }
     let out = models.matte(large, input, ph, pw)?;
@@ -286,106 +311,59 @@ fn vitmatte(
     }))
 }
 
-/// How many times the contour of `p` crosses `level` in tile `t`.
-fn crossings(p: &Plane, t: Tile, level: f32) -> usize {
-    let at = |x: usize, y: usize| p.v[(t.y + y) * p.w + t.x + x] > level;
-    let mut n = 0;
-    for y in 0..t.h {
-        for x in 0..t.w {
-            if x + 1 < t.w && at(x, y) != at(x + 1, y) {
-                n += 1;
-            }
-            if y + 1 < t.h && at(x, y) != at(x, y + 1) {
-                n += 1;
-            }
+/// The trimap of `coarse`: subject and backdrop where it is sure (above 98%, below 2%) and stays
+/// sure within `unk` pixels, unknown elsewhere.
+fn trimap(coarse: &Plane, unk: usize) -> Vec<u8> {
+    let (w, h) = (coarse.w, coarse.h);
+    let mut tri = vec![UNKNOWN; w * h];
+    let sure = erode(mask(w, h, |i| coarse.v[i] > 0.98), unk);
+    for (t, s) in tri.iter_mut().zip(&sure.v) {
+        if *s > 0.5 {
+            *t = SUBJECT;
         }
     }
-    n
-}
-
-/// Whether the matted contour in `t` breaks into strands compared with the coarse one: hair and
-/// fur do (ratio ≥ 1.05 of crossings at ¼, ½ and ¾), lettering and car bodies stay near 1.
-fn breaks_into_strands(fine: &Plane, coarse: &Plane, t: Tile) -> bool {
-    let c = crossings(coarse, t, 0.5);
-    if c < 50 {
-        return false;
+    let sure = erode(mask(w, h, |i| coarse.v[i] < 0.02), unk);
+    for (t, s) in tri.iter_mut().zip(&sure.v) {
+        if *s > 0.5 {
+            *t = BACKDROP;
+        }
     }
-    let f = (crossings(fine, t, 0.25) + crossings(fine, t, 0.5) + crossings(fine, t, 0.75)) as f32
-        / 3.0;
-    f / c as f32 >= 1.05
+    tri
 }
 
-/// Step 3: the edge alpha at `img`'s size from the coarse matte.
-fn matte(
-    img: &Rgb,
-    coarse: &Plane,
-    models: &mut dyn Models,
-    quality: Quality,
-    ctl: &Ctl,
-) -> Result<Plane, AiError> {
+/// Step 3: the edge alpha at `img`'s size from the coarse matte, which it consumes.
+fn matte(img: &Rgb, coarse: Plane, models: &mut dyn Models, ctl: &Ctl) -> Result<Plane, AiError> {
     let (w, h) = (img.w, img.h);
     let unk = ((w.max(h) as f32 * 0.0025).round() as usize).max(8);
-    let fg = erode(&mask(w, h, |i| coarse.v[i] > 0.98), unk);
-    let bg = erode(&mask(w, h, |i| coarse.v[i] < 0.02), unk);
-    let tri = Plane::from_fn(w, h, |i| {
-        if fg.v[i] > 0.5 {
-            1.0
-        } else if bg.v[i] > 0.5 {
-            0.0
-        } else {
-            0.5
-        }
-    });
-    let unknown = mask(w, h, |i| tri.v[i] == 0.5);
+    let tri = trimap(&coarse, unk);
     let ov = 96;
     let todo: Vec<Tile> = tiles(w, h, SIDE, ov)
         .into_iter()
-        .filter(|t| any_in(&unknown, *t))
+        .filter(|t| any_where(&tri, w, *t, |v| *v == UNKNOWN))
         .collect();
     let mut acc = Plane::new(w, h, 0.0);
     let mut ws = Plane::new(w, h, 0.0);
     for (k, t) in todo.iter().enumerate() {
         (ctl.check)()?;
-        let m = vitmatte(models, false, img, &tri, *t)?;
-        add_tile(&mut acc, &mut ws, *t, &m, &ramp_weight(*t, ov));
-        (ctl.progress)(0.45 + 0.4 * (k + 1) as f32 / todo.len().max(1) as f32);
+        let mut m = vitmatte(models, false, img, &tri, *t)?;
+        (ctl.check)()?;
+        let large = vitmatte(models, true, img, &tri, *t)?;
+        for (a, b) in m.v.iter_mut().zip(&large.v) {
+            *a = (*a + b) / 2.0;
+        }
+        add_tile(&mut acc, &mut ws, *t, &m, &ramp_weight(*t, ov, w, h));
+        (ctl.progress)(0.45 + 0.5 * (k + 1) as f32 / todo.len().max(1) as f32);
     }
-    let first = Plane::from_fn(w, h, |i| {
-        if ws.v[i] > 0.0 {
-            acc.v[i] / ws.v[i]
-        } else {
-            coarse.v[i]
-        }
-    });
-    let mut out = first.clone();
-    if quality == Quality::Max {
-        let hair: Vec<Tile> = todo
-            .iter()
-            .copied()
-            .filter(|t| breaks_into_strands(&first, coarse, *t))
-            .collect();
-        let mut acc = Plane::new(w, h, 0.0);
-        let mut ws = Plane::new(w, h, 0.0);
-        for (k, t) in hair.iter().enumerate() {
-            (ctl.check)()?;
-            let m = vitmatte(models, true, img, &tri, *t)?;
-            add_tile(&mut acc, &mut ws, *t, &m, &ramp_weight(*t, ov));
-            (ctl.progress)(0.85 + 0.1 * (k + 1) as f32 / hair.len().max(1) as f32);
-        }
-        for i in 0..w * h {
-            if ws.v[i] > 0.0 {
-                let b = (ws.v[i] / ov as f32).clamp(0.0, 1.0);
-                out.v[i] = first.v[i] * (1.0 - b) + acc.v[i] / ws.v[i] * b;
-            }
-        }
-    }
-    for i in 0..w * h {
-        if tri.v[i] != 0.5 {
-            out.v[i] = tri.v[i];
-        }
+    for (((a, t), wt), c) in acc.v.iter_mut().zip(&tri).zip(&ws.v).zip(&coarse.v) {
+        *a = match *t {
+            SUBJECT => 1.0,
+            BACKDROP => 0.0,
+            _ if *wt > 0.0 => *a / wt,
+            _ => *c,
+        };
     }
     (ctl.progress)(0.95);
-    Ok(out)
+    Ok(acc)
 }
 
 #[cfg(test)]

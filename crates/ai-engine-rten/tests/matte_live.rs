@@ -10,7 +10,6 @@ use craft_ai_core::{CapabilityId, ErrorKind, InputRole, Payload, Request};
 use craft_ai_engine::testing::check_runner_paced;
 use craft_ai_engine::{ModelRunner, RunContext};
 use craft_ai_engine_rten::matte::{BEN2_FILE, MatteRunner};
-use serde_json::json;
 
 fn weights() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("CRAFT_TEST_MATTE_ONNX_DIR")?).join(BEN2_FILE))
@@ -41,13 +40,11 @@ fn disc_png(w: u32, h: u32) -> Vec<u8> {
     out
 }
 
-fn request(png: Vec<u8>, quality: &str) -> Request {
-    Request::new(CapabilityId::parse("image.matte").unwrap())
-        .with_input(
-            InputRole::Source,
-            Payload::inline("image/png", png).unwrap(),
-        )
-        .with_param("quality", json!(quality))
+fn request(png: Vec<u8>) -> Request {
+    Request::new(CapabilityId::parse("image.matte").unwrap()).with_input(
+        InputRole::Source,
+        Payload::inline("image/png", png).unwrap(),
+    )
 }
 
 /// The disc is matted, the backdrop is not, at the picture's size.
@@ -61,10 +58,7 @@ fn the_real_models_cut_the_disc_out() {
     let mut model = MatteRunner.load(&weights).unwrap();
     let started = std::time::Instant::now();
     let out = model
-        .run(
-            &request(disc_png(1600, 1200), "max"),
-            &RunContext::detached(),
-        )
+        .run(&request(disc_png(1600, 1200)), &RunContext::detached())
         .unwrap();
     eprintln!("cut out in {:?}", started.elapsed());
     let Payload::Inline { data, .. } = &out[0].payload else {
@@ -97,7 +91,7 @@ fn the_real_runner_passes_the_shared_checks() {
         eprintln!("skipped: CRAFT_TEST_MATTE_ONNX_DIR is not set");
         return;
     };
-    let good = request(disc_png(320, 240), "high");
+    let good = request(disc_png(320, 240));
     let bad = Request::new(CapabilityId::parse("image.matte").unwrap());
     check_runner_paced(
         Arc::new(MatteRunner),

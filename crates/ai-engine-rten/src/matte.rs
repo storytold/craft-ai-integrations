@@ -1,14 +1,10 @@
 //! BEN2 + ViTMatte on rten as a [`ModelRunner`] for `image.matte` (Remove background): the
 //! subject's soft alpha, with every edge pixel matted, as a grayscale PNG the size of the picture.
 //!
-//! The request is a PNG or JPEG `source` and, optionally, `quality` in params:
+//! The request is a PNG or JPEG `source`; it takes no parameters. The answer travels inline, under
+//! the shared inline limit ([`Limits::default`]), and is checked against it before it is returned.
 //!
-//! - `"high"`: the small ViTMatte everywhere, the best for products, lettering and hard-edged
-//!   objects;
-//! - `"max"` (the default): also the base ViTMatte wherever the edge breaks into strands, for
-//!   people with hair.
-//!
-//! The recipe is in [`pipeline`]. The three files are the publishers' ONNX exports, read as they
+//! The recipe is in `pipeline`. The three files are the publishers' ONNX exports, read as they
 //! are: `ben2.onnx` (BEN2 base, MIT), `vitmatte-small.onnx` and `vitmatte-base.onnx` (ViTMatte,
 //! Apache-2.0), in one folder.
 
@@ -16,8 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use craft_ai_core::{
-    AiError, CapabilityId, CapabilitySpec, ErrorKind, InputRole, ModelId, ModelInfo, Output,
-    Payload, Request,
+    AiError, CapabilityId, CapabilitySpec, ErrorKind, InputRole, Limits, ModelId, ModelInfo,
+    Output, Payload, Request,
 };
 use craft_ai_engine::{LoadedModel, ModelRunner, RunContext};
 use rten::Model;
@@ -28,10 +24,8 @@ use crate::picture::{decode_picture, encode_mask};
 use crate::runner::ENGINE;
 use crate::sam21::read_bounded;
 
-pub mod pipeline;
-pub mod plane;
-
-pub use pipeline::Quality;
+pub(crate) mod pipeline;
+pub(crate) mod plane;
 
 /// The model id as the catalogue writes it (`NativeRoute`).
 pub const MODEL: &str = "ben2-vitmatte";
@@ -114,16 +108,20 @@ pub(crate) struct Rten {
 impl Rten {
     fn load(dir: &Path) -> Result<Self, AiError> {
         let read = |file: &str| {
-            let bytes = read_bounded(&dir.join(file), MAX_FILE_BYTES).map_err(|e| match e {
-                Some(e) => failed("could not be read", e),
-                None => not_this_model(),
-            })?;
-            Model::load(bytes).map_err(|e| failed("could not be loaded", e))
+            Model::load(Self::read(dir, file)?).map_err(|e| failed("could not be loaded", e))
         };
         Ok(Self {
             ben2: read(BEN2_FILE)?,
             small: read(MATTE_SMALL_FILE)?,
             base: read(MATTE_BASE_FILE)?,
+        })
+    }
+
+    /// One file's bytes, refused unread when it is over [`MAX_FILE_BYTES`].
+    fn read(dir: &Path, file: &str) -> Result<Vec<u8>, AiError> {
+        read_bounded(&dir.join(file), MAX_FILE_BYTES).map_err(|e| match e {
+            Some(e) => failed("could not be read", e),
+            None => not_this_model(),
         })
     }
 }
@@ -157,26 +155,15 @@ impl pipeline::Models for Rten {
     }
 }
 
-/// The quality the request asks for: `max` unless it says `high`.
-pub fn read_quality(request: &Request) -> Result<Quality, AiError> {
-    match request.params.get("quality") {
-        None => Ok(Quality::Max),
-        Some(v) => match v.as_str() {
-            Some("high") => Ok(Quality::High),
-            Some("max") => Ok(Quality::Max),
-            _ => Err(AiError::invalid("quality must be \"high\" or \"max\".")),
-        },
-    }
-}
-
 /// The models in memory, behind the recipe.
-pub struct Loaded<M: pipeline::Models> {
+pub(crate) struct Loaded<M: pipeline::Models> {
     models: M,
 }
 
 impl<M: pipeline::Models> Loaded<M> {
     /// Wraps a set of models.
-    pub fn new(models: M) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(models: M) -> Self {
         Self { models }
     }
 }
@@ -185,7 +172,6 @@ impl<M: pipeline::Models + Send + 'static> LoadedModel for Loaded<M> {
     /// Decodes the picture, runs the recipe, and returns the matte as a grayscale PNG the size of
     /// the picture as a person sees it.
     fn run(&mut self, request: &Request, ctx: &RunContext) -> Result<Vec<Output>, AiError> {
-        let quality = read_quality(request)?;
         let Some(source) = request
             .inputs
             .iter()
@@ -201,8 +187,6 @@ impl<M: pipeline::Models + Send + 'static> LoadedModel for Loaded<M> {
         };
         let picture = decode_picture(data)?;
         ctx.check_cancelled()?;
-        let rgb = pipeline::Rgb::from_bytes(picture.width, picture.height, &picture.bytes);
-        drop(picture);
         ctx.notice(
             "Finding the subject, then matting its edge. This takes a while on large pictures.",
         );
@@ -212,13 +196,34 @@ impl<M: pipeline::Models + Send + 'static> LoadedModel for Loaded<M> {
             check: &check,
             progress: &progress,
         };
-        let alpha = pipeline::cutout(&rgb, &mut self.models, quality, &ctl)?;
+        let alpha = pipeline::cutout(
+            picture.width,
+            picture.height,
+            picture.bytes,
+            &mut self.models,
+            &ctl,
+        )?;
+        ctx.check_cancelled()?;
         let png = encode_mask(&alpha.v, alpha.w, alpha.h)?;
-        Ok(vec![Output {
-            payload: Payload::inline("image/png", png)?,
-            label: None,
-        }])
+        drop(alpha);
+        Ok(vec![answer(png, &Limits::default())?])
     }
+}
+
+/// The matte as the one output, refused in words if it is over the inline limit.
+fn answer(png: Vec<u8>, limits: &Limits) -> Result<Output, AiError> {
+    let size = png.len();
+    let payload = Payload::inline("image/png", png)?;
+    payload.check(limits).map_err(|_| {
+        AiError::invalid(format!(
+            "The cut-out matte is {size} bytes, over the {} byte limit for an answer. Try a smaller picture.",
+            limits.max_inline_bytes
+        ))
+    })?;
+    Ok(Output {
+        payload,
+        label: None,
+    })
 }
 
 /// This runner, for [`crate::runners`].

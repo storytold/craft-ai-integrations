@@ -70,6 +70,11 @@ fn remove_background_runs_ben2_vitmatte_on_rten_from_three_pinned_files() {
     let feature = remove_background();
     let recipe = &feature.locals[1];
     assert_eq!(recipe.workflow, "ben2-vitmatte-matte");
+    assert!(
+        recipe.usable && !recipe.comfyui,
+        "built in only, never a ComfyUI model"
+    );
+    assert!(recipe.models.is_empty() && recipe.packs.is_empty());
     let route = &recipe.native[0];
     assert_eq!(
         (route.provider.as_str(), route.model.as_str()),

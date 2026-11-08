@@ -1,5 +1,5 @@
 //! BEN2 + ViTMatte for Remove background, run by the built-in rten engine: BEN2 finds the
-//! subject, ViTMatte mattes every edge pixel (hair at Maximum quality). The recipe is in
+//! subject, the small and base ViTMatte matte every edge pixel together. The recipe is in
 //! `craft-ai-engine-rten`'s `matte` module.
 
 use crate::recipe::{Licence, LocalRecipe, ModelFile, NativeRoute, Source};
@@ -84,7 +84,7 @@ pub(super) fn ben2_vitmatte() -> LocalRecipe {
             label: "BEN2 + ViTMatte, built in (on the processor)".to_owned(),
             models: ben2_vitmatte_files(),
             note: Some(
-                "Edges and hair matted pixel by pixel; about two minutes for a 67-megapixel photo on the processor."
+                "Edges and hair matted pixel by pixel. Slow on the processor: about a minute for a 1600 × 1200 picture on one Apple Silicon Mac, longer as the subject's edge grows."
                     .to_owned(),
             ),
             fast_on_processor: false,

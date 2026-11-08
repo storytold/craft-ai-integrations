@@ -82,31 +82,30 @@ impl Plane {
         }
     }
 
-    pub fn crop(&self, r: Tile) -> Self {
-        let mut v = Vec::with_capacity(r.w * r.h);
-        for y in r.y..r.y + r.h {
-            v.extend_from_slice(&self.v[y * self.w + r.x..y * self.w + r.x + r.w]);
-        }
-        Self { w: r.w, h: r.h, v }
-    }
-
     /// Box mean of radius `r` (window 2r+1), edges clamped.
     pub fn box_blur(&self, r: usize) -> Self {
+        let mut out = self.clone();
+        out.box_blur_in_place(r);
+        out
+    }
+
+    /// [`Plane::box_blur`] without a second plane: one line of scratch at a time.
+    pub fn box_blur_in_place(&mut self, r: usize) {
         if r == 0 {
-            return self.clone();
+            return;
         }
-        let rows = blur_1d(&self.v, self.w, self.h, r, true);
-        Self {
-            w: self.w,
-            h: self.h,
-            v: blur_1d(&rows, self.w, self.h, r, false),
-        }
+        blur_1d(&mut self.v, self.w, self.h, r, true);
+        blur_1d(&mut self.v, self.w, self.h, r, false);
     }
 }
 
-/// Running-sum box mean along rows (`horizontal`) or columns, edges clamped.
-fn blur_1d(src: &[f32], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<f32> {
+/// Running-sum box mean along rows (`horizontal`) or columns, edges clamped, in place. An empty
+/// axis is left as it is.
+fn blur_1d(v: &mut [f32], w: usize, h: usize, r: usize, horizontal: bool) {
     let (len, lines) = if horizontal { (w, h) } else { (h, w) };
+    if len == 0 || v.len() < w * h {
+        return;
+    }
     let at = |line: usize, i: usize| {
         if horizontal {
             line * w + i
@@ -114,17 +113,19 @@ fn blur_1d(src: &[f32], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<f
             i * w + line
         }
     };
-    let mut out = vec![0.0; w * h];
     let k = (2 * r + 1) as f64;
+    let mut src = vec![0.0f32; len];
     for line in 0..lines {
-        let get = |i: isize| src[at(line, i.clamp(0, len as isize - 1) as usize)] as f64;
+        for (i, s) in src.iter_mut().enumerate() {
+            *s = v[at(line, i)];
+        }
+        let get = |i: isize| f64::from(src[i.clamp(0, len as isize - 1) as usize]);
         let mut sum: f64 = (-(r as isize)..=r as isize).map(get).sum();
         for i in 0..len {
-            out[at(line, i)] = (sum / k) as f32;
+            v[at(line, i)] = (sum / k) as f32;
             sum += get(i as isize + r as isize + 1) - get(i as isize - r as isize);
         }
     }
-    out
 }
 
 /// A boolean mask as 0/1 floats, for the filters above.
@@ -132,30 +133,23 @@ pub fn mask(w: usize, h: usize, f: impl Fn(usize) -> bool) -> Plane {
     Plane::from_fn(w, h, |i| if f(i) { 1.0 } else { 0.0 })
 }
 
-/// Square dilation of a 0/1 mask by `r`: any set pixel within the window.
-pub fn dilate(m: &Plane, r: usize) -> Plane {
-    let b = m.box_blur(r);
-    Plane {
-        w: m.w,
-        h: m.h,
-        v: b.v
-            .iter()
-            .map(|x| if *x > 1e-6 { 1.0 } else { 0.0 })
-            .collect(),
-    }
+/// Square dilation of a 0/1 mask by `r`: any set pixel within the window. Reuses the mask.
+pub fn dilate(m: Plane, r: usize) -> Plane {
+    threshold(m, r, 1e-6)
 }
 
 /// Square erosion of a 0/1 mask by `r`: every pixel within the window set (edges clamped).
-pub fn erode(m: &Plane, r: usize) -> Plane {
-    let b = m.box_blur(r);
-    Plane {
-        w: m.w,
-        h: m.h,
-        v: b.v
-            .iter()
-            .map(|x| if *x > 1.0 - 1e-6 { 1.0 } else { 0.0 })
-            .collect(),
+/// Reuses the mask.
+pub fn erode(m: Plane, r: usize) -> Plane {
+    threshold(m, r, 1.0 - 1e-6)
+}
+
+fn threshold(mut m: Plane, r: usize, above: f32) -> Plane {
+    m.box_blur_in_place(r);
+    for x in &mut m.v {
+        *x = if *x > above { 1.0 } else { 0.0 };
     }
+    m
 }
 
 /// A rectangle inside a plane.
@@ -197,11 +191,25 @@ pub fn tiles(w: usize, h: usize, size: usize, overlap: usize) -> Vec<Tile> {
     out
 }
 
-/// A tile's blending weight: rises from the tile's border over `ramp` pixels, so overlapping
-/// tiles fade into each other instead of meeting at a seam.
-pub fn ramp_weight(t: Tile, ramp: usize) -> Plane {
-    let edge = |i: usize, n: usize| (i + 1).min(n - i).min(ramp.max(1)) as f32;
-    Plane::from_fn(t.w, t.h, |i| edge(i % t.w, t.w).min(edge(i / t.w, t.h)))
+/// A tile's blending weight in a `w` × `h` picture: rises over `ramp` pixels from each tile edge
+/// that lies inside the picture, so overlapping tiles fade into each other instead of meeting at
+/// a seam. An edge on the picture's own border has no neighbour to fade into and stays at full
+/// weight.
+pub fn ramp_weight(t: Tile, ramp: usize, w: usize, h: usize) -> Plane {
+    let ramp = ramp.max(1);
+    let edge = |i: usize, n: usize, start: usize, len: usize| {
+        let mut r = ramp;
+        if start > 0 {
+            r = r.min(i + 1);
+        }
+        if start + n < len {
+            r = r.min(n - i);
+        }
+        r as f32
+    };
+    Plane::from_fn(t.w, t.h, |i| {
+        edge(i % t.w, t.w, t.x, w).min(edge(i / t.w, t.h, t.y, h))
+    })
 }
 
 #[cfg(test)]
@@ -228,8 +236,8 @@ mod tests {
             (3..7).contains(&(i % 10)) && (3..7).contains(&(i / 10))
         });
         let on = |p: &Plane| p.v.iter().filter(|x| **x > 0.5).count();
-        assert_eq!(on(&dilate(&m, 1)), 36);
-        assert_eq!(on(&erode(&m, 1)), 4);
+        assert_eq!(on(&dilate(m.clone(), 1)), 36);
+        assert_eq!(on(&erode(m, 1)), 4);
     }
 
     #[test]
@@ -242,17 +250,32 @@ mod tests {
     }
 
     #[test]
-    fn ramp_is_highest_inside() {
-        let w = ramp_weight(
-            Tile {
-                x: 0,
-                y: 0,
-                w: 10,
-                h: 10,
-            },
-            3,
-        );
-        assert_eq!(w.v[0], 1.0);
-        assert_eq!(w.v[5 * 10 + 5], 3.0);
+    fn a_ramp_fades_only_into_neighbouring_tiles() {
+        // The left tile of two across a 20 × 10 picture: its right edge meets the next tile, its
+        // other edges are the picture's border.
+        let t = Tile {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 10,
+        };
+        let w = ramp_weight(t, 3, 20, 10);
+        assert_eq!(w.v[0], 3.0, "the picture's corner is at full weight");
+        assert_eq!(w.v[5 * 12 + 5], 3.0);
+        assert_eq!(w.v[5 * 12 + 11], 1.0, "the inner edge fades");
+        // A tile that is the whole picture is at full weight everywhere.
+        let whole = Tile {
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 4,
+        };
+        assert!(ramp_weight(whole, 3, 6, 4).v.iter().all(|x| *x == 3.0));
+    }
+
+    #[test]
+    fn blurring_an_empty_axis_is_not_a_panic() {
+        assert!(Plane::new(0, 5, 0.0).box_blur(2).v.is_empty());
+        assert!(Plane::new(5, 0, 0.0).box_blur(2).v.is_empty());
     }
 }
