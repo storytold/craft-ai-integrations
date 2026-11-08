@@ -17,10 +17,16 @@ from pathlib import Path
 MAX_REQUEST = 24 * 1024 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
 # A client that stalls is dropped: each read waits at most IDLE_SECONDS, and the whole body must
-# arrive within BODY_SECONDS. At most MAX_CONNECTIONS are served at once; more are closed.
+# arrive within BODY_SECONDS. At most MAX_CONNECTIONS are served at once; more are closed, except
+# that a health check is read on one of MAX_PROBES extra slots so a busy bridge still answers it.
 IDLE_SECONDS = 15
 BODY_SECONDS = 60
 MAX_CONNECTIONS = 8
+MAX_PROBES = 4
+HEALTH_BODY = b'{"model":"sam3","ready":true}'
+HEALTH_REPLY = (b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: " + str(len(HEALTH_BODY)).encode("ascii") +
+                b"\r\nConnection: close\r\n\r\n" + HEALTH_BODY)
 
 
 def predict_with_sam3(checkpoint):
@@ -57,12 +63,39 @@ class BridgeServer(ThreadingHTTPServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self.probes = threading.BoundedSemaphore(MAX_PROBES)
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
-            self.shutdown_request(request)
+            # Every inference slot is busy. A health check is answered on one of the probe slots,
+            # since reporting a busy bridge as unreachable helps nobody; anything else is closed
+            # straight away, as before.
+            if self.probes.acquire(blocking=False):
+                try:
+                    threading.Thread(target=self.answer_probe, args=(request,),
+                                     daemon=True).start()
+                except RuntimeError:
+                    self.probes.release()
+                    self.shutdown_request(request)
+            else:
+                self.shutdown_request(request)
             return
         super().process_request(request, client_address)
+
+    def answer_probe(self, request):
+        """Answers `GET /v1/health` on a connection taken while every inference slot is busy."""
+        try:
+            request.settimeout(IDLE_SECONDS)
+            with request.makefile("rb") as reader:
+                line = reader.readline(1024)
+            parts = line.rstrip(b"\r\n").split(b" ")
+            if len(parts) == 3 and parts[0] == b"GET" and parts[1] == b"/v1/health":
+                request.sendall(HEALTH_REPLY)
+        except OSError:
+            pass
+        finally:
+            self.probes.release()
+            self.shutdown_request(request)
 
     def process_request_thread(self, request, client_address):
         try:
@@ -71,13 +104,17 @@ class BridgeServer(ThreadingHTTPServer):
             self.slots.release()
 
 
-def read_body(rfile, size, deadline):
+def read_body(rfile, size, deadline, sock):
     """Exactly `size` bytes, or None if the client stops sending or runs past `deadline`."""
     chunks, have = [], 0
     while have < size:
-        if time.monotonic() > deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             return None
         try:
+            # Each blocking read waits for at most what the body has left, so a read that starts
+            # just before the deadline cannot run IDLE_SECONDS past it.
+            sock.settimeout(min(IDLE_SECONDS, remaining))
             chunk = rfile.read1(min(size - have, 1 << 20))
         except OSError:
             return None
@@ -122,7 +159,9 @@ def handler_for(predict):
                 if not 0 < size <= MAX_REQUEST:
                     self.reply(413, {"error": "request too large"})
                     return
-                raw_body = read_body(self.rfile, size, time.monotonic() + BODY_SECONDS)
+                raw_body = read_body(
+                    self.rfile, size, time.monotonic() + BODY_SECONDS, self.connection
+                )
                 if raw_body is None:
                     self.close_connection = True
                     return

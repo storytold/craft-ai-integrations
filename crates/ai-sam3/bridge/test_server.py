@@ -67,6 +67,59 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(stalled.recv(1024), b"")  # closed by the server, not left open
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_health_is_answered_while_every_inference_slot_is_busy(self):
+        port = self.server.server_port
+        for _ in range(server.MAX_CONNECTIONS):
+            stalled = socket.create_connection(("127.0.0.1", port))
+            self.addCleanup(stalled.close)
+            stalled.sendall(
+                b"POST /v1/detect HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{"
+            )
+        time.sleep(0.2)  # let the accept loop take every connection
+        started = time.monotonic()
+        with urllib.request.urlopen(self.url + "/health", timeout=5) as resp:
+            self.assertEqual(json.load(resp), {"model": "sam3", "ready": True})
+        self.assertLess(time.monotonic() - started, 1, "health waited for a busy slot")
+
+    def test_only_one_prediction_runs_at_a_time(self):
+        active, peak = 0, 0
+        guard = threading.Lock()
+
+        def slow(raw, prompt):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.2)
+            with guard:
+                active -= 1
+            return {"width": 1, "height": 1, "boxes": [], "scores": []}
+
+        bridge = BridgeServer(("127.0.0.1", 0), handler_for(slow))
+        thread = threading.Thread(target=bridge.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(bridge.server_close)
+        self.addCleanup(bridge.shutdown)
+        self.addCleanup(thread.join, 2)
+        data = json.dumps(
+            {"prompt": "x", "image": {"mime_type": "image/png",
+                                        "data": base64.b64encode(b"i").decode()}}
+        ).encode()
+        url = "http://127.0.0.1:%s/v1/detect" % bridge.server_port
+        statuses = []
+
+        def call():
+            with urllib.request.urlopen(urllib.request.Request(url, data=data)) as resp:
+                statuses.append(resp.status)
+
+        callers = [threading.Thread(target=call) for _ in range(2)]
+        for caller in callers:
+            caller.start()
+        for caller in callers:
+            caller.join(5)
+        self.assertEqual(statuses, [200, 200])
+        self.assertEqual(peak, 1, "two predictions ran at once")
+
 
 if __name__ == "__main__":
     unittest.main()
