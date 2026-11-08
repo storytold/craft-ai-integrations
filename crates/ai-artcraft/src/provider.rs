@@ -133,6 +133,7 @@ impl ArtCraftProvider {
         job.snapshot = JobSnapshot::new(JobState::Failed { error });
         Ok(job.snapshot.clone())
     }
+    /// The job registry, or an internal error when a panic left its lock poisoned.
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<JobId, Job>>, AiError> {
         self.jobs
             .lock()
@@ -140,13 +141,16 @@ impl ArtCraftProvider {
     }
 }
 impl Provider for ArtCraftProvider {
+    /// Always refuses: Omni has no free way to test a key, so saved models stay unverified until a
+    /// real job runs. Contacts nothing.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         Err(AiError::unsupported(
             "ArtCraft Omni API has no documented free key test; saved models are unverified until a job runs",
         ))
     }
     /// Checks the request against the documented model, reserves a job slot, uploads the fill's
-    /// source and mask when it is a fill, then asks Omni to generate. Nothing is sent for a refused request.
+    /// source, mask and reference pictures in that order when it is a fill, then asks Omni to
+    /// generate. Nothing is sent for a refused request.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let info = Self::documented_models()
             .into_iter()
@@ -202,11 +206,25 @@ impl Provider for ArtCraftProvider {
         };
         let mut body = json!({"model":model.as_str(),"prompt":prompt,"idempotency_token":uuid::Uuid::new_v4().to_string()});
         if let Some(fill) = &fill {
-            let source = self.http.upload_png(fill.source)?;
-            let mask = self.http.upload_png(&fill.mask)?;
-            body["image_media_tokens"] = json!([source, mask]);
+            // shortcut: if a later upload fails, the earlier ones stay on the account as private
+            // intermediate files, because the Omni API (upload, generate, job status) has no call
+            // to delete an upload; ArtCraft's own media-file delete takes a desktop session, not an
+            // API key. Every input is checked before the first upload, so only a service or network
+            // failure mid-way leaves files. Delete the earlier tokens here once Omni documents an
+            // API-key delete.
+            let mut tokens = vec![
+                self.http.upload_png(fill.source)?,
+                self.http.upload_png(&fill.mask)?,
+            ];
+            for reference in &fill.references {
+                tokens.push(self.http.upload_png(reference.data)?);
+            }
+            body["image_media_tokens"] = json!(tokens);
             body["image_batch_count"] = json!(1);
-            body["prompt"] = json!(craft_ai_media::mask::fill_instruction(prompt));
+            body["prompt"] = json!(craft_ai_media::mask::fill_instruction_with_references(
+                prompt,
+                fill.references.len()
+            ));
         }
         let response = self.http.post(
             if video {

@@ -12,7 +12,9 @@ use png::{BitDepth, ColorType, Transformations};
 use std::io::Cursor;
 
 mod instruction;
-pub use instruction::fill_instruction;
+mod reference;
+pub use instruction::{fill_instruction, fill_instruction_with_references};
+pub use reference::{Reference, ReferenceRule, references};
 
 /// The largest pictures an adapter accepts: a side and a total pixel count. `service` names the
 /// adapter in its errors ("FLUX Fill needs a mask").

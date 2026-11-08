@@ -11,7 +11,7 @@
 //! is treated as a placeholder to replace, not as content to keep.
 use craft_ai_core::payload::{base64_decode, base64_encode};
 use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request};
-use craft_ai_media::mask::{self, Bounds};
+use craft_ai_media::mask::{self, Bounds, ReferenceRule};
 use serde_json::{Value, json};
 
 /// Image models offered, best default first: (id, label).
@@ -47,6 +47,71 @@ const BOUNDS: Bounds = Bounds {
     max_side: MAX_SIDE,
     max_pixels: MAX_PIXELS,
 };
+
+/// How each reference picture is checked: PNG, JPEG or WebP, at most 10 MB (our own bound). There
+/// is no count: Google's limit differs by model and the service refuses a request with too many,
+/// so that decision is left to it. The request as a whole is held to [`MAX_REQUEST_BYTES`].
+pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
+    max_bytes: 10 * 1024 * 1024,
+    png_only: false,
+};
+
+/// The most one fill request body may be, as the bytes sent. Google documents a 20 MB total
+/// request size for inline data (text and every file) on the Gemini API; its Interactions pages
+/// state no figure, so the documented one is used here, in decimal megabytes to stay on the safe
+/// side. References within [`REFERENCES`] can pass that many times over before encoding, so this
+/// is what stops a request the service would refuse.
+pub(crate) const MAX_REQUEST_BYTES: usize = 20_000_000;
+
+/// The refusal for a body over [`MAX_REQUEST_BYTES`], the same from [`preflight`] and
+/// [`encoded_body`].
+fn too_large() -> AiError {
+    AiError::invalid(
+        "the source, mask, reference pictures and prompt add up to more than Gemini's 20 MB \
+         request limit; send fewer or smaller reference pictures, or a shorter prompt",
+    )
+}
+
+/// A lower bound on the body's length, read from the input sizes without decoding or encoding
+/// anything: the padded base64 length of the inline source and of every inline reference, each of
+/// which the body carries exactly once. The mask (re-encoded before sending), the prompt and the
+/// fields around them are left out, so the real body is never shorter than this.
+pub(crate) fn lower_bound(request: &Request) -> usize {
+    request
+        .inputs
+        .iter()
+        .filter(|i| matches!(i.role, InputRole::Source | InputRole::Reference))
+        .filter_map(|i| match &i.payload {
+            Payload::Inline { data, .. } => Some(data.len().div_ceil(3).saturating_mul(4)),
+            _ => None,
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// Refuses a fill whose [`lower_bound`] already passes [`MAX_REQUEST_BYTES`], before any picture
+/// is decoded or a base64 copy is made. A few references near their 10 MB limit would otherwise
+/// cost over 100 MB of copies just to be refused. A body that passes here is still measured in
+/// full by [`encoded_body`].
+pub(crate) fn preflight(request: &Request) -> Result<(), AiError> {
+    if lower_bound(request) > MAX_REQUEST_BYTES {
+        return Err(too_large());
+    }
+    Ok(())
+}
+
+/// The request body for one fill as the JSON bytes to send, refused when longer than
+/// [`MAX_REQUEST_BYTES`]. It runs [`preflight`] first, so a body that cannot fit is refused before
+/// it is built. Otherwise the serialised bytes are measured, so base64 padding, the escaping of
+/// the prompt and every field around the pictures all count. Nothing has been sent when it refuses.
+pub(crate) fn encoded_body(model: &str, request: &Request) -> Result<Vec<u8>, AiError> {
+    preflight(request)?;
+    let bytes = serde_json::to_vec(&body(model, request)?)
+        .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
+    if bytes.len() > MAX_REQUEST_BYTES {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
 
 /// Whether `model` may be asked for: one of [`MODELS`], or any well-formed `gemini-…-image…` id so
 /// a newer model works without an update to this crate.
@@ -167,14 +232,25 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
             "the mask must be the same size as the source image",
         ));
     }
+    // References are checked last and sent after the mask, in request order, so the instruction's
+    // "third image onwards" always names them.
+    let references = mask::references(request, BOUNDS, REFERENCES)?;
+    // Each picture is within its own limit here; their total is checked in [`encoded_body`].
+    let instruction = mask::fill_instruction_with_references(prompt, references.len());
+    let mut input = vec![
+        json!({"type": "text", "text": instruction}),
+        json!({"type": "image", "mime_type": media, "data": base64_encode(source)}),
+        json!({"type": "image", "mime_type": "image/png", "data": base64_encode(&mask)}),
+    ];
+    input.extend(
+        references
+            .iter()
+            .map(|r| json!({"type": "image", "mime_type": r.media, "data": base64_encode(r.data)})),
+    );
     let (a, b) = nearest_ratio(width, height);
     Ok(json!({
         "model": model,
-        "input": [
-            {"type": "text", "text": fill_instruction(prompt)},
-            {"type": "image", "mime_type": media, "data": base64_encode(source)},
-            {"type": "image", "mime_type": "image/png", "data": base64_encode(&mask)},
-        ],
+        "input": input,
         "response_format": {
             "type": "image",
             // The Interactions API returns JPEG only ("Supported values: 'image/jpeg'").
@@ -259,3 +335,8 @@ pub(crate) fn clip(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod preflight_tests;
+#[cfg(test)]
+mod size_tests;

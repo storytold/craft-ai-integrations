@@ -13,14 +13,32 @@ white meaning edit and black meaning keep. Each input is uploaded to
 fresh idempotency token. No local filename is uploaded.
 
 The image-generation body contains the selected `model`, a fresh `idempotency_token`,
-`image_media_tokens` in source-then-mask order, `image_batch_count: 1` and an expanded
-`prompt`. The shared instruction asks the model to replace the white region, preserve the
-black region and match the scene. An empty prompt asks it to continue the surroundings.
+`image_media_tokens` in source, mask, then reference order, `image_batch_count: 1` and an
+expanded `prompt`. The shared instruction asks the model to replace the white region, preserve
+the black region and match the scene. An empty prompt asks it to continue the surroundings.
 
-Omni receives two ordinary image references. There is no dedicated mask parameter or
-pixel-preservation guarantee from this request. The host app must composite the result
-through its own selection mask. User reference attachments and generation parameters are
-not mapped by this adapter. A host may request several variations through separate jobs.
+## Reference pictures
+
+A fill may carry `reference` inputs. The adapter sets no count: how many a model takes is
+Omni's to say, and it refuses a request with too many. That refusal comes after the uploads,
+because Omni only judges the request when it is asked to generate. Each must be inline PNG
+data of at most 10 MB, within the same pixel bounds as the source, and must decode in full. All of them are checked
+before the first upload, so a refused reference means nothing was sent. They are uploaded after
+the source and mask in request order, and the instruction names them as images 3 onwards and
+tells the model to use them only as a guide, never to change the black region to match them.
+A connection saved before references were mapped gains them, as an optional input, when the
+store is read.
+
+Known limit: if the service or network fails part-way through the uploads, the pictures
+already uploaded stay on the account as private intermediate files. The Omni API has no call
+to delete an upload (ArtCraft's own media-file delete needs a desktop session, not an API
+key), so the adapter cannot remove them. Each reference adds one more upload that could be
+left this way.
+
+Omni receives the source and mask as its first two ordinary image references, followed by
+any reference pictures. There is no dedicated mask parameter or pixel-preservation guarantee
+from this request. The host app must composite the result through its own selection mask. Generation parameters are not mapped by this adapter. A
+host may request several variations through separate jobs.
 
 Fill results are retrieved as bounded image bytes from the documented HTTPS CDN, without
 the API key, cookies or redirects, and returned as an inline payload. Loopback delivery

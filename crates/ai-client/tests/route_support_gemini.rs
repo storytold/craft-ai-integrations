@@ -89,10 +89,10 @@ fn gemini_refuses_what_submit_would_refuse() {
         refused(ask(&c, model, "image.inpaint", &two_masks, 1)),
         "two masks"
     );
-    let with_reference = [InputRole::Source, InputRole::Mask, InputRole::Reference];
+    let references_without_mask = [InputRole::Source, InputRole::Reference];
     assert!(
-        refused(ask(&c, model, "image.inpaint", &with_reference, 1)),
-        "reference"
+        refused(ask(&c, model, "image.inpaint", &references_without_mask, 1)),
+        "references do not stand in for the mask"
     );
 }
 

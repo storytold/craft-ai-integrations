@@ -167,6 +167,7 @@ impl GeminiProvider {
         fill::model_allowed(model)
     }
 
+    /// This crate's own model list, each offered for Generative fill (see [`fill_spec`]).
     fn catalog() -> Vec<ModelInfo> {
         fill::MODELS
             .iter()
@@ -177,6 +178,8 @@ impl GeminiProvider {
 }
 
 /// Source and mask required; the prompt may be left out or empty (fill from the surroundings).
+/// Any number of reference pictures may follow, none required: the service says how many its model
+/// takes and refuses more, so the spec states no count of its own ([`ANY_NUMBER`]).
 fn fill_spec() -> Option<CapabilitySpec> {
     Some(
         CapabilitySpec::new(CapabilityId::parse("image.inpaint").ok()?)
@@ -184,9 +187,14 @@ fn fill_spec() -> Option<CapabilitySpec> {
             .requiring(InputRole::Source)
             .accepting(InputRole::Mask, 1)
             .requiring(InputRole::Mask)
-            .accepting(InputRole::Prompt, 1),
+            .accepting(InputRole::Prompt, 1)
+            .accepting(InputRole::Reference, ANY_NUMBER),
     )
 }
+
+/// The count a spec gives an input the service limits itself: the largest the shared contract can
+/// hold, so no check here refuses a request the service would take.
+const ANY_NUMBER: u32 = u32::MAX;
 
 /// Reads at most `max` bytes of a body; more is `None`.
 fn read_bounded(body: ureq::Body, max: u64) -> Result<Option<Vec<u8>>, AiError> {
@@ -338,7 +346,7 @@ impl Provider for GeminiProvider {
         if let Some(other) = request.inputs.iter().find(|i| {
             !matches!(
                 i.role,
-                InputRole::Source | InputRole::Mask | InputRole::Prompt
+                InputRole::Source | InputRole::Mask | InputRole::Prompt | InputRole::Reference
             )
         }) {
             return Err(AiError::unsupported(format!(
@@ -356,19 +364,22 @@ impl Provider for GeminiProvider {
         for input in &request.inputs {
             input.payload.check(&Limits::default())?;
         }
-        let body = serde_json::to_vec(&fill::body(model.as_str(), request)?)
-            .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
-        let id = JobId::new(format!(
-            "gemini-{}",
-            self.sequence.fetch_add(1, Ordering::Relaxed)
-        ))
-        .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
+        // A body that cannot fit is refused from the input sizes alone. The place is taken before
+        // the body is built, so at most MAX_RUNNING bodies and their base64 copies are ever in
+        // memory at once; a refusal while building gives the place back when `permit` drops.
+        fill::preflight(request)?;
         let permit = Permit::acquire(&self.in_flight).ok_or_else(|| {
             AiError::new(
                 ErrorKind::RateLimited,
                 "too many Gemini fills are running; wait for one to finish",
             )
         })?;
+        let body = fill::encoded_body(model.as_str(), request)?;
+        let id = JobId::new(format!(
+            "gemini-{}",
+            self.sequence.fetch_add(1, Ordering::Relaxed)
+        ))
+        .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
         {
             let mut jobs = lock(&self.jobs)?;
             registry::admit(&mut jobs, Instant::now())?;
@@ -443,3 +454,5 @@ impl Provider for GeminiProvider {
 mod registry_limits_tests;
 #[cfg(test)]
 mod registry_tests;
+#[cfg(test)]
+mod submit_order_tests;
