@@ -15,7 +15,13 @@
 //!   answered at once. A pause that would take longer than the retry budget is not taken: the
 //!   store gives up and says so, rather than holding the job's worker for an hour because a host
 //!   said `Retry-After: 3600`.
+//! - A cut transfer whose host named the file's version carries on where it stopped on the next
+//!   try, instead of starting over (see `partial.rs`). Without a version it starts over.
+//! - A link that is clearly past its expiry (the handle's `expires_at`, or the expiry signed into
+//!   the link) is refused before any request, and is not retried: it will not get better.
 
+use crate::expiry;
+use crate::partial::{self, Partial};
 use crate::sniff::{self, HEAD_LEN};
 use crate::url_rules;
 use craft_ai_core::{AiError, Backoff, ErrorKind, MediaType, Payload, PayloadHandle};
@@ -119,22 +125,38 @@ impl MediaStore {
             first_delay: self.config.retry_delay,
             budget: self.config.retry_budget,
         };
+        // A cut download carried from one try to the next; dropped (and deleted) on return.
+        let mut kept: Option<Partial> = None;
         backoff.run(
             AiError::is_retryable,
-            || self.fetch_once(handle),
+            || self.fetch_once(handle, &mut kept),
             std::thread::sleep,
         )
     }
 
-    fn fetch_once(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
+    /// One try. With `kept` set it asks only for the missing bytes; whatever the answer, `kept`
+    /// ends up holding the download to resume next time, or nothing.
+    fn fetch_once(
+        &self,
+        handle: &PayloadHandle,
+        kept: &mut Option<Partial>,
+    ) -> Result<PayloadHandle, AiError> {
         let mut url = Url::parse(&handle.uri)
             .map_err(|_| AiError::new(ErrorKind::Provider, "media link is not a valid URL"))?;
+        if let Some(at) = handle.expires_at.or_else(|| expiry::link_expiry(&url))
+            && expiry::clearly_expired(at, expiry::now_unix())
+        {
+            return Err(AiError::new(
+                ErrorKind::Provider,
+                format!("the media link expired at {}", expiry::utc_text(at)),
+            ));
+        }
         let mut hops = 0u8;
         let response = loop {
             url_rules::check_resolved(&url, self.config.allow_loopback)?;
             // The agent itself carries no proxy, so a loopback link can never leave this
             // machine; a hosted link may use the environment's proxy, hop by hop.
-            let request = if url_rules::is_loopback(&url) {
+            let mut request = if url_rules::is_loopback(&url) {
                 self.agent.get(url.as_str())
             } else {
                 self.agent
@@ -143,6 +165,11 @@ impl MediaStore {
                     .proxy(craft_ai_http::hosted_proxy())
                     .build()
             };
+            if let Some(part) = kept.as_ref() {
+                request = request
+                    .header("range", format!("bytes={}-", part.written))
+                    .header("if-range", part.validator.as_str());
+            }
             let response = request
                 .call()
                 .map_err(|_| AiError::new(ErrorKind::Network, "could not download the media"))?;
@@ -178,6 +205,12 @@ impl MediaStore {
                     format!("the media host answered {status}"),
                 ));
             }
+            if status == 416 && kept.take().is_some() {
+                return Err(AiError::new(
+                    ErrorKind::Network,
+                    "the media host could not send the rest; starting over",
+                ));
+            }
             if !(200..300).contains(&status) {
                 return Err(AiError::new(
                     ErrorKind::Provider,
@@ -186,6 +219,11 @@ impl MediaStore {
             }
             break response;
         };
+        if response.status().as_u16() == 206 {
+            return self.resume(kept, response);
+        }
+        // A whole file: whatever was kept is out of date, or the host ignored the range.
+        *kept = None;
         if let Some(declared) = response
             .headers()
             .get("content-length")
@@ -195,17 +233,57 @@ impl MediaStore {
         {
             return Err(too_large());
         }
-        self.write(response.into_body().into_reader(), &handle.media_type)
+        let version = partial::validator(response.headers());
+        self.write(
+            response.into_body().into_reader(),
+            &handle.media_type,
+            version,
+            kept,
+        )
     }
 
-    fn write(&self, mut body: impl Read, declared: &MediaType) -> Result<PayloadHandle, AiError> {
+    /// Takes a piece (206) onto the kept copy, if it starts exactly where the copy ends.
+    fn resume(
+        &self,
+        kept: &mut Option<Partial>,
+        response: ureq::http::Response<ureq::Body>,
+    ) -> Result<PayloadHandle, AiError> {
+        let Some(part) = kept.take() else {
+            return Err(AiError::new(
+                ErrorKind::Network,
+                "the media host sent part of a file that was not asked for",
+            ));
+        };
+        match partial::content_range(response.headers()) {
+            Some((start, total)) if start == part.written => {
+                if total.is_some_and(|t| t > self.config.max_bytes) {
+                    return Err(too_large());
+                }
+                self.fill(part, response.into_body().into_reader(), kept)
+            }
+            _ => Err(AiError::new(
+                ErrorKind::Network,
+                "the media host sent a piece that does not continue the download; starting over",
+            )),
+        }
+    }
+
+    /// Reads the first bytes to learn the media type, then saves the whole body. A cut transfer
+    /// with a `version` leaves the download in `kept` for the next try.
+    fn write(
+        &self,
+        mut body: impl Read,
+        declared: &MediaType,
+        version: Option<String>,
+        kept: &mut Option<Partial>,
+    ) -> Result<PayloadHandle, AiError> {
         let mut head = [0u8; HEAD_LEN];
         let mut filled = 0;
         while filled < HEAD_LEN {
             match body.read(&mut head[filled..]) {
                 Ok(0) => break,
                 Ok(n) => filled += n,
-                Err(_) => return Err(AiError::new(ErrorKind::Network, "media transfer failed")),
+                Err(_) => return Err(transfer_failed()),
             }
         }
         let (media, extension) = sniff::media_type(&head[..filled])
@@ -223,19 +301,52 @@ impl MediaStore {
             .suffix(&format!(".{extension}"))
             .tempfile_in(&self.config.dir)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not create the media file"))?;
-        let disk = |_| AiError::new(ErrorKind::Internal, "could not write the media file");
         temp.as_file_mut()
             .write_all(&head[..filled])
             .map_err(disk)?;
-        let rest = std::io::copy(
-            &mut body.take(self.config.max_bytes.saturating_sub(filled as u64) + 1),
-            temp.as_file_mut(),
-        )
-        .map_err(|_| AiError::new(ErrorKind::Network, "media transfer failed"))?;
-        let size = filled as u64 + rest;
-        if size > self.config.max_bytes {
+        let part = Partial {
+            temp,
+            written: filled as u64,
+            validator: version.unwrap_or_default(),
+            media,
+        };
+        self.fill(part, body, kept)
+    }
+
+    /// Appends the body to the copy and, once it is all there, keeps the file. A cut transfer
+    /// leaves the copy in `kept` when it has a version to resume against; otherwise it is dropped,
+    /// which deletes it.
+    fn fill(
+        &self,
+        mut part: Partial,
+        body: impl Read,
+        kept: &mut Option<Partial>,
+    ) -> Result<PayloadHandle, AiError> {
+        let room = self.config.max_bytes.saturating_sub(part.written);
+        match std::io::copy(&mut body.take(room + 1), part.temp.as_file_mut()) {
+            Ok(copied) => part.written += copied,
+            Err(_) => {
+                // A failed read writes nothing, so the file's length is what arrived intact.
+                let on_disk = part.temp.as_file().metadata().map(|m| m.len());
+                if let Ok(len) = on_disk
+                    && !part.validator.is_empty()
+                    && len <= self.config.max_bytes
+                {
+                    part.written = len;
+                    *kept = Some(part);
+                }
+                return Err(transfer_failed());
+            }
+        }
+        if part.written > self.config.max_bytes {
             return Err(too_large());
         }
+        let Partial {
+            temp,
+            written: size,
+            media,
+            ..
+        } = part;
         temp.as_file().sync_all().map_err(disk)?;
         let uri = Url::from_file_path(temp.path())
             .map_err(|()| AiError::new(ErrorKind::Internal, "could not name the media file"))?;
@@ -260,6 +371,17 @@ fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
         .and_then(|v| v.trim().parse::<u64>().ok())
 }
 
+/// A transfer that stopped part way. Network, so the store tries again.
+fn transfer_failed() -> AiError {
+    AiError::new(ErrorKind::Network, "media transfer failed")
+}
+
+/// The disk would not take the file.
+fn disk(_: std::io::Error) -> AiError {
+    AiError::new(ErrorKind::Internal, "could not write the media file")
+}
+
+/// The error for media past the configured size limit.
 fn too_large() -> AiError {
     AiError::new(
         ErrorKind::Provider,
@@ -281,6 +403,7 @@ mod tests {
     }
 
     impl Read for Endless {
+        /// Fills `buf` with the header, then zeros, until `limit` bytes are sent, and counts them.
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let header = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
             let mut n = 0;
@@ -297,6 +420,8 @@ mod tests {
         }
     }
 
+    /// An endless body is cut off near the size limit while it is read, not read to the end and
+    /// judged afterwards, and nothing is left in the folder.
     #[test]
     fn the_running_limit_stops_the_transfer_not_just_the_verdict() {
         let dir = tempfile::tempdir().unwrap();
@@ -310,7 +435,7 @@ mod tests {
             limit: 5 * 1024 * 1024,
         };
         let declared = MediaType::new("image/png").unwrap();
-        let error = store.write(body, &declared).unwrap_err();
+        let error = store.write(body, &declared, None, &mut None).unwrap_err();
         assert!(error.message.contains("larger than"));
         assert!(pulled.load(Ordering::SeqCst) <= 101 + 8192, "{pulled:?}");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);

@@ -320,7 +320,29 @@ P10 = [
     ('slow-down-not-retried', MEDIA, 'if status == 429 {', 'if false {', CM, 'retry', 'says_slow_down'),
     ('retry-after-not-kept', RETRY, 'let retry_after = error.retry_after_secs;', 'let retry_after: Option<u64> = None;', CM, 'retry', 'last_answer'),
     ('tries-not-reported', RETRY, 'if attempts <= 1 {', 'if true {', CM, 'retry', 'number_of_tries'),
-    ('cut-transfer-not-retried', MEDIA, '.map_err(|_| AiError::new(ErrorKind::Network, "media transfer failed"))?;', '.map_err(|_| AiError::new(ErrorKind::Provider, "media transfer failed"))?;', CM, 'retry', 'cut_transfer'),
+    ('cut-transfer-not-retried', MEDIA, 'AiError::new(ErrorKind::Network, "media transfer failed")', 'AiError::new(ErrorKind::Provider, "media transfer failed")', CM, 'retry', 'cut_transfer'),
+]
+
+# rx: a cut media download resumes only against a named version and only with a piece that
+# fits, and a clearly expired link is refused before any request (crates/ai-media).
+EXPIRY = C + 'ai-media/src/expiry.rs'
+PARTIAL = C + 'ai-media/src/partial.rs'
+MEDIA_LIB = C + 'ai-media/src/lib.rs'
+RX = [
+    ('weak-etag-used', PARTIAL, '&& !etag.starts_with("W/")', '&& !etag.is_empty()', CM, 'lib', 'a_weak_etag_is_not_the_version'),
+    ('piece-start-unchecked', MEDIA, 'Some((start, total)) if start == part.written => {', 'Some((_start, total)) => {', CM, 'resume', 'a_piece_that_does_not_fit'),
+    ('if-range-not-sent', MEDIA, '\n                    .header("if-range", part.validator.as_str());', ';', CM, 'resume', 'with_an_etag_carries_on'),
+    ('resumed-without-a-version', MEDIA, '&& !part.validator.is_empty()', '', CM, 'resume', 'without_a_version_starts_over'),
+    ('piece-limit-unchecked', MEDIA, 'if total.is_some_and(|t| t > self.config.max_bytes) {', 'if false {', CM, 'resume', 'over_the_limit_is_refused'),
+    ('refused-range-final', MEDIA, 'if status == 416 && kept.take().is_some() {', 'if false {', CM, 'resume', 'a_refused_range_starts_over'),
+    ('expired-link-fetched', MEDIA, '&& expiry::clearly_expired(at, expiry::now_unix())', '&& false', CM, 'expiry', 'clearly_expired_signed_link'),
+    ('handle-expiry-ignored', MEDIA, 'handle.expires_at.or_else(|| expiry::link_expiry(&url))', 'expiry::link_expiry(&url)', CM, 'expiry', 'says_it_expired'),
+    ('no-clock-grace', EXPIRY, 'now > expires_at.saturating_add(CLOCK_GRACE_SECS)', 'now > expires_at', CM, 'expiry', 'inside_the_clock_grace'),
+    ('unsigned-expires-read', EXPIRY, 'if param("Signature").is_some()', 'if true', CM, 'lib', 'unsigned_links_have_no_expiry'),
+    ('latest-expiry-wins', EXPIRY, 'found.into_iter().min()', 'found.into_iter().max()', CM, 'lib', 'the_earliest_expiry_wins'),
+    ('expiry-not-attached', MEDIA_LIB, 'kept.expires_at = Some(at);', 'let _ = (kept, at);', CM, 'expiry', 'says_when_the_link_stops'),
+    ('deadline-never-told', MEDIA_LIB, 'if !expiry::clearly_expired(at, expiry::now_unix()) {', 'if false {', CM, 'expiry', 'says_when_the_link_stops'),
+    ('deadline-told-when-past', MEDIA_LIB, 'if !expiry::clearly_expired(at, expiry::now_unix()) {', 'if true {', CM, 'expiry', 'reported_once'),
 ]
 
 # ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
@@ -602,7 +624,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR}
+GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {
