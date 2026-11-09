@@ -53,9 +53,10 @@ pub(crate) fn validator(headers: &HeaderMap) -> Option<String> {
             .map(str::trim)
             .filter(|v| !v.is_empty())
     };
-    // A date may be sent only when there is no entity tag at all (RFC 9110, 13.1.5).
-    if let Some(etag) = text("etag") {
-        return strong_etag(etag).then(|| etag.to_owned());
+    // A date may be sent only when there is no entity tag at all (RFC 9110, 13.1.5), including
+    // one whose bytes are not plain text.
+    if headers.contains_key("etag") {
+        return text("etag").filter(|e| strong_etag(e)).map(str::to_owned);
     }
     let modified = text("last-modified")?;
     let at = expiry::http_date(modified)?;
@@ -147,6 +148,17 @@ mod tests {
         assert_eq!(validator(&h), None);
         assert_eq!(validator(&headers(&[("etag", "W/\"v1\"")])), None);
         assert_eq!(validator(&headers(&[])), None);
+    }
+
+    /// An ETag whose bytes are not plain text is still an ETag, so the date may not stand in.
+    #[test]
+    fn an_opaque_etag_rules_out_the_date() {
+        let mut h = headers(&[
+            ("last-modified", "Mon, 09 Nov 2026 12:00:00 GMT"),
+            ("date", "Mon, 09 Nov 2026 12:05:00 GMT"),
+        ]);
+        h.insert("etag", HeaderValue::from_bytes(b"\"v\xff1\"").unwrap());
+        assert_eq!(validator(&h), None);
     }
 
     /// An ETag that is not a quoted string is not a version, so it is never sent back.

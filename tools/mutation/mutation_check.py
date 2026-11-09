@@ -329,8 +329,9 @@ EXPIRY = C + 'ai-media/src/expiry.rs'
 PARTIAL = C + 'ai-media/src/partial.rs'
 MEDIA_LIB = C + 'ai-media/src/lib.rs'
 RX = [
-    ('weak-etag-used', PARTIAL, 'return strong_etag(etag).then(|| etag.to_owned());', 'return Some(etag.to_owned());', CM, 'lib', 'a_weak_etag_is_not_the_version'),
-    ('date-used-beside-an-etag', PARTIAL, 'if let Some(etag) = text("etag") {\n        return strong_etag(etag).then(|| etag.to_owned());', 'if let Some(etag) = text("etag").filter(|e| strong_etag(e)) {\n        return Some(etag.to_owned());', CM, 'lib', 'a_weak_etag_is_not_the_version'),
+    ('weak-etag-used', PARTIAL, 'return text("etag").filter(|e| strong_etag(e)).map(str::to_owned);', 'return text("etag").map(str::to_owned);', CM, 'lib', 'a_weak_etag_is_not_the_version'),
+    ('date-used-beside-an-etag', PARTIAL, 'if headers.contains_key("etag") {', 'if text("etag").filter(|e| strong_etag(e)).is_some() {', CM, 'lib', 'a_weak_etag_is_not_the_version'),
+    ('opaque-etag-ignored', PARTIAL, 'if headers.contains_key("etag") {', 'if text("etag").is_some() {', CM, 'lib', 'an_opaque_etag_rules_out_the_date'),
     ('malformed-etag-used', PARTIAL, 'b.len() >= 2\n        && b[0] == b\'"\'', 'b.len() >= 2', CM, 'lib', 'a_malformed_etag_is_not_the_version'),
     ('last-modified-without-a-later-date', PARTIAL, '(date >= at.saturating_add(STRONG_DATE_GAP_SECS)).then(', '(date >= at.saturating_add(1)).then(', CM, 'lib', 'last_modified_needs_a_later_date'),
     ('piece-start-unchecked', MEDIA, 'Some((start, end, total)) if start == part.written => {', 'Some((_start, end, total)) => {', CM, 'resume', 'a_piece_that_skips_ahead'),
