@@ -118,7 +118,7 @@ fn a_date_not_on_the_calendar_is_ignored() {
     assert!(unix_from(2000, 2, 29, 0, 0, 0).is_some());
 }
 
-/// An HTTP date is read in its one standard form only.
+/// An HTTP date is read in its one standard form only, with a weekday that matches the date.
 #[test]
 fn http_dates_are_read_in_the_standard_form() {
     assert_eq!(http_date("Mon, 09 Nov 2026 12:00:00 GMT"), Some(NOON));
@@ -129,6 +129,8 @@ fn http_dates_are_read_in_the_standard_form() {
         "Mon, 09 Nox 2026 12:00:00 GMT",
         "Mon, 31 Nov 2026 12:00:00 GMT",
         "Mon, 09 Nov 2026 12:00:00 UTC",
+        "Tue, 09 Nov 2026 12:00:00 GMT",
+        "Xyz, 09 Nov 2026 12:00:00 GMT",
     ] {
         assert_eq!(http_date(bad), None, "{bad}");
     }

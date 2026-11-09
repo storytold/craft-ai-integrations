@@ -2,15 +2,19 @@
 //!
 //! Invariants:
 //! - A download is kept for resuming only when the host named the file's version: a strong,
-//!   well-formed `ETag` (`"..."`), or else a `Last-Modified` that HTTP counts as strong (at least
-//!   a second before the response's own `Date`). The next try sends that version as `If-Range`,
-//!   so a host whose file has changed sends the whole new file (200) rather than a piece that
-//!   does not fit. A weak or malformed `ETag`, and a `Last-Modified` with no later `Date`, may not
-//!   be used for `If-Range` and are ignored.
+//!   well-formed `ETag` (`"..."`), or, when the answer carries no `ETag` at all, a
+//!   `Last-Modified` that a client may count as strong: at least 60 seconds before the response's
+//!   own `Date` (RFC 9110, 8.8.2.2 and 13.1.5). The next try sends that version as `If-Range`, so
+//!   a host whose file has changed sends the whole new file (200) rather than a piece that does
+//!   not fit. A weak or malformed `ETag` means no version at all: it may not be sent, and it
+//!   rules out falling back to the date.
 //! - A kept copy belongs to the address its bytes came from, after redirects. A piece from any
 //!   other address is not joined on, whatever its version says.
-//! - A piece (206) is taken only when its `Content-Range` starts exactly where the copy ends.
-//!   Anything else throws the piece and the kept copy away, and the next try starts over.
+//! - A piece (206) is taken only when its `Content-Range` starts exactly where the copy ends, it
+//!   names no other version than the kept one, and its total agrees with any total already
+//!   known. Anything else throws the piece and the kept copy away, and the next try starts over.
+//! - The whole file's length, once any answer has said it, is kept with the copy, so a later
+//!   piece that leaves its total unsaid (`*`) cannot end the file early.
 //! - A body that ends before the end its headers promised is a cut transfer, however cleanly the
 //!   connection closed. The copy is published only once it is as long as the file.
 //! - The kept copy is the store's temporary file: dropping it deletes it, so a download that
@@ -18,6 +22,10 @@
 
 use crate::expiry;
 use ureq::http::HeaderMap;
+
+/// How long before the response's own `Date` a `Last-Modified` must be for a client to count it
+/// as a strong validator, allowing for clocks that disagree (RFC 9110, 8.8.2.2).
+const STRONG_DATE_GAP_SECS: u64 = 60;
 
 /// A part-saved copy and what is needed to ask for the rest.
 pub(crate) struct Partial {
@@ -31,6 +39,8 @@ pub(crate) struct Partial {
     pub media: &'static str,
     /// The address the kept bytes came from, after redirects.
     pub source: String,
+    /// The whole file's length, once any answer has said it.
+    pub whole: Option<u64>,
 }
 
 /// The version a host gave the file, fit for `If-Range`: a strong ETag, else a strong
@@ -43,13 +53,30 @@ pub(crate) fn validator(headers: &HeaderMap) -> Option<String> {
             .map(str::trim)
             .filter(|v| !v.is_empty())
     };
-    if let Some(etag) = text("etag").filter(|e| strong_etag(e)) {
-        return Some(etag.to_owned());
+    // A date may be sent only when there is no entity tag at all (RFC 9110, 13.1.5).
+    if let Some(etag) = text("etag") {
+        return strong_etag(etag).then(|| etag.to_owned());
     }
     let modified = text("last-modified")?;
     let at = expiry::http_date(modified)?;
     let date = expiry::http_date(text("date")?)?;
-    (date >= at.saturating_add(1)).then(|| modified.to_owned())
+    (date >= at.saturating_add(STRONG_DATE_GAP_SECS)).then(|| modified.to_owned())
+}
+
+/// True when a piece's headers name a version other than `kept`: a different `ETag` for a kept
+/// `ETag`, or a different `Last-Modified` for a kept date. A piece that names none is not
+/// contradicting.
+pub(crate) fn contradicts(kept: &str, headers: &HeaderMap) -> bool {
+    let named = if kept.starts_with('"') {
+        "etag"
+    } else {
+        "last-modified"
+    };
+    headers
+        .get(named)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|v| v != kept)
 }
 
 /// True for a strong entity tag as HTTP writes it: a quoted string with no quote inside and no
@@ -108,18 +135,16 @@ mod tests {
         assert_eq!(validator(&h).as_deref(), Some("\"v1\""));
     }
 
-    /// A weak ETag cannot be used for If-Range, so Last-Modified is used, or nothing.
+    /// A weak ETag cannot be used for If-Range, and while there is one the date may not be used
+    /// either, so there is no version.
     #[test]
     fn a_weak_etag_is_not_the_version() {
         let h = headers(&[
             ("etag", "W/\"v1\""),
             ("last-modified", "Mon, 09 Nov 2026 12:00:00 GMT"),
-            ("date", "Mon, 09 Nov 2026 12:00:01 GMT"),
+            ("date", "Mon, 09 Nov 2026 12:05:00 GMT"),
         ]);
-        assert_eq!(
-            validator(&h).as_deref(),
-            Some("Mon, 09 Nov 2026 12:00:00 GMT")
-        );
+        assert_eq!(validator(&h), None);
         assert_eq!(validator(&headers(&[("etag", "W/\"v1\"")])), None);
         assert_eq!(validator(&headers(&[])), None);
     }
@@ -132,21 +157,37 @@ mod tests {
         }
     }
 
-    /// Last-Modified counts only when the response's own Date is at least a second later, as
-    /// HTTP requires before a date may be used for If-Range.
+    /// Last-Modified counts only when the response's own Date is at least 60 seconds later, as
+    /// HTTP requires before a client may use a date for If-Range.
     #[test]
     fn last_modified_needs_a_later_date() {
         let modified = ("last-modified", "Mon, 09 Nov 2026 12:00:00 GMT");
         assert_eq!(validator(&headers(&[modified])), None);
         let same = ("date", "Mon, 09 Nov 2026 12:00:00 GMT");
         assert_eq!(validator(&headers(&[modified, same])), None);
-        let later = ("date", "Mon, 09 Nov 2026 12:00:01 GMT");
+        let close = ("date", "Mon, 09 Nov 2026 12:00:59 GMT");
+        assert_eq!(validator(&headers(&[modified, close])), None);
+        let later = ("date", "Mon, 09 Nov 2026 12:01:00 GMT");
         assert_eq!(
             validator(&headers(&[modified, later])).as_deref(),
             Some("Mon, 09 Nov 2026 12:00:00 GMT")
         );
         let unreadable = ("last-modified", "yesterday");
         assert_eq!(validator(&headers(&[unreadable, later])), None);
+    }
+
+    /// A piece contradicts the kept copy only when it names a different version of the same kind.
+    #[test]
+    fn a_piece_contradicts_only_with_another_version() {
+        let etag = "\"v1\"";
+        assert!(!contradicts(etag, &headers(&[("etag", "\"v1\"")])));
+        assert!(contradicts(etag, &headers(&[("etag", "\"v2\"")])));
+        assert!(!contradicts(etag, &headers(&[])));
+        let date = "Mon, 09 Nov 2026 12:00:00 GMT";
+        assert!(!contradicts(date, &headers(&[("last-modified", date)])));
+        let later = ("last-modified", "Mon, 09 Nov 2026 13:00:00 GMT");
+        assert!(contradicts(date, &headers(&[later])));
+        assert!(!contradicts(date, &headers(&[("etag", "\"v1\"")])));
     }
 
     /// The usual forms of Content-Range.

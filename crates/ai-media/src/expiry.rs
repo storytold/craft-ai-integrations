@@ -18,6 +18,7 @@
 //! shortcut: providers that state a lifetime in their docs but sign nothing into the link are
 //! not covered here; their adapter can set `PayloadHandle::expires_at` itself when one needs it.
 
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -80,16 +81,16 @@ pub fn clearly_expired(expires_at: u64, now: u64) -> bool {
     now > expires_at.saturating_add(CLOCK_GRACE_SECS)
 }
 
-/// A Unix time as `2026-11-09 12:34 UTC`, for messages.
+/// A Unix time as `2026-11-09 12:34 UTC`, for messages. A time past what the calendar can show
+/// reads as the bare count of seconds.
 pub fn utc_text(unix: u64) -> String {
-    let days = i64::try_from(unix / 86_400).unwrap_or(i64::MAX);
-    let rest = unix % 86_400;
-    let (y, m, d) = civil_from_days(days);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02} UTC",
-        rest / 3600,
-        (rest % 3600) / 60
-    )
+    i64::try_from(unix)
+        .ok()
+        .and_then(|secs| DateTime::from_timestamp(secs, 0))
+        .map_or_else(
+            || format!("{unix} seconds after 1970 (UTC)"),
+            |at| at.format("%Y-%m-%d %H:%M UTC").to_string(),
+        )
 }
 
 /// `20261109T120000Z`, the compact form AWS and Google sign.
@@ -130,24 +131,15 @@ fn iso_utc(s: &str) -> Option<u64> {
 }
 
 /// An HTTP date in the one form hosts must send (`Mon, 09 Nov 2026 12:00:00 GMT`), as Unix
-/// seconds. The obsolete forms are not read: a date that does not parse counts as absent.
+/// seconds. The weekday must match the date. The obsolete forms are not read: a date that does
+/// not parse counts as absent.
 pub(crate) fn http_date(s: &str) -> Option<u64> {
-    const MONTHS: [&[u8]; 12] = [
-        b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov",
-        b"Dec",
-    ];
-    let b = s.trim().as_bytes();
-    let at = |i: usize, c: u8| b.get(i) == Some(&c);
-    if b.len() != 29
-        || !(at(3, b',') && at(4, b' ') && at(7, b' ') && at(11, b' ') && at(16, b' '))
-        || !(at(19, b':') && at(22, b':') && at(25, b' '))
-        || &b[26..] != b"GMT"
-    {
+    let s = s.trim();
+    // The fixed length rules out the obsolete forms and a one-digit day.
+    if s.len() != 29 {
         return None;
     }
-    let mo = MONTHS.iter().position(|m| *m == &b[8..11])? as u64 + 1;
-    let n = |r: std::ops::Range<usize>| digits(&b[r]);
-    unix_from(n(12..16)?, mo, n(5..7)?, n(17..19)?, n(20..22)?, n(23..25)?)
+    unix(NaiveDateTime::parse_from_str(s, "%a, %d %b %Y %H:%M:%S GMT").ok()?)
 }
 
 /// ASCII digits as a number, or `None` for anything else (an empty slice included).
@@ -158,54 +150,17 @@ fn digits(b: &[u8]) -> Option<u64> {
     std::str::from_utf8(b).ok()?.parse().ok()
 }
 
-/// A UTC date and time as Unix seconds. Out-of-range fields, a day the month does not have, or
-/// a date before 1970 give `None`.
+/// A UTC date and time as Unix seconds, through `chrono`. A field out of range, a day the month
+/// does not have, or a time before 1970 give `None`.
 fn unix_from(y: u64, mo: u64, d: u64, h: u64, mi: u64, s: u64) -> Option<u64> {
-    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
-        return None;
-    }
-    if d > days_in_month(y, mo) {
-        return None;
-    }
-    let days = days_from_civil(i64::try_from(y).ok()?, mo, d);
-    let days = u64::try_from(days).ok()?;
-    Some(days * 86_400 + h * 3600 + mi * 60 + s)
+    let n = |v: u64| u32::try_from(v).ok();
+    let date = NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, n(mo)?, n(d)?)?;
+    unix(date.and_hms_opt(n(h)?, n(mi)?, n(s)?)?)
 }
 
-/// Days in month `mo` (1 to 12) of year `y`, leap years included.
-fn days_in_month(y: u64, mo: u64) -> u64 {
-    match mo {
-        2 if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
-}
-
-/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: u64, d: u64) -> i64 {
-    let (m, d) = (m as i64, d as i64);
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// The date for a count of days since 1970-01-01 (the inverse of [`days_from_civil`]).
-fn civil_from_days(z: i64) -> (i64, u64, u64) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u64;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u64;
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    (y, m, d)
+/// A UTC date and time as Unix seconds; `None` before 1970.
+fn unix(at: NaiveDateTime) -> Option<u64> {
+    u64::try_from(at.and_utc().timestamp()).ok()
 }
 
 #[cfg(test)]

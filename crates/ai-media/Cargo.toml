@@ -9,6 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# Link expiry dates go through chrono (no hand-rolled calendar code; CONTRIBUTING.md).
+chrono = { workspace = true }
 craft-ai-core.workspace = true
 craft-ai-http.workspace = true
 png = "0.18"

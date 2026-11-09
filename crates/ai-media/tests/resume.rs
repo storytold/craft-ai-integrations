@@ -132,15 +132,15 @@ fn a_cut_download_with_an_etag_carries_on() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
-/// Last-Modified serves as the version when there is no strong ETag.
+/// Last-Modified serves as the version when there is no ETag.
 #[test]
 fn last_modified_serves_as_the_version() {
     let dir = tempfile::tempdir().unwrap();
     let server = scripted(vec![
         Box::new(|_| {
             cut_whole(
-                "ETag: W/\"weak\"\r\nLast-Modified: Mon, 09 Nov 2026 12:00:00 GMT\r\n\
-                 Date: Mon, 09 Nov 2026 12:00:05 GMT\r\n",
+                "Last-Modified: Mon, 09 Nov 2026 12:00:00 GMT\r\n\
+                 Date: Mon, 09 Nov 2026 12:05:00 GMT\r\n",
             )
         }),
         Box::new(|_| piece(&picture(), CUT, CUT)),
@@ -364,6 +364,90 @@ fn a_piece_that_skips_ahead_starts_over() {
             )
         }),
         Box::new(|_| piece(&picture(), CUT + 10, CUT + 10)),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range"), None);
+}
+
+/// A total learned from the first answer still counts when a later piece leaves it unsaid, so
+/// the copy is not published short.
+#[test]
+fn a_lost_total_is_still_enforced() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| {
+            let full = picture();
+            let range = format!("bytes {CUT}-99/*");
+            http_bytes(206, &[("Content-Range", range.as_str())], &full[CUT..100])
+        }),
+        Box::new(|_| piece(&picture(), 100, 100)),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range").as_deref(), Some("bytes=100-"));
+}
+
+/// A piece whose total disagrees with the one already known is another file: start over.
+#[test]
+fn a_different_total_starts_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| {
+            let full = picture();
+            let range = format!("bytes {CUT}-{}/{}", full.len() - 1, full.len() + 50);
+            http_bytes(206, &[("Content-Range", range.as_str())], &full[CUT..])
+        }),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range"), None);
+}
+
+/// A piece that names another version is not joined on, even when it fits: start over.
+#[test]
+fn a_piece_of_another_version_starts_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| {
+            let full = other_picture();
+            let range = format!("bytes {CUT}-{}/{}", full.len() - 1, full.len());
+            let headers = [("Content-Range", range.as_str()), ("ETag", "\"v2\"")];
+            http_bytes(206, &headers, &full[CUT..])
+        }),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range"), None);
+}
+
+/// A cut piece that had already sent more than its range allowed is not kept for the next try.
+#[test]
+fn an_overlong_cut_piece_is_not_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| {
+            let full = picture();
+            let mut raw = format!(
+                "HTTP/1.1 206 X\r\nContent-Range: bytes {CUT}-49/{}\r\nContent-Length: 176\r\n\
+                 Connection: close\r\n\r\n",
+                full.len()
+            )
+            .into_bytes();
+            raw.extend_from_slice(&full[CUT..100]);
+            Reply::Raw(raw)
+        }),
         Box::new(|_| http_bytes(200, &[], &picture())),
     ]);
     let saved = save(&server, dir.path()).unwrap();

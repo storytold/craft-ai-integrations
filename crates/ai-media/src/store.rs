@@ -278,7 +278,7 @@ impl MediaStore {
         source: &Url,
         response: ureq::http::Response<ureq::Body>,
     ) -> Result<PayloadHandle, AiError> {
-        let Some(part) = kept.take() else {
+        let Some(mut part) = kept.take() else {
             return Err(AiError::new(
                 ErrorKind::Network,
                 "the media host sent part of a file that was not asked for",
@@ -290,13 +290,26 @@ impl MediaStore {
                 "the media link now leads to another address; starting over",
             ));
         }
+        if partial::contradicts(&part.validator, response.headers()) {
+            return Err(AiError::new(
+                ErrorKind::Network,
+                "the media host sent a piece of another version; starting over",
+            ));
+        }
         match partial::content_range(response.headers()) {
             Some((start, end, total)) if start == part.written => {
                 if total.is_some_and(|t| t > self.config.max_bytes) {
                     return Err(too_large());
                 }
+                if total.zip(part.whole).is_some_and(|(t, w)| t != w) {
+                    return Err(AiError::new(
+                        ErrorKind::Network,
+                        "the media host gave the file another size; starting over",
+                    ));
+                }
+                part.whole = total.or(part.whole);
                 let body = response.into_body().into_reader();
-                self.fill(part, body, Some(end.saturating_add(1)), total, kept)
+                self.fill(part, body, Some(end.saturating_add(1)), kept)
             }
             _ => Err(AiError::new(
                 ErrorKind::Network,
@@ -349,20 +362,21 @@ impl MediaStore {
             validator: version.unwrap_or_default(),
             media,
             source: from.0.to_string(),
+            whole: from.1,
         };
-        self.fill(part, body, from.1, from.1, kept)
+        self.fill(part, body, from.1, kept)
     }
 
     /// Appends the body to the copy and, once it is all there, keeps the file. `end` is the length
-    /// the copy should reach with this body and `whole` the file's length, when the headers said.
-    /// A cut transfer, or a piece that stops before the file does, leaves the copy in `kept` when
-    /// it has a version to resume against; otherwise it is dropped, which deletes it.
+    /// the copy should reach with this body, when the headers said; the copy's `whole` is the
+    /// file's. A cut transfer, or a piece that stops before the file does, leaves the copy in
+    /// `kept` when it has a version to resume against and nothing past `end`; otherwise it is
+    /// dropped, which deletes it.
     fn fill(
         &self,
         mut part: Partial,
         body: impl Read,
         end: Option<u64>,
-        whole: Option<u64>,
         kept: &mut Option<Partial>,
     ) -> Result<PayloadHandle, AiError> {
         let room = self.config.max_bytes.saturating_sub(part.written);
@@ -374,6 +388,7 @@ impl MediaStore {
                 if let Ok(len) = on_disk
                     && !part.validator.is_empty()
                     && len <= self.config.max_bytes
+                    && end.is_none_or(|e| len <= e)
                 {
                     part.written = len;
                     *kept = Some(part);
@@ -392,7 +407,7 @@ impl MediaStore {
         }
         // Short of what the headers promised: cut, however cleanly the connection closed.
         let short =
-            end.is_some_and(|e| part.written < e) || whole.is_some_and(|w| part.written < w);
+            end.is_some_and(|e| part.written < e) || part.whole.is_some_and(|w| part.written < w);
         if short {
             if !part.validator.is_empty() {
                 *kept = Some(part);
