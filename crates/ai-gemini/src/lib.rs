@@ -28,9 +28,9 @@ pub use fill::fill_instruction;
 use registry::{Jobs, Slot, lock};
 
 use craft_ai_core::{
-    AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
-    Payload, Provider, Request, SecretString, capability::CapabilityId, endpoint::Endpoint,
-    model::CapabilitySpec, payload::Limits,
+    AiError, Backoff, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId,
+    ModelInfo, Output, Payload, Provider, Request, SecretString, capability::CapabilityId,
+    endpoint::Endpoint, model::CapabilitySpec, payload::Limits,
 };
 use serde_json::Value;
 use std::{
@@ -63,6 +63,9 @@ pub struct GeminiConfig {
     pub connect_timeout: Duration,
     /// A Pro model at 4K can take well over a minute.
     pub request_timeout: Duration,
+    /// How the worker tries its send again after a rate limit (default [`Backoff::STANDARD`]).
+    /// Only a refused send is repeated; [`Backoff::NEVER`] turns it off.
+    pub send_retry: Backoff,
 }
 impl GeminiConfig {
     /// A config for `base_url` and `api_key`, with a 10 s connect and a 240 s request timeout.
@@ -72,6 +75,7 @@ impl GeminiConfig {
             api_key,
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(240),
+            send_retry: Backoff::STANDARD,
         }
     }
 }
@@ -103,6 +107,7 @@ pub struct GeminiProvider {
     jobs: Jobs,
     in_flight: Arc<AtomicUsize>,
     sequence: AtomicU64,
+    send_retry: Backoff,
 }
 impl std::fmt::Debug for GeminiProvider {
     /// Prints the type name only, so the key can never reach a log.
@@ -146,6 +151,7 @@ impl GeminiProvider {
             base: base.to_owned(),
             key: config.api_key,
             agent,
+            send_retry: config.send_retry,
             jobs: Arc::new(Mutex::new(HashMap::new())),
             in_flight: Arc::new(AtomicUsize::new(0)),
             sequence: AtomicU64::new(0),
@@ -279,6 +285,11 @@ fn call(
 }
 
 /// One fill, start to finish: the picture, or why there is none.
+/// True while the job is known and not yet ended (a cancel ends it).
+fn still_wanted(jobs: &Jobs, job: &JobId) -> bool {
+    lock(jobs).is_ok_and(|jobs| jobs.get(job).is_some_and(|s| !s.state.is_terminal()))
+}
+
 fn run_fill(
     agent: &ureq::Agent,
     url: &str,
@@ -385,18 +396,25 @@ impl Provider for GeminiProvider {
             registry::admit(&mut jobs, Instant::now())?;
             jobs.insert(id.clone(), Slot::running());
         }
-        let (agent, key, jobs, job) = (
+        let (agent, key, jobs, job, retry) = (
             self.agent.clone(),
             self.key.clone(),
             Arc::clone(&self.jobs),
             id.clone(),
+            self.send_retry,
         );
         let url = format!("{}/interactions", self.base);
         let spawned = std::thread::Builder::new()
             .name("craft-ai-gemini".into())
             .spawn(move || {
                 let _permit = permit;
-                let result = run_fill(&agent, &url, &key, &body);
+                // A 429 is Google refusing the send, so sending again cannot bill twice. Stop
+                // trying once the job is cancelled.
+                let result = retry.run(
+                    |e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),
+                    || run_fill(&agent, &url, &key, &body),
+                    std::thread::sleep,
+                );
                 let Ok(mut jobs) = lock(&jobs) else { return };
                 // A cancelled (or forgotten) job keeps its state; the answer is dropped.
                 let Some(slot) = jobs.get_mut(&job).filter(|s| !s.state.is_terminal()) else {

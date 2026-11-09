@@ -2,10 +2,12 @@ use super::*;
 use crate::error::ErrorKind;
 use std::cell::{Cell, RefCell};
 
+/// A rate-limited error, the usual retryable failure.
 fn busy() -> AiError {
     AiError::new(ErrorKind::RateLimited, "busy")
 }
 
+/// A rule with a short first pause and a long budget, so only the tries limit it.
 fn quick(max_attempts: u8) -> Backoff {
     Backoff {
         max_attempts,

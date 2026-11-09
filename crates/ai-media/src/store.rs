@@ -47,6 +47,8 @@ pub struct MediaStoreConfig {
 }
 
 impl MediaStoreConfig {
+    /// The defaults for saving into `dir`: 1 GiB, 15 s to connect, 30 minutes per transfer, three
+    /// redirects, no loopback, and three tries within 30 seconds.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
@@ -69,6 +71,7 @@ pub struct MediaStore {
 }
 
 impl std::fmt::Debug for MediaStore {
+    /// Shows the directory only.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MediaStore")
             .field("dir", &self.config.dir)
@@ -77,6 +80,7 @@ impl std::fmt::Debug for MediaStore {
 }
 
 impl MediaStore {
+    /// Checks the directory and size limit and builds the downloader. Nothing is fetched yet.
     pub fn new(config: MediaStoreConfig) -> Result<Self, AiError> {
         if !config.dir.is_absolute() || !config.dir.is_dir() {
             return Err(AiError::invalid(

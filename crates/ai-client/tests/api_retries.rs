@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use craft_ai_client::{AiClient, ProviderFactory};
 use craft_ai_core::mock::{MockProvider, Outcome, Script};
@@ -33,6 +33,9 @@ struct Faults {
     poll: Mutex<VecDeque<Option<AiError>>>,
     submits: AtomicUsize,
     polls: AtomicUsize,
+    cancels: AtomicUsize,
+    /// How long each poll takes before it answers.
+    poll_delay: Mutex<Duration>,
 }
 
 /// A mock provider that fails on cue.
@@ -42,9 +45,11 @@ struct Flaky {
 }
 
 impl Provider for Flaky {
+    /// The wrapped mock's models.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         self.inner.models()
     }
+    /// Counts the send, then hands back the next queued send error, or lets the mock start the job.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         self.faults.submits.fetch_add(1, Ordering::SeqCst);
         match self.faults.submit.lock().unwrap().pop_front() {
@@ -52,18 +57,23 @@ impl Provider for Flaky {
             None => self.inner.submit(model, request),
         }
     }
+    /// Counts the poll, waits the set delay, then hands back the next queued poll error or the mock's answer.
     fn poll(&self, job: &JobId) -> Result<JobSnapshot, AiError> {
         self.faults.polls.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.faults.poll_delay.lock().unwrap());
         match self.faults.poll.lock().unwrap().pop_front().flatten() {
             Some(error) => Err(error),
             None => self.inner.poll(job),
         }
     }
+    /// Counts the cancel and passes it to the mock.
     fn cancel(&self, job: &JobId) -> Result<(), AiError> {
+        self.faults.cancels.fetch_add(1, Ordering::SeqCst);
         self.inner.cancel(job)
     }
 }
 
+/// The one text tool the tests run.
 fn role() -> Role {
     Role {
         id: RoleId::new("rewrite").unwrap(),
@@ -116,14 +126,17 @@ fn client(faults: Arc<Faults>) -> (tempfile::TempDir, AiClient) {
     (dir, client)
 }
 
+/// A prompt for that tool.
 fn request() -> Request {
     Request::new(role().capability).with_input(InputRole::Prompt, Payload::text("hi"))
 }
 
+/// A rate limit: the provider refused the call.
 fn busy() -> AiError {
     AiError::new(ErrorKind::RateLimited, "slow down")
 }
 
+/// A dropped connection.
 fn dropped() -> AiError {
     AiError::new(ErrorKind::Network, "could not reach the provider")
 }
@@ -272,4 +285,112 @@ fn retries_can_be_turned_off() {
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::Network);
     assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+}
+
+/// A client and a started job whose polls retry by `poll`.
+fn started(faults: Arc<Faults>, poll: Backoff) -> (tempfile::TempDir, craft_ai_client::Job) {
+    let (dir, client) = client(faults);
+    let client = client.with_retries(QUICK, poll);
+    let plan = client.plan(&role(), request()).unwrap();
+    let job = client.start(&plan, &ConsentLedger::default()).unwrap();
+    (dir, job)
+}
+
+/// The doubling pause is really taken between failed polls.
+#[test]
+fn the_retry_pause_is_taken() {
+    let faults = Arc::new(Faults::default());
+    faults
+        .poll
+        .lock()
+        .unwrap()
+        .extend([Some(dropped()), Some(dropped())]);
+    let poll = Backoff {
+        first_delay: Duration::from_millis(40),
+        ..QUICK
+    };
+    let (_dir, job) = started(faults, poll);
+    let began = Instant::now();
+    job.wait(Duration::ZERO, Duration::from_secs(5)).unwrap();
+    assert!(
+        began.elapsed() >= Duration::from_millis(120),
+        "{:?}",
+        began.elapsed()
+    );
+}
+
+/// A poll that says when to come back is not asked again sooner.
+#[test]
+fn a_polls_retry_after_is_honoured() {
+    let faults = Arc::new(Faults::default());
+    faults
+        .poll
+        .lock()
+        .unwrap()
+        .push_back(Some(busy().with_retry_after(1)));
+    let (_dir, job) = started(faults, QUICK);
+    let began = Instant::now();
+    job.wait(Duration::ZERO, Duration::from_secs(5)).unwrap();
+    assert!(
+        began.elapsed() >= Duration::from_secs(1),
+        "{:?}",
+        began.elapsed()
+    );
+}
+
+/// The budget counts the failed poll itself: a slow poll that fails uses it up.
+#[test]
+fn the_budget_counts_the_failed_poll() {
+    let faults = Arc::new(Faults::default());
+    faults.poll.lock().unwrap().push_back(Some(dropped()));
+    *faults.poll_delay.lock().unwrap() = Duration::from_millis(150);
+    let poll = Backoff {
+        max_attempts: 5,
+        first_delay: Duration::ZERO,
+        budget: Duration::from_millis(100),
+    };
+    let (_dir, job) = started(faults.clone(), poll);
+    let error = job
+        .wait(Duration::ZERO, Duration::from_secs(5))
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Network);
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+}
+
+/// A polling interval longer than the budget ends the wait instead of sleeping through it.
+#[test]
+fn the_interval_counts_against_the_budget() {
+    let faults = Arc::new(Faults::default());
+    faults.poll.lock().unwrap().push_back(Some(dropped()));
+    let (_dir, job) = started(faults.clone(), QUICK);
+    let began = Instant::now();
+    let error = job
+        .wait(Duration::from_secs(10), Duration::from_secs(30))
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Network);
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+    assert!(
+        began.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        began.elapsed()
+    );
+}
+
+/// A pause that reaches the timeout ends the wait there: no further poll, and the job is
+/// cancelled.
+#[test]
+fn no_poll_starts_after_the_timeout() {
+    let faults = Arc::new(Faults::default());
+    faults
+        .poll
+        .lock()
+        .unwrap()
+        .push_back(Some(busy().with_retry_after(1)));
+    let (_dir, job) = started(faults.clone(), QUICK);
+    let error = job
+        .wait(Duration::ZERO, Duration::from_millis(200))
+        .unwrap_err();
+    assert_eq!(error.message, "the job took too long");
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+    assert_eq!(faults.cancels.load(Ordering::SeqCst), 1);
 }

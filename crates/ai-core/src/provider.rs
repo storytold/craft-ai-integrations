@@ -30,6 +30,12 @@ pub trait Provider: Send + Sync {
 
     /// Validates the request against the model's spec and starts the job. Must return
     /// `Unsupported` for an input or feature the model lacks, before sending anything.
+    ///
+    /// `RateLimited` from `submit` must mean nothing was accepted: the provider (or this adapter's
+    /// own limit) refused the request, so no job exists and nothing will be billed. The client
+    /// sends again after a rate limit on that promise. An adapter that sends more than one call
+    /// here must not return `RateLimited` once a job has been created; and an adapter that sends
+    /// from a worker after `submit` returns retries its own refused send (see `Backoff`).
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError>;
 
     /// The job's state and the events since the last poll. Terminal states are stable.

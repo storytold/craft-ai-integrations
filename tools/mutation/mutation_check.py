@@ -326,6 +326,8 @@ P10 = [
 # ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
 # dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
 WAIT = C + 'ai-client/src/client_wait.rs'
+GEMINI_LIB = C + 'ai-gemini/src/lib.rs'
+OPENAI_JOBS = C + 'ai-openai/src/jobs.rs'
 SEND_GATE = 'error.kind == ErrorKind::RateLimited'
 POLL_GATE = 'Err(error) if error.is_retryable() => {'
 AR = [
@@ -335,6 +337,14 @@ AR = [
     ('poll-refusal-retried', WAIT, POLL_GATE, 'Err(error) if true => {', CL, 'api_retries', 'a_poll_refusal_is_not_retried'),
     ('failure-run-not-reset', WAIT, 'failures = 0;', '', CL, 'api_retries', 'a_success_resets_the_failure_run'),
     ('poll-never-gives-up', WAIT, 'None => return Err(tried(error, failures)),', 'None => continue,', CL, 'api_retries', 'a_poll_that_keeps_failing'),
+    ('budget-starts-after-the-poll', WAIT, 'streak = asked;', 'streak = Instant::now();', CL, 'api_retries', 'the_budget_counts_the_failed_poll'),
+    ('interval-outside-the-budget', WAIT, '.filter(|pause| elapsed.saturating_add(*pause) <= self.poll_retry.budget);', '.filter(|_| true);', CL, 'api_retries', 'the_interval_counts_against_the_budget'),
+    ('poll-after-the-timeout', WAIT, 'std::thread::sleep(pause.min(deadline - now));\n            if Instant::now() >= deadline {\n                return Err(self.give_up());\n            }', 'std::thread::sleep(pause.min(deadline - now));', CL, 'api_retries', 'no_poll_starts_after_the_timeout'),
+    ('pause-not-taken', WAIT, 'std::thread::sleep(pause.min(deadline - now));', 'let _ = (pause, now);', CL, 'api_retries', 'the_retry_pause_is_taken'),
+    ('gemini-worker-never-retries', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| false,', 'craft-ai-gemini', 'provider', 'a_rate_limited_send_is_sent_again'),
+    ('gemini-worker-retries-anything', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| true,', 'craft-ai-gemini', 'provider', 'a_server_error_is_not_sent_again'),
+    ('openai-worker-never-retries', OPENAI_JOBS, '|e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),', '|_: &AiError| false,', O, 'provider', 'a_rate_limited_send_is_sent_again'),
+    ('openai-worker-retries-anything', OPENAI_JOBS, '|e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),', '|_: &AiError| true,', O, 'provider', 'an_out_of_credit_send_is_not_sent_again'),
 ]
 
 STORE = C + 'ai-core/src/store.rs'

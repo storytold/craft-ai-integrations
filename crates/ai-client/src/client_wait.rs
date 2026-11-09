@@ -6,8 +6,10 @@
 //!   retried here: the job may already be running, and a second send could charge twice.
 //! - A poll that fails with a retryable error (a dropped connection, a rate limit) does not end
 //!   the wait. Polling only reads, so another try is safe. A run of such failures ends the wait
-//!   once [`POLL_RETRY`]'s tries or budget run out; a success resets the run.
-//! - The overall `timeout` still wins: no pause, retry or not, sleeps past it.
+//!   once [`POLL_RETRY`]'s tries or budget run out; a success resets the run. The budget counts
+//!   from the start of the first failed poll, and covers the whole pause, `interval` included.
+//! - The overall `timeout` still wins: no pause, retry or not, sleeps past it, and no poll starts
+//!   after it.
 use std::time::{Duration, Instant};
 
 use craft_ai_core::retry::tried;
@@ -58,6 +60,7 @@ impl Job {
         let mut failures = 0u8;
         let mut streak = Instant::now();
         loop {
+            let asked = Instant::now();
             let pause = match self.poll() {
                 Ok(snap) => {
                     failures = 0;
@@ -73,14 +76,17 @@ impl Job {
                 }
                 Err(error) if error.is_retryable() => {
                     if failures == 0 {
-                        streak = Instant::now();
+                        streak = asked;
                     }
                     failures = failures.saturating_add(1);
-                    match self
+                    let elapsed = streak.elapsed();
+                    let pause = self
                         .poll_retry
-                        .next_wait(failures, &error, streak.elapsed())
-                    {
-                        Some(wait) => wait.max(interval),
+                        .next_wait(failures, &error, elapsed)
+                        .map(|wait| wait.max(interval))
+                        .filter(|pause| elapsed.saturating_add(*pause) <= self.poll_retry.budget);
+                    match pause {
+                        Some(pause) => pause,
                         None => return Err(tried(error, failures)),
                     }
                 }
@@ -88,13 +94,21 @@ impl Job {
             };
             let now = Instant::now();
             if now >= deadline {
-                let _ = self.cancel();
-                if let Some(recorder) = &self.recorder {
-                    recorder.gave_up();
-                }
-                return Err(AiError::new(ErrorKind::Network, "the job took too long"));
+                return Err(self.give_up());
             }
             std::thread::sleep(pause.min(deadline - now));
+            if Instant::now() >= deadline {
+                return Err(self.give_up());
+            }
         }
+    }
+
+    /// Ends a wait that ran out of time: asks the provider to stop and records the give-up.
+    fn give_up(&self) -> AiError {
+        let _ = self.cancel();
+        if let Some(recorder) = &self.recorder {
+            recorder.gave_up();
+        }
+        AiError::new(ErrorKind::Network, "the job took too long")
     }
 }
