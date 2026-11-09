@@ -24,9 +24,9 @@ use craft_ai_core::model::InputRole;
 use craft_ai_core::picks::{Candidate, choose};
 use craft_ai_core::role::eligible;
 use craft_ai_core::{
-    AiError, AppId, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger, Disclosure,
-    ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality, ModelId, Outcome, Pick,
-    PickedBy, Provider, Request, Role, RoleId, Usage,
+    AiError, AppId, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger,
+    CostEstimate, Disclosure, ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality,
+    ModelId, Outcome, Pick, PickedBy, Provider, Request, Role, RoleId, Usage,
 };
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
 use craft_ai_native::shared::SharedStore;
@@ -36,6 +36,8 @@ use crate::factory::ProviderFactory;
 use crate::history::Recorder;
 use crate::route_support::{RouteFacts, RouteQuery, RouteSupport};
 
+#[path = "plan_cost.rs"]
+mod plan_cost;
 #[path = "client_run.rs"]
 mod run;
 
@@ -91,6 +93,8 @@ pub struct Plan {
     pub(crate) disclosure: Disclosure,
     pub(crate) role_id: RoleId,
     pub(crate) role_label: String,
+    /// Worked out at plan time from the saved model's pricing; see [`Plan::estimate`].
+    pub(crate) estimate: Option<CostEstimate>,
 }
 
 /// Unix seconds now; 0 if the clock is before 1970, which makes timed agreements read as valid
