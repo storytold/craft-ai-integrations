@@ -20,6 +20,13 @@ fn picture() -> Vec<u8> {
     bytes
 }
 
+/// The same size, but a different file from its first bytes on: another resource entirely.
+fn other_picture() -> Vec<u8> {
+    let mut bytes = picture();
+    bytes[20] = b'Q';
+    bytes
+}
+
 /// The same size, but a different file: the host's newer version.
 fn newer_picture() -> Vec<u8> {
     let mut bytes = picture();
@@ -40,11 +47,21 @@ fn config(dir: &Path) -> MediaStoreConfig {
 
 /// Saves the server's `/media/out.png` through a fresh store in `dir`.
 fn save(server: &Server, dir: &Path) -> Result<PayloadHandle, AiError> {
+    save_with(server, config(dir))
+}
+
+/// Saves the server's `/media/out.png` through a fresh store with `cfg`.
+fn save_with(server: &Server, cfg: MediaStoreConfig) -> Result<PayloadHandle, AiError> {
     let uri = format!("{}/media/out.png", server.url.trim_end_matches("/v1"));
     let Payload::Handle(handle) = Payload::handle(&uri, "image/png", None).unwrap() else {
         unreachable!()
     };
-    MediaStore::new(config(dir)).unwrap().save(&handle)
+    MediaStore::new(cfg).unwrap().save(&handle)
+}
+
+/// A redirect to `path` on the same server.
+fn moved(path: &'static str) -> Answer {
+    Box::new(move |_| http_bytes(302, &[("Location", path)], b""))
 }
 
 /// The bytes of the local file a saved handle points at.
@@ -121,7 +138,10 @@ fn last_modified_serves_as_the_version() {
     let dir = tempfile::tempdir().unwrap();
     let server = scripted(vec![
         Box::new(|_| {
-            cut_whole("ETag: W/\"weak\"\r\nLast-Modified: Mon, 09 Nov 2026 12:00:00 GMT\r\n")
+            cut_whole(
+                "ETag: W/\"weak\"\r\nLast-Modified: Mon, 09 Nov 2026 12:00:00 GMT\r\n\
+                 Date: Mon, 09 Nov 2026 12:00:05 GMT\r\n",
+            )
         }),
         Box::new(|_| piece(&picture(), CUT, CUT)),
     ]);
@@ -228,4 +248,126 @@ fn a_download_that_never_finishes_leaves_nothing() {
     // Each later try asked for the rest from where the copy had got to.
     assert_eq!(sent(&server, 1, "range").as_deref(), Some("bytes=40-"));
     assert_eq!(sent(&server, 2, "range").as_deref(), Some("bytes=43-"));
+}
+
+/// A piece that ends before the end its range promised, however cleanly it closes, is not
+/// published: the next try asks for the rest and the file is whole.
+#[test]
+fn a_short_piece_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| {
+            let full = picture();
+            let range = format!("bytes {CUT}-{}/{}", full.len() - 1, full.len());
+            http_bytes(206, &[("Content-Range", range.as_str())], &full[CUT..100])
+        }),
+        Box::new(|_| piece(&picture(), 100, 100)),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range").as_deref(), Some("bytes=100-"));
+}
+
+/// A whole-file answer shorter than its Content-Length is not published either.
+#[test]
+fn a_short_whole_file_is_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| {
+            let full = picture();
+            let mut raw = format!(
+                "HTTP/1.1 200 X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                full.len()
+            )
+            .into_bytes();
+            raw.extend_from_slice(&full[..CUT]);
+            Reply::Raw(raw)
+        }),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 2);
+}
+
+/// A kept copy belongs to the address its bytes came from. When the link later leads somewhere
+/// else, a piece from there is not joined on, even with the same version, and the next try
+/// starts over.
+#[test]
+fn a_piece_from_another_address_starts_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        moved("/media/a.png"),
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        moved("/media/b.png"),
+        Box::new(|_| piece(&other_picture(), CUT, CUT)),
+        moved("/media/b.png"),
+        Box::new(|_| http_bytes(200, &[], &other_picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), other_picture());
+    assert_eq!(server.count(), 6);
+    assert_eq!(sent(&server, 4, "range"), None);
+}
+
+/// The retry budget counts pauses, not transfer time: with no budget and no pause, a cut
+/// download still carries on.
+#[test]
+fn time_spent_downloading_does_not_use_the_retry_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| piece(&picture(), CUT, CUT)),
+    ]);
+    let mut cfg = config(dir.path());
+    cfg.retry_budget = Duration::ZERO;
+    let saved = save_with(&server, cfg).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 2);
+}
+
+/// A piece longer than its own range is not joined on: the next try starts over.
+#[test]
+fn a_piece_longer_than_its_range_starts_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| {
+            let full = picture();
+            let range = format!("bytes {CUT}-49/{}", full.len());
+            http_bytes(
+                206,
+                &[("Content-Range", range.as_str())],
+                &other_picture()[CUT..100],
+            )
+        }),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range"), None);
+}
+
+/// A piece that starts past the end of the copy would leave a gap, so it is thrown away and the
+/// next try starts over.
+#[test]
+fn a_piece_that_skips_ahead_starts_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| {
+            cut_whole(
+                "ETag: \"v1\"
+",
+            )
+        }),
+        Box::new(|_| piece(&picture(), CUT + 10, CUT + 10)),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range"), None);
 }

@@ -118,6 +118,11 @@ impl Provider for PersistingProvider {
             }
             if saved.len() >= MAX_SAVES_PER_POLL {
                 over_limit = true;
+                // Left as a link, so the app needs to know how long it lasts.
+                let at = known_expiry(handle);
+                if let Payload::Handle(skipped) = &mut output.payload {
+                    skipped.expires_at = at;
+                }
                 continue;
             }
             match self.store.save(handle) {
@@ -160,11 +165,10 @@ impl Provider for PersistingProvider {
     }
 }
 
-/// The handle's own expiry, or else the one signed into its link.
+/// The earlier of the handle's own expiry and the one signed into its link.
 fn known_expiry(handle: &PayloadHandle) -> Option<u64> {
-    handle.expires_at.or_else(|| {
-        url::Url::parse(&handle.uri)
-            .ok()
-            .and_then(|link| expiry::link_expiry(&link))
-    })
+    match url::Url::parse(&handle.uri) {
+        Ok(link) => expiry::earliest(handle.expires_at, &link),
+        Err(_) => handle.expires_at,
+    }
 }

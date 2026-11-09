@@ -12,18 +12,21 @@
 //! - A busy host is tried again, a few times, with a doubling pause. Only failures that can pass
 //!   are retried (no connection, a cut transfer, 408, 429, 500, 502, 503, 504); an expired or
 //!   refused link, a page that is not media, a file over the limit and a refused address are
-//!   answered at once. A pause that would take longer than the retry budget is not taken: the
-//!   store gives up and says so, rather than holding the job's worker for an hour because a host
-//!   said `Retry-After: 3600`.
+//!   answered at once. A pause that would take the time spent waiting past the retry budget is
+//!   not taken: the store gives up and says so, rather than holding the job's worker for an hour
+//!   because a host said `Retry-After: 3600`. Only pauses count against the budget; each
+//!   transfer has its own time limit, so a long download that is cut can still carry on.
 //! - A cut transfer whose host named the file's version carries on where it stopped on the next
 //!   try, instead of starting over (see `partial.rs`). Without a version it starts over.
-//! - A link that is clearly past its expiry (the handle's `expires_at`, or the expiry signed into
-//!   the link) is refused before any request, and is not retried: it will not get better.
+//! - A link that is clearly past its expiry (the earlier of the handle's `expires_at` and the
+//!   expiry signed into the link) is refused before any request, and is not retried: it will not
+//!   get better. Each redirect target is checked the same way before it is asked for.
 
 use crate::expiry;
 use crate::partial::{self, Partial};
 use crate::sniff::{self, HEAD_LEN};
 use crate::url_rules;
+use craft_ai_core::retry::tried;
 use craft_ai_core::{AiError, Backoff, ErrorKind, MediaType, Payload, PayloadHandle};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -120,18 +123,42 @@ impl MediaStore {
     /// Downloads the link and returns a `file:` handle to the saved copy, trying again when the
     /// host is busy (see the module notes). Blocks for the pauses, so call it from a worker.
     pub fn save(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
+        // A cut download carried from one try to the next; dropped (and deleted) on return.
+        let mut kept: Option<Partial> = None;
+        self.retrying(AiError::is_retryable, || self.fetch_once(handle, &mut kept))
+    }
+
+    /// Runs `call` under the store's retry rule. Unlike `Backoff::run`, only the pauses count
+    /// against the budget, so a long transfer that is cut can still carry on.
+    fn retrying<T>(
+        &self,
+        worth_retrying: fn(&AiError) -> bool,
+        mut call: impl FnMut() -> Result<T, AiError>,
+    ) -> Result<T, AiError> {
         let backoff = Backoff {
             max_attempts: self.config.max_attempts,
             first_delay: self.config.retry_delay,
             budget: self.config.retry_budget,
         };
-        // A cut download carried from one try to the next; dropped (and deleted) on return.
-        let mut kept: Option<Partial> = None;
-        backoff.run(
-            AiError::is_retryable,
-            || self.fetch_once(handle, &mut kept),
-            std::thread::sleep,
-        )
+        let mut paused = Duration::ZERO;
+        let mut attempt = 1u8;
+        loop {
+            let error = match call() {
+                Ok(value) => return Ok(value),
+                Err(error) => error,
+            };
+            let wait = if worth_retrying(&error) {
+                backoff.next_wait(attempt, &error, paused)
+            } else {
+                None
+            };
+            let Some(wait) = wait else {
+                return Err(tried(error, attempt));
+            };
+            std::thread::sleep(wait);
+            paused = paused.saturating_add(wait);
+            attempt = attempt.saturating_add(1);
+        }
     }
 
     /// One try. With `kept` set it asks only for the missing bytes; whatever the answer, `kept`
@@ -143,16 +170,17 @@ impl MediaStore {
     ) -> Result<PayloadHandle, AiError> {
         let mut url = Url::parse(&handle.uri)
             .map_err(|_| AiError::new(ErrorKind::Provider, "media link is not a valid URL"))?;
-        if let Some(at) = handle.expires_at.or_else(|| expiry::link_expiry(&url))
-            && expiry::clearly_expired(at, expiry::now_unix())
-        {
-            return Err(AiError::new(
-                ErrorKind::Provider,
-                format!("the media link expired at {}", expiry::utc_text(at)),
-            ));
-        }
         let mut hops = 0u8;
         let response = loop {
+            // A redirect may lead to a signed link of its own, so every hop is checked.
+            if let Some(at) = expiry::earliest(handle.expires_at, &url)
+                && expiry::clearly_expired(at, expiry::now_unix())
+            {
+                return Err(AiError::new(
+                    ErrorKind::Provider,
+                    format!("the media link expired at {}", expiry::utc_text(at)),
+                ));
+            }
             url_rules::check_resolved(&url, self.config.allow_loopback)?;
             // The agent itself carries no proxy, so a loopback link can never leave this
             // machine; a hosted link may use the environment's proxy, hop by hop.
@@ -220,17 +248,16 @@ impl MediaStore {
             break response;
         };
         if response.status().as_u16() == 206 {
-            return self.resume(kept, response);
+            return self.resume(kept, &url, response);
         }
         // A whole file: whatever was kept is out of date, or the host ignored the range.
         *kept = None;
-        if let Some(declared) = response
+        let declared = response
             .headers()
             .get("content-length")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok())
-            && declared > self.config.max_bytes
-        {
+            .and_then(|v| v.parse::<u64>().ok());
+        if declared.is_some_and(|d| d > self.config.max_bytes) {
             return Err(too_large());
         }
         let version = partial::validator(response.headers());
@@ -238,14 +265,17 @@ impl MediaStore {
             response.into_body().into_reader(),
             &handle.media_type,
             version,
+            (&url, declared),
             kept,
         )
     }
 
-    /// Takes a piece (206) onto the kept copy, if it starts exactly where the copy ends.
+    /// Takes a piece (206) onto the kept copy, if it came from the copy's own address (`source`)
+    /// and starts exactly where the copy ends.
     fn resume(
         &self,
         kept: &mut Option<Partial>,
+        source: &Url,
         response: ureq::http::Response<ureq::Body>,
     ) -> Result<PayloadHandle, AiError> {
         let Some(part) = kept.take() else {
@@ -254,12 +284,19 @@ impl MediaStore {
                 "the media host sent part of a file that was not asked for",
             ));
         };
+        if part.source != source.as_str() {
+            return Err(AiError::new(
+                ErrorKind::Network,
+                "the media link now leads to another address; starting over",
+            ));
+        }
         match partial::content_range(response.headers()) {
-            Some((start, total)) if start == part.written => {
+            Some((start, end, total)) if start == part.written => {
                 if total.is_some_and(|t| t > self.config.max_bytes) {
                     return Err(too_large());
                 }
-                self.fill(part, response.into_body().into_reader(), kept)
+                let body = response.into_body().into_reader();
+                self.fill(part, body, Some(end.saturating_add(1)), total, kept)
             }
             _ => Err(AiError::new(
                 ErrorKind::Network,
@@ -268,13 +305,15 @@ impl MediaStore {
         }
     }
 
-    /// Reads the first bytes to learn the media type, then saves the whole body. A cut transfer
-    /// with a `version` leaves the download in `kept` for the next try.
+    /// Reads the first bytes to learn the media type, then saves the whole body. `from` is the
+    /// address the body came from and the length its headers declared. A cut transfer with a
+    /// `version` leaves the download in `kept` for the next try.
     fn write(
         &self,
         mut body: impl Read,
         declared: &MediaType,
         version: Option<String>,
+        from: (&Url, Option<u64>),
         kept: &mut Option<Partial>,
     ) -> Result<PayloadHandle, AiError> {
         let mut head = [0u8; HEAD_LEN];
@@ -309,17 +348,21 @@ impl MediaStore {
             written: filled as u64,
             validator: version.unwrap_or_default(),
             media,
+            source: from.0.to_string(),
         };
-        self.fill(part, body, kept)
+        self.fill(part, body, from.1, from.1, kept)
     }
 
-    /// Appends the body to the copy and, once it is all there, keeps the file. A cut transfer
-    /// leaves the copy in `kept` when it has a version to resume against; otherwise it is dropped,
-    /// which deletes it.
+    /// Appends the body to the copy and, once it is all there, keeps the file. `end` is the length
+    /// the copy should reach with this body and `whole` the file's length, when the headers said.
+    /// A cut transfer, or a piece that stops before the file does, leaves the copy in `kept` when
+    /// it has a version to resume against; otherwise it is dropped, which deletes it.
     fn fill(
         &self,
         mut part: Partial,
         body: impl Read,
+        end: Option<u64>,
+        whole: Option<u64>,
         kept: &mut Option<Partial>,
     ) -> Result<PayloadHandle, AiError> {
         let room = self.config.max_bytes.saturating_sub(part.written);
@@ -340,6 +383,21 @@ impl MediaStore {
         }
         if part.written > self.config.max_bytes {
             return Err(too_large());
+        }
+        if end.is_some_and(|e| part.written > e) {
+            return Err(AiError::new(
+                ErrorKind::Network,
+                "the media host sent more than it said; starting over",
+            ));
+        }
+        // Short of what the headers promised: cut, however cleanly the connection closed.
+        let short =
+            end.is_some_and(|e| part.written < e) || whole.is_some_and(|w| part.written < w);
+        if short {
+            if !part.validator.is_empty() {
+                *kept = Some(part);
+            }
+            return Err(transfer_failed());
         }
         let Partial {
             temp,
@@ -390,54 +448,5 @@ fn too_large() -> AiError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    /// A PNG header followed by endless zeros, counting what was pulled from it.
-    struct Endless {
-        sent: u64,
-        pulled: Arc<AtomicU64>,
-        limit: u64,
-    }
-
-    impl Read for Endless {
-        /// Fills `buf` with the header, then zeros, until `limit` bytes are sent, and counts them.
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let header = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
-            let mut n = 0;
-            for slot in buf.iter_mut() {
-                if self.sent >= self.limit {
-                    break;
-                }
-                *slot = header.get(self.sent as usize).copied().unwrap_or(0);
-                self.sent += 1;
-                n += 1;
-            }
-            self.pulled.fetch_add(n as u64, Ordering::SeqCst);
-            Ok(n)
-        }
-    }
-
-    /// An endless body is cut off near the size limit while it is read, not read to the end and
-    /// judged afterwards, and nothing is left in the folder.
-    #[test]
-    fn the_running_limit_stops_the_transfer_not_just_the_verdict() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = MediaStoreConfig::new(dir.path());
-        config.max_bytes = 100;
-        let store = MediaStore::new(config).unwrap();
-        let pulled = Arc::new(AtomicU64::new(0));
-        let body = Endless {
-            sent: 0,
-            pulled: Arc::clone(&pulled),
-            limit: 5 * 1024 * 1024,
-        };
-        let declared = MediaType::new("image/png").unwrap();
-        let error = store.write(body, &declared, None, &mut None).unwrap_err();
-        assert!(error.message.contains("larger than"));
-        assert!(pulled.load(Ordering::SeqCst) <= 101 + 8192, "{pulled:?}");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-}
+#[path = "store_tests.rs"]
+mod tests;

@@ -103,3 +103,45 @@ fn grace_allows_a_fast_clock() {
     assert!(clearly_expired(NOON, NOON + CLOCK_GRACE_SECS + 1));
     assert!(!clearly_expired(u64::MAX, u64::MAX));
 }
+
+/// A date that is not on the calendar gives no expiry rather than a made-up one.
+#[test]
+fn a_date_not_on_the_calendar_is_ignored() {
+    assert_eq!(
+        expiry("https://a.blob.core.windows.net/c/b.png?se=2026-02-31&sig=abc"),
+        None
+    );
+    assert_eq!(unix_from(2026, 2, 29, 0, 0, 0), None);
+    assert_eq!(unix_from(2026, 4, 31, 0, 0, 0), None);
+    assert_eq!(unix_from(2100, 2, 29, 0, 0, 0), None);
+    assert!(unix_from(2028, 2, 29, 0, 0, 0).is_some());
+    assert!(unix_from(2000, 2, 29, 0, 0, 0).is_some());
+}
+
+/// An HTTP date is read in its one standard form only.
+#[test]
+fn http_dates_are_read_in_the_standard_form() {
+    assert_eq!(http_date("Mon, 09 Nov 2026 12:00:00 GMT"), Some(NOON));
+    assert_eq!(http_date(" Mon, 09 Nov 2026 12:00:01 GMT "), Some(NOON + 1));
+    for bad in [
+        "Monday, 09-Nov-26 12:00:00 GMT",
+        "Mon Nov  9 12:00:00 2026",
+        "Mon, 09 Nox 2026 12:00:00 GMT",
+        "Mon, 31 Nov 2026 12:00:00 GMT",
+        "Mon, 09 Nov 2026 12:00:00 UTC",
+    ] {
+        assert_eq!(http_date(bad), None, "{bad}");
+    }
+}
+
+/// The earlier of a handle's own deadline and its link's is the one kept.
+#[test]
+fn the_earliest_deadline_is_kept() {
+    let signed = Url::parse(&format!("https://h.example/x?Expires={NOON}&Signature=a")).unwrap();
+    let plain = Url::parse("https://h.example/x").unwrap();
+    assert_eq!(earliest(Some(NOON + 10), &signed), Some(NOON));
+    assert_eq!(earliest(Some(NOON - 10), &signed), Some(NOON - 10));
+    assert_eq!(earliest(None, &signed), Some(NOON));
+    assert_eq!(earliest(Some(5), &plain), Some(5));
+    assert_eq!(earliest(None, &plain), None);
+}

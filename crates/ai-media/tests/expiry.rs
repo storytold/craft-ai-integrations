@@ -10,7 +10,7 @@ use craft_ai_core::{
     PayloadHandle, Provider, Request,
 };
 use craft_ai_media::expiry::{CLOCK_GRACE_SECS, now_unix};
-use craft_ai_media::{MediaStore, MediaStoreConfig, PersistingProvider};
+use craft_ai_media::{MAX_SAVES_PER_POLL, MediaStore, MediaStoreConfig, PersistingProvider};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -121,11 +121,17 @@ impl Provider for Fake {
 /// Polls a persisting provider once, with one try per copy, over a job whose only output is
 /// `link`.
 fn run(dir: &Path, link: PayloadHandle) -> JobSnapshot {
+    run_all(dir, vec![link])
+}
+
+/// Polls a persisting provider once, with one try per copy, over a job whose outputs are
+/// `links`.
+fn run_all(dir: &Path, links: Vec<PayloadHandle>) -> JobSnapshot {
     let mut cfg = config(dir);
     cfg.max_attempts = 1;
     let store = Arc::new(MediaStore::new(cfg).unwrap());
     let fake = Arc::new(Fake {
-        outputs: Mutex::new(vec![Payload::Handle(link)]),
+        outputs: Mutex::new(links.into_iter().map(Payload::Handle).collect()),
     });
     PersistingProvider::new(fake, store)
         .poll(&JobId::new("job-1").unwrap())
@@ -204,4 +210,63 @@ fn a_saved_copy_has_no_expiry() {
     let saved = kept_handle(&snap);
     assert!(saved.uri.starts_with("file:"), "{}", saved.uri);
     assert_eq!(saved.expires_at, None);
+}
+
+/// A link that redirects to a clearly expired signed link stops there, before asking for it.
+#[test]
+fn a_redirect_to_an_expired_link_is_not_followed() {
+    let past = now_unix() - CLOCK_GRACE_SECS - 60;
+    let server = Server::start(move |_| {
+        let to = format!("/media/out.png?Expires={past}&Signature=abc");
+        http_bytes(302, &[("Location", to.as_str())], b"")
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("{}/media/start.png", origin(&server));
+    let Payload::Handle(handle) = Payload::handle(&uri, "image/png", None).unwrap() else {
+        unreachable!()
+    };
+    let error = save(&server, dir.path(), &handle).unwrap_err();
+    assert!(error.message.contains("expired at"), "{error:?}");
+    assert_eq!(server.count(), 1);
+}
+
+/// The earlier deadline wins: a handle that claims to last longer than its signed link is still
+/// refused once the link has clearly expired.
+#[test]
+fn the_earlier_of_two_deadlines_wins() {
+    let server = Server::start(|_| http_bytes(200, &[], PNG));
+    let dir = tempfile::tempdir().unwrap();
+    let mut handle = signed(&server, now_unix() - CLOCK_GRACE_SECS - 60);
+    handle.expires_at = Some(now_unix() + 3600);
+    let error = save(&server, dir.path(), &handle).unwrap_err();
+    assert!(error.message.contains("expired at"), "{error:?}");
+    assert_eq!(server.count(), 0);
+}
+
+/// Results past the per-poll copy limit stay links, and still carry their deadline.
+#[test]
+fn a_link_past_the_copy_limit_keeps_its_deadline() {
+    let server = Server::start(|_| http_bytes(200, &[], PNG));
+    let dir = tempfile::tempdir().unwrap();
+    let later = now_unix() + 3600;
+    let links = (0..=MAX_SAVES_PER_POLL)
+        .map(|i| {
+            let uri = format!(
+                "{}/media/{i}.png?Expires={later}&Signature=abc",
+                origin(&server)
+            );
+            let Payload::Handle(handle) = Payload::handle(&uri, "image/png", None).unwrap() else {
+                unreachable!()
+            };
+            handle
+        })
+        .collect();
+    let snap = run_all(dir.path(), links);
+    let last = match &snap.outputs().last().unwrap().payload {
+        Payload::Handle(handle) => handle,
+        other => panic!("not a handle: {other:?}"),
+    };
+    assert!(last.uri.starts_with("http"), "{}", last.uri);
+    assert_eq!(last.expires_at, Some(later));
+    assert_eq!(server.count(), MAX_SAVES_PER_POLL);
 }

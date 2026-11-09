@@ -10,8 +10,10 @@
 //! Invariants:
 //! - An expiry is read only from a link that also carries that scheme's signature parameter. An
 //!   `expires` parameter on an unsigned link is the page's own business, not a deadline.
-//! - The earliest expiry wins when a link carries more than one.
-//! - Anything that does not parse is ignored: no expiry is better than a wrong one.
+//! - The earliest expiry wins when a link carries more than one, and when a handle states its own
+//!   deadline as well as its link's.
+//! - Anything that does not parse is ignored, a date not on the calendar included: no expiry is
+//!   better than a wrong one.
 //!
 //! shortcut: providers that state a lifetime in their docs but sign nothing into the link are
 //! not covered here; their adapter can set `PayloadHandle::expires_at` itself when one needs it.
@@ -22,6 +24,15 @@ use url::Url;
 /// A link clearly past its expiry is refused before any request, but only once this much time
 /// has passed after it, so a computer whose clock runs a little fast still tries a live link.
 pub const CLOCK_GRACE_SECS: u64 = 300;
+
+/// The earlier of a handle's own deadline (`own`) and the one signed into `url`, if either is
+/// known.
+pub fn earliest(own: Option<u64>, url: &Url) -> Option<u64> {
+    match (own, link_expiry(url)) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
 
 /// The Unix time (seconds, UTC) at which a signed link stops working, if the link says.
 pub fn link_expiry(url: &Url) -> Option<u64> {
@@ -118,6 +129,27 @@ fn iso_utc(s: &str) -> Option<u64> {
     }
 }
 
+/// An HTTP date in the one form hosts must send (`Mon, 09 Nov 2026 12:00:00 GMT`), as Unix
+/// seconds. The obsolete forms are not read: a date that does not parse counts as absent.
+pub(crate) fn http_date(s: &str) -> Option<u64> {
+    const MONTHS: [&[u8]; 12] = [
+        b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov",
+        b"Dec",
+    ];
+    let b = s.trim().as_bytes();
+    let at = |i: usize, c: u8| b.get(i) == Some(&c);
+    if b.len() != 29
+        || !(at(3, b',') && at(4, b' ') && at(7, b' ') && at(11, b' ') && at(16, b' '))
+        || !(at(19, b':') && at(22, b':') && at(25, b' '))
+        || &b[26..] != b"GMT"
+    {
+        return None;
+    }
+    let mo = MONTHS.iter().position(|m| *m == &b[8..11])? as u64 + 1;
+    let n = |r: std::ops::Range<usize>| digits(&b[r]);
+    unix_from(n(12..16)?, mo, n(5..7)?, n(17..19)?, n(20..22)?, n(23..25)?)
+}
+
 /// ASCII digits as a number, or `None` for anything else (an empty slice included).
 fn digits(b: &[u8]) -> Option<u64> {
     if b.is_empty() || !b.iter().all(u8::is_ascii_digit) {
@@ -126,14 +158,28 @@ fn digits(b: &[u8]) -> Option<u64> {
     std::str::from_utf8(b).ok()?.parse().ok()
 }
 
-/// A UTC date and time as Unix seconds. Out-of-range fields, or a date before 1970, give `None`.
+/// A UTC date and time as Unix seconds. Out-of-range fields, a day the month does not have, or
+/// a date before 1970 give `None`.
 fn unix_from(y: u64, mo: u64, d: u64, h: u64, mi: u64, s: u64) -> Option<u64> {
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    if d > days_in_month(y, mo) {
         return None;
     }
     let days = days_from_civil(i64::try_from(y).ok()?, mo, d);
     let days = u64::try_from(days).ok()?;
     Some(days * 86_400 + h * 3600 + mi * 60 + s)
+}
+
+/// Days in month `mo` (1 to 12) of year `y`, leap years included.
+fn days_in_month(y: u64, mo: u64) -> u64 {
+    match mo {
+        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's algorithm).
