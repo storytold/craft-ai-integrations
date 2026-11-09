@@ -78,8 +78,11 @@ fn piece(full: &[u8], start: usize, label_start: usize) -> Reply {
     http_bytes(206, &[("Content-Range", range.as_str())], &full[start..])
 }
 
+/// One scripted answer: the reply to send for a recorded request.
+type Answer = Box<dyn Fn(&Recorded) -> Reply + Send + Sync>;
+
 /// A server that answers each request with the next scripted reply, recording what it was sent.
-fn scripted(replies: Vec<Box<dyn Fn(&Recorded) -> Reply + Send + Sync>>) -> Server {
+fn scripted(replies: Vec<Answer>) -> Server {
     let next = Arc::new(AtomicUsize::new(0));
     Server::start(move |request| {
         let i = next.fetch_add(1, Ordering::SeqCst);
