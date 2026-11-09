@@ -308,11 +308,16 @@ impl ConnectionPanel {
         match answer {
             Ok(report) => {
                 let models = report.models.len();
-                if self.form.draft.set_models(tested, report.models) {
-                    self.form.test = TestLine::Passed {
-                        models,
-                        millis: u64::try_from(report.elapsed.as_millis()).unwrap_or(u64::MAX),
-                    };
+                let millis = u64::try_from(report.elapsed.as_millis()).unwrap_or(u64::MAX);
+                // A custom connection's models are the ones a person declared. Its test lists none,
+                // so it confirms the address without replacing them with an empty list, and the
+                // models then belong to that address, or a save would drop them.
+                let accepted = match report.probe {
+                    Some(_) => self.form.draft.confirm_models_for(tested),
+                    None => self.form.draft.set_models(tested, report.models),
+                };
+                if accepted {
+                    self.form.test = TestLine::Passed { models, millis };
                 }
             }
             Err(e)
@@ -330,6 +335,9 @@ impl ConnectionPanel {
         &self.form
     }
 }
+
+#[cfg(test)]
+mod probe_tests;
 
 #[cfg(test)]
 mod tests {
@@ -358,6 +366,7 @@ mod tests {
             )],
             elapsed: Duration::ZERO,
             probe: None,
+            unavailable_choices: Vec::new(),
         })
     }
 

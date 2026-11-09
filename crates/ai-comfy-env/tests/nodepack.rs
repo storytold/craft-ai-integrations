@@ -182,6 +182,35 @@ fn consent_to_run_code_is_for_one_commit_and_nothing_is_fetched_without_it() {
 }
 
 #[test]
+fn the_archive_comes_from_the_agreed_commit_not_from_a_separate_address() {
+    let server = host(good_archive());
+    let rig = Rig::new(&origin(&server));
+    let agreed = rig.candidate(&origin(&server));
+    let before = server.count();
+    let mut moved = agreed.clone();
+    moved.archive_url = format!("{}/someone/Else/archive/{COMMIT}.tar.gz", origin(&server));
+    let mut renamed = agreed.clone();
+    renamed.repo = "../Pack".into();
+    let mut short = agreed.clone();
+    short.commit = "main".into();
+    for c in [moved, renamed, short] {
+        let consent = PackConsent {
+            commit: c.commit.clone(),
+        };
+        let r = rig
+            .installer
+            .install_pack(&c, Some(&consent), &AtomicBool::new(false));
+        assert!(
+            matches!(refusal(r), PackRefusal::Unsafe(_)),
+            "{c:?} was not refused"
+        );
+    }
+    assert_eq!(server.count(), before, "no archive was requested");
+    assert!(listing(&rig.nodes()).is_empty());
+    assert!(rig.registry().packs().unwrap().is_empty());
+}
+
+#[test]
 fn a_pack_is_unpacked_exactly_as_shipped_and_nothing_is_run() {
     let server = host(good_archive());
     let rig = Rig::new(&origin(&server));

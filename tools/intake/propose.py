@@ -2,10 +2,14 @@
 
 import argparse
 import json
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
+
+MAX_PROPOSAL = 64 * 1024
 
 KINDS = {"model", "connection", "engine", "workflow"}
 ROUTES = {"unknown", "existing", "declarative", "provider", "native-engine", "comfyui"}
@@ -165,6 +169,20 @@ def issue_body(proposal):
     )
 
 
+def read_proposal(path):
+    """The proposal's text. One open, a regular file only, and never more than 64 KiB read:
+    a pipe or device passes a size check and then never ends."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("proposal is not a regular file")
+        data = handle.read(MAX_PROPOSAL + 1)
+    if len(data) > MAX_PROPOSAL:
+        raise ValueError("proposal exceeds 64 KiB")
+    return data.decode("utf-8")
+
+
 def main(argv=None):
     """Create or check a proposal without sending, installing, binding or testing it."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -194,9 +212,7 @@ def main(argv=None):
         print("Created proposal. Add a problem and publisher documentation, then run check.")
         return 0
     try:
-        if args.path.stat().st_size > 65536:
-            raise ValueError("proposal exceeds 64 KiB")
-        value = json.loads(args.path.read_text(encoding="utf-8"))
+        value = json.loads(read_proposal(args.path))
     except (OSError, UnicodeError, ValueError) as error:
         print(f"proposal: cannot read valid JSON ({type(error).__name__})", file=sys.stderr)
         return 1

@@ -169,16 +169,21 @@ impl Downloader {
         let part = parent.join(format!("{leaf}.part"));
         let mut resumes = 0u8;
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AiError::new(ErrorKind::Cancelled, "download cancelled"));
+            }
             match self.attempt(file, &part, token, cancel, progress)? {
                 Attempt::Done => break,
                 Attempt::Interrupted { moved } => {
-                    resumes += 1;
-                    if !moved || resumes > self.config.max_resumes {
+                    // The budget is checked before it is spent, so the count never passes
+                    // `max_resumes` and cannot wrap, even at 255.
+                    if !moved || resumes >= self.config.max_resumes {
                         return Err(AiError::new(
                             ErrorKind::Network,
                             "the download was interrupted; run it again to continue",
                         ));
                     }
+                    resumes += 1;
                     std::thread::sleep(self.config.retry_delay);
                 }
             }

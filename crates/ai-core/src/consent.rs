@@ -46,13 +46,20 @@ pub struct Disclosure {
 }
 
 impl Disclosure {
-    pub fn for_request(app: &AppId, connection: &Connection, request: &Request) -> Self {
-        let destination = connection
+    /// Where a request on `connection` goes: `scheme://host[:port]` of its endpoint, or the route
+    /// name when it has none. Consent and request history both record this value.
+    pub fn destination_for(connection: &Connection) -> String {
+        connection
             .endpoint
             .as_deref()
             .and_then(|e| Endpoint::parse(e).ok())
             .map(|e| e.fingerprint())
-            .unwrap_or_else(|| connection.provider.clone());
+            .unwrap_or_else(|| connection.provider.clone())
+    }
+
+    /// What `request` on `connection` would send for `app`, as the consent screen shows it.
+    pub fn for_request(app: &AppId, connection: &Connection, request: &Request) -> Self {
+        let destination = Self::destination_for(connection);
         Self {
             app: app.clone(),
             connection: connection.id.clone(),

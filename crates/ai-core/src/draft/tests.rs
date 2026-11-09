@@ -10,6 +10,7 @@ fn with_key(mut d: ConnectionDraft, key: &str) -> ConnectionDraft {
     d
 }
 
+/// Each preset with a fixed address prepares into a connection once a key is given.
 #[test]
 fn every_preset_with_an_address_makes_a_valid_connection() {
     for p in PRESETS.iter().filter(|p| !p.endpoint.is_empty()) {
@@ -28,6 +29,8 @@ fn every_preset_with_an_address_makes_a_valid_connection() {
     assert_eq!(custom.prepare(&[]).unwrap_err().field, Field::Address);
 }
 
+/// The Omni key preset is its own provider, offers every model the adapter runs, and gives each
+/// Banana Generative fill.
 #[test]
 fn artcraft_api_key_preset_is_distinct_from_unverified_account_access() {
     let p = PRESETS.iter().find(|p| p.key == "artcraft-omni").unwrap();
@@ -38,7 +41,18 @@ fn artcraft_api_key_preset_is_distinct_from_unverified_account_access() {
     let prepared = with_key(ConnectionDraft::from_preset(p), "test-key")
         .prepare(&[])
         .unwrap();
-    assert_eq!(prepared.connection.models.len(), 2);
+    // Every model the adapter runs, each Banana with Generative fill as well as generation.
+    assert_eq!(prepared.connection.models, crate::artcraft_omni_models());
+    assert_eq!(prepared.connection.models.len(), 4);
+    let fill = crate::CapabilityId::parse("image.inpaint").unwrap();
+    assert!(
+        prepared
+            .connection
+            .models
+            .iter()
+            .filter(|m| m.id.as_str().starts_with("nano_banana"))
+            .all(|m| m.spec_for(&fill).is_some())
+    );
     assert!(
         prepared
             .connection

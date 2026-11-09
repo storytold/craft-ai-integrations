@@ -331,7 +331,7 @@ fn local_and_inline_outputs_are_left_alone() {
 }
 
 #[test]
-fn several_outputs_each_get_their_own_file() {
+fn several_outputs_each_get_a_file_and_a_repeated_link_shares_one() {
     let server = Server::start(|r| {
         if r.path == "/v" {
             http_bytes(200, &[], MP4)
@@ -350,7 +350,8 @@ fn several_outputs_each_get_their_own_file() {
         ],
     );
     assert_eq!(snap.outputs().count(), 3);
-    assert_eq!(files(dir.path()).len(), 3);
+    // The image link appears twice: it is fetched once and both outputs point at the one copy.
+    assert_eq!(files(dir.path()).len(), 2);
 }
 
 #[test]
@@ -404,4 +405,28 @@ fn a_huge_declared_length_is_refused_before_any_body_is_read() {
     );
     assert!(notices(&snap).iter().any(|n| n.contains("larger than")));
     assert!(files(dir.path()).is_empty());
+}
+
+#[test]
+fn one_link_returned_many_times_is_fetched_once_and_a_flood_is_capped() {
+    let server = Server::start(|_| http_bytes(200, &[("Content-Type", "image/png")], PNG));
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("{}/same.png", origin(&server));
+    let snap = run(config(dir.path()), vec![handle(&uri, "image/png"); 8]);
+    assert_eq!(server.count(), 1);
+    assert_eq!(files(dir.path()).len(), 1);
+    assert!(
+        snap.outputs()
+            .all(|o| matches!(&o.payload, Payload::Handle(h) if h.uri.starts_with("file:")))
+    );
+
+    let many = (0..craft_ai_media::MAX_SAVES_PER_POLL + 4)
+        .map(|i| handle(&format!("{}/{i}.png", origin(&server)), "image/png"))
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let before = server.count();
+    let snap = run(config(dir.path()), many);
+    assert_eq!(server.count() - before, craft_ai_media::MAX_SAVES_PER_POLL);
+    assert_eq!(files(dir.path()).len(), craft_ai_media::MAX_SAVES_PER_POLL);
+    assert!(notices(&snap).iter().any(|n| n.contains("past the first")));
 }

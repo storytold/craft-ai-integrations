@@ -13,14 +13,27 @@
 //! The app owns the directory, its retention and its cleanup. Downloads are synchronous inside
 //! `poll`, which the client already runs on a worker thread.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 
+/// Reading and writing the masks the inpainting adapters send.
+mod image_size;
+pub mod mask;
+mod result_image;
 /// Media identified by its first bytes; shared with the adapters that check what they send or
 /// receive.
 pub mod sniff;
 mod store;
 mod url_rules;
 
+pub use image_size::image_size;
+pub use result_image::{MAX_RESULT_PIXELS, decoded_result};
 pub use store::{MediaStore, MediaStoreConfig};
 
 /// The link rules, for other downloaders that must follow the same ones.
@@ -29,10 +42,16 @@ pub mod links {
 }
 
 use craft_ai_core::{
-    AiError, CostEstimate, Event, JobId, JobSnapshot, ModelId, ModelInfo, Payload, Provider,
-    Request,
+    AiError, CostEstimate, Event, JobId, JobSnapshot, ModelId, ModelInfo, Payload, PayloadHandle,
+    Provider, Request,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Most distinct links one poll copies. A provider that answers with a flood of links (or one
+/// link many times) cannot turn a job into unbounded downloads and disk writes; past this the
+/// outputs keep their links and a notice says so.
+pub const MAX_SAVES_PER_POLL: usize = 16;
 
 /// A provider whose hosted outputs are copied to disk as they arrive.
 pub struct PersistingProvider {
@@ -66,6 +85,9 @@ impl Provider for PersistingProvider {
     fn poll(&self, job: &JobId) -> Result<JobSnapshot, AiError> {
         let mut snapshot = self.inner.poll(job)?;
         let mut notices = Vec::new();
+        // The same link is fetched once and its copy reused.
+        let mut saved: HashMap<String, PayloadHandle> = HashMap::new();
+        let mut over_limit = false;
         for event in &mut snapshot.events {
             let Event::Output(output) = event else {
                 continue;
@@ -76,12 +98,30 @@ impl Provider for PersistingProvider {
             if !MediaStore::is_remote(handle) {
                 continue;
             }
+            if let Some(copy) = saved.get(&handle.uri) {
+                output.payload = Payload::Handle(copy.clone());
+                continue;
+            }
+            if saved.len() >= MAX_SAVES_PER_POLL {
+                over_limit = true;
+                continue;
+            }
             match self.store.save(handle) {
-                Ok(saved) => output.payload = Payload::Handle(saved),
+                Ok(copy) => {
+                    saved.insert(handle.uri.clone(), copy.clone());
+                    output.payload = Payload::Handle(copy);
+                }
                 Err(error) => notices.push(Event::Notice {
                     message: format!("No local copy of the result was saved: {}", error.message),
                 }),
             }
+        }
+        if over_limit {
+            notices.push(Event::Notice {
+                message: format!(
+                    "No local copy was saved for results past the first {MAX_SAVES_PER_POLL}."
+                ),
+            });
         }
         snapshot.events.extend(notices);
         Ok(snapshot)

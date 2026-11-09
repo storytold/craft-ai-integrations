@@ -36,6 +36,8 @@ pub(crate) struct ImagePlan {
     pub body: Vec<u8>,
     /// Media type to use for returned images when the bytes cannot be recognised.
     pub fallback_media: &'static str,
+    /// How many images were asked for; a reply with more is refused.
+    pub outputs: u32,
 }
 
 fn prompt_text(req: &Request) -> Result<String, AiError> {
@@ -85,6 +87,7 @@ pub(crate) fn generate_plan(model: &str, req: &Request) -> Result<ImagePlan, AiE
         content_type: "application/json".to_owned(),
         body,
         fallback_media: fallback_media(req),
+        outputs: req.outputs,
     })
 }
 
@@ -169,6 +172,7 @@ pub(crate) fn edit_plan(model: &str, req: &Request) -> Result<ImagePlan, AiError
         content_type,
         body,
         fallback_media: fallback_media(req),
+        outputs: req.outputs,
     })
 }
 
@@ -229,6 +233,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 pub(crate) fn parse_images(
     v: &Value,
     fallback_media: &str,
+    asked_for: u32,
 ) -> Result<(Vec<Output>, Option<Usage>), AiError> {
     if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
         return Err(AiError::new(
@@ -241,6 +246,13 @@ pub(crate) fn parse_images(
         .and_then(Value::as_array)
         .filter(|d| !d.is_empty())
         .ok_or_else(|| AiError::new(ErrorKind::Provider, "the reply held no images"))?;
+    // More results than were asked for are not published: each link would be downloaded and kept.
+    if data.len() > usize::try_from(asked_for.max(1)).unwrap_or(usize::MAX) {
+        return Err(AiError::new(
+            ErrorKind::Provider,
+            "the reply held more images than were asked for",
+        ));
+    }
     let limits = Limits::default();
     let mut outputs = Vec::new();
     for (i, item) in data.iter().enumerate() {
@@ -397,7 +409,7 @@ mod tests {
         let v = json!({"data":[{"b64_json": base64_encode(&PNG)},
             {"url":"https://cdn.example.com/a.png"}],
             "usage":{"input_tokens":10,"output_tokens":20}});
-        let (out, usage) = parse_images(&v, "image/png").unwrap();
+        let (out, usage) = parse_images(&v, "image/png", 2).unwrap();
         assert_eq!(out.len(), 2);
         assert!(matches!(&out[0].payload, Payload::Inline { .. }));
         assert!(matches!(&out[1].payload, Payload::Handle(_)));
@@ -415,7 +427,16 @@ mod tests {
             json!({"data":[{}]}),
             json!({"error":{"message":"content policy"}}),
         ] {
-            assert!(parse_images(&v, "image/png").is_err(), "{v}");
+            assert!(parse_images(&v, "image/png", 1).is_err(), "{v}");
         }
+    }
+
+    #[test]
+    fn more_images_than_were_asked_for_are_refused() {
+        let one = json!({"url":"https://cdn.example.com/a.png"});
+        let v = json!({ "data": vec![one; 3] });
+        assert!(parse_images(&v, "image/png", 3).is_ok());
+        let e = parse_images(&v, "image/png", 2).unwrap_err();
+        assert!(e.message.contains("more images"), "{}", e.message);
     }
 }

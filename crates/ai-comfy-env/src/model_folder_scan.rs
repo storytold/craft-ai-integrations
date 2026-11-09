@@ -11,7 +11,8 @@
 //!
 //! Limits (a hostile or enormous folder must not hang the launcher): depth 6, 20 000 model files,
 //! 200 000 entries looked at in all (so choosing a whole drive ends quickly), a 16 MiB header cap,
-//! 64 places per kind, and a symlink or junction is followed only once.
+//! 64 places per kind, 256 MiB of headers read in all, and a symlink or junction is followed only
+//! once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -23,6 +24,9 @@ const MAX_DEPTH: usize = 6;
 const MAX_FILES: usize = 20_000;
 const MAX_ENTRIES: usize = 200_000;
 const MAX_HEADER_BYTES: u64 = 16 * 1024 * 1024;
+/// Header bytes one whole scan may read. Many links to one large header would otherwise be read
+/// and parsed once per link; past this, files are left to their names and folders.
+const MAX_SCAN_HEADER_BYTES: u64 = 256 * 1024 * 1024;
 const MODEL_EXTENSIONS: &[&str] = &["safetensors", "gguf", "onnx", "ckpt", "pt", "pth", "bin"];
 
 /// A model the suite knows by name and size, supplied by the caller (for example from the tool
@@ -99,6 +103,13 @@ fn kind_for_folder_name(name: &str) -> Option<&'static str> {
 
 /// Reads a `.safetensors` header (never the weights) and guesses the kind from its tensor names.
 pub fn guess_from_header(path: &Path) -> Option<&'static str> {
+    let mut budget = MAX_HEADER_BYTES;
+    guess_within(path, &mut budget)
+}
+
+/// [`guess_from_header`], taking the header's length from `budget` before reading it. A header
+/// longer than what is left is not read, and `budget` is set to zero so the caller can tell.
+fn guess_within(path: &Path, budget: &mut u64) -> Option<&'static str> {
     let mut file = std::fs::File::open(path).ok()?;
     let total = file.metadata().ok()?.len();
     let mut len = [0u8; 8];
@@ -107,6 +118,11 @@ pub fn guess_from_header(path: &Path) -> Option<&'static str> {
     if n == 0 || n > MAX_HEADER_BYTES || n.checked_add(8)? > total {
         return None;
     }
+    if n > *budget {
+        *budget = 0;
+        return None;
+    }
+    *budget -= n;
     let mut json = vec![0u8; usize::try_from(n).ok()?];
     file.read_exact(&mut json).ok()?;
     let header: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&json).ok()?;
@@ -154,7 +170,7 @@ fn is_model_file(name: &str) -> bool {
 
 /// Looks through `root` and everything under it. Never writes.
 pub fn scan_model_folder(root: &Path, known: &[KnownFile<'_>]) -> Result<FolderScan, ScanError> {
-    scan_with_limits(root, known, MAX_FILES, MAX_ENTRIES)
+    scan_with_limits(root, known, MAX_FILES, MAX_ENTRIES, MAX_SCAN_HEADER_BYTES)
 }
 
 /// Walks `root` and lists its model files and the recipe files named in `known`, within the depth,
@@ -164,6 +180,7 @@ fn scan_with_limits(
     known: &[KnownFile<'_>],
     max_files: usize,
     max_entries: usize,
+    mut header_budget: u64,
 ) -> Result<FolderScan, ScanError> {
     if !root.is_absolute() || !std::fs::metadata(root).is_ok_and(|m| m.is_dir()) {
         return Err(ScanError::NotAFolder);
@@ -227,7 +244,11 @@ fn scan_with_limits(
                 &parts,
                 root_name.as_deref(),
                 known,
+                &mut header_budget,
             );
+            if header_budget == 0 {
+                scan.truncated = true;
+            }
             let sub = parts.join("/");
             if let Some(kind) = kind {
                 let set = places.entry(kind.to_owned()).or_default();
@@ -270,6 +291,7 @@ fn classify(
     parts: &[String],
     root_name: Option<&str>,
     known: &[KnownFile<'_>],
+    header_budget: &mut u64,
 ) -> (Option<&'static str>, Option<Basis>) {
     let from_recipe = known
         .iter()
@@ -290,7 +312,10 @@ fn classify(
     let is_safetensors = Path::new(name)
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("safetensors"));
-    if let Some(kind) = is_safetensors.then(|| guess_from_header(path)).flatten() {
+    if let Some(kind) = is_safetensors
+        .then(|| guess_within(path, header_budget))
+        .flatten()
+    {
         return (Some(kind), Some(Basis::FileHeader));
     }
     (None, None)

@@ -1,6 +1,7 @@
 """Black-box tests for the developer proposal command, without any network calls."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -90,6 +91,23 @@ class ProposalCommandTests(unittest.TestCase):
         result = self.call("check", self.path)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("private-token-do-not-echo", result.stderr)
+
+    def test_an_oversized_or_endless_proposal_is_refused_without_reading_it_all(self):
+        self.path.write_bytes(b" " * (64 * 1024) + b"{}")
+        result = self.call("check", self.path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot read valid JSON", result.stderr)
+        self.path.write_bytes(b" " * (64 * 1024 - 2) + b"{}")
+        self.assertNotIn("cannot read valid JSON", self.call("check", self.path).stderr)
+        if hasattr(os, "mkfifo"):
+            fifo = Path(self.scratch.name) / "pipe.json"
+            os.mkfifo(fifo)
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "check", str(fifo)],
+                text=True, capture_output=True, check=False, timeout=20,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cannot read valid JSON", result.stderr)
 
     def test_malformed_types_are_reported_without_a_traceback(self):
         proposal = self.draft()

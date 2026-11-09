@@ -24,8 +24,8 @@ use serde_json::Value;
 use crate::image_io::{decode_picture, encode_mask};
 use crate::{Click, Encoded, Sam3, WEIGHTS_FILE, is_model_dir, mask};
 
-/// Most clicks one request may carry.
-const MAX_POINTS: usize = 32;
+/// Most clicks one request may carry: the model's own limit.
+const MAX_POINTS: usize = crate::MAX_CLICKS;
 
 /// The engine and model ids as the catalogue writes them (`NativeRoute`).
 const ENGINE: &str = "candle";

@@ -693,3 +693,31 @@ fn a_source_that_redirects_forever_is_given_up_on() {
         "the first request and five redirects, no more"
     );
 }
+
+/// A source that only ever answers "range not satisfiable" uses up the resume budget and stops,
+/// even with the largest budget there is, and a cancelled fetch asks nothing at all.
+#[test]
+fn endless_range_refusals_stop_at_the_resume_budget() {
+    let data = body();
+    let server = Server::start(|_| http_bytes(416, &[], b""));
+    let dir = tempfile::tempdir().unwrap();
+    let file = model(&data, &format!("{}/m", origin(&server)));
+    let d = Downloader::new(DownloadConfig {
+        allow_loopback: true,
+        retry_delay: std::time::Duration::ZERO,
+        max_resumes: u8::MAX,
+        ..DownloadConfig::default()
+    });
+    let err = run(&d, &file, dir.path(), None, &AtomicBool::new(false))
+        .0
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Network);
+    assert_eq!(server.count(), 1 + usize::from(u8::MAX));
+
+    let before = server.count();
+    let err = run(&d, &file, dir.path(), None, &AtomicBool::new(true))
+        .0
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Cancelled);
+    assert_eq!(server.count(), before);
+}

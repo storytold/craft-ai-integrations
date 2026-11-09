@@ -23,6 +23,7 @@
 //! | [`connection`] | [`Connection`], [`Auth`], [`Billing`], [`Locality`] |
 //! | [`role`] | [`Role`], [`Binding`], [`resolve`](role::resolve), [`eligible`](role::eligible) |
 //! | [`consent`] | [`Disclosure`], [`ConsentLedger`], [`ConsentTerm`] |
+//! | [`cost`] | [`estimate`](cost::estimate): a price worked out from a model's saved pricing |
 //! | [`store`] | [`StoreFile`], the launcher's versioned shared store |
 //! | [`picks`] | model presets: [`Pick`], the curated [`Catalog`], and [`picks::choose`] |
 //! | [`segment`] | the `image.segment` contract: clicks, a box, and what a selection found |
@@ -44,6 +45,7 @@ pub mod conformance;
 pub mod connection;
 pub mod consent;
 mod consent_term;
+pub mod cost;
 pub mod draft;
 pub mod endpoint;
 pub mod error;
@@ -67,6 +69,7 @@ pub use capability::{CapabilityId, Modality};
 pub use connection::{Auth, Billing, Connection, Locality};
 pub use consent::{ConsentLedger, Disclosure};
 pub use consent_term::ConsentTerm;
+pub use draft::omni_models::documented as artcraft_omni_models;
 pub use draft::{ConnectionDraft, DraftError, Field, KeyChange, PRESETS, Prepared, Preset};
 pub use error::{AiError, ErrorKind};
 pub use history::{EndRecord, HistoryEntry, HistoryLog, HistoryRecord, Outcome, StartRecord};

@@ -184,6 +184,37 @@ fn a_huge_picture_is_refused_from_its_header_before_any_pixel_is_decoded() {
     assert!(e.message.contains("too large"), "{}", e.message);
 }
 
+/// A JPEG whose header is thousands of tiny Extended XMP fragments is refused before the
+/// decoder, which re-scans every fragment after each one, sees it. A plausible count is fine.
+#[test]
+fn a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding() {
+    let with_fragments = |n: u32| {
+        let mut out = Vec::new();
+        let mut encoder = Encoder::new(&mut out, 100);
+        for i in 0..n {
+            let mut seg = super::EXTENDED_XMP_PREFIX.to_vec();
+            seg.extend_from_slice(&[b'0'; 32]);
+            seg.extend_from_slice(&n.to_be_bytes());
+            seg.extend_from_slice(&i.to_be_bytes());
+            seg.push(b'x');
+            encoder.add_app_segment(1, seg).unwrap();
+        }
+        encoder
+            .encode(&two_halves(16, 8), 16, 8, JpegColor::Rgb)
+            .unwrap();
+        out
+    };
+    let fine = with_fragments(super::MAX_XMP_FRAGMENTS as u32);
+    assert_eq!(
+        super::extended_xmp_fragments(&fine),
+        super::MAX_XMP_FRAGMENTS
+    );
+    assert_eq!(decode_jpeg(&fine).unwrap().width, 16);
+    let hostile = with_fragments(super::MAX_XMP_FRAGMENTS as u32 + 1);
+    let e = decode_jpeg(&hostile).err().unwrap();
+    assert!(e.message.contains("could not be read"), "{}", e.message);
+}
+
 /// Cut-off and corrupted JPEGs give a plain error or a picture, and never a panic.
 #[test]
 fn damaged_and_cut_off_files_are_plain_errors_not_panics() {

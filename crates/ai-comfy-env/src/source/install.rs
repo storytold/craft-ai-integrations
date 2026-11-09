@@ -214,6 +214,11 @@ impl Installer {
                 return Err(refusal);
             }
         };
+        // Whatever the description said, the checked format decides whether consent was needed.
+        if format.runs_code_when_loaded() && !consents.pickle {
+            let _ = std::fs::remove_file(&staged_file);
+            return Err(InstallError::Refused(Refusal::Pickle));
+        }
         std::fs::create_dir_all(&target_dir)
             .map_err(|_| internal("could not create the model folder"))?;
         let target = target_dir.join(&candidate.filename);
@@ -254,7 +259,7 @@ impl Installer {
             format,
             licence: candidate.licence.clone(),
             licence_accepted: accepted,
-            pickle_consented: format.runs_code_when_loaded(),
+            pickle_consented: format.runs_code_when_loaded() && consents.pickle,
             installed_at: now,
         };
         self.registry.record(entry.clone()).map_err(|_| {

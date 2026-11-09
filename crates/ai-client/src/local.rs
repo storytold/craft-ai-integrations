@@ -166,13 +166,13 @@ impl ToolDesk {
             model: model.clone(),
         };
         let mut bound = false;
-        let clash = self.shared.update(|store| {
+        let written = self.shared.try_update(|store| {
             match store.connections.iter_mut().find(|c| c.id == id) {
                 // The same id with another adapter is another route that happens to share the
                 // name (a custom runtime called `recipe-x` against a recipe called `x`).
                 // Replacing it would swap the route under a binding that still names its model.
                 Some(existing) if existing.provider != connection.provider => {
-                    return Some(existing.provider.clone());
+                    return Err(existing.provider.clone());
                 }
                 Some(existing) => *existing = connection,
                 None => store.connections.push(connection),
@@ -181,9 +181,9 @@ impl ToolDesk {
                 store.defaults.push(binding);
                 bound = true;
             }
-            None
+            Ok(())
         })?;
-        if let Some(provider) = clash {
+        if let Err(provider) = written {
             return Err(AiError::invalid(format!(
                 "the connection {id} already belongs to a {provider} route and was left as it is"
             )));

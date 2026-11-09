@@ -60,6 +60,7 @@ pub fn consent_headline(d: &Disclosure, app_label: &str) -> String {
     format!("{app_label} will send the following to {}", d.destination)
 }
 
+/// A short badge for where a job runs: on this computer, or leaving it.
 pub fn locality_badge(l: Locality) -> &'static str {
     match l {
         Locality::Local => "Stays on this computer",
@@ -67,6 +68,7 @@ pub fn locality_badge(l: Locality) -> &'static str {
     }
 }
 
+/// How a connection bills, in a few lower-case words for the end of a sentence.
 pub fn billing_label(b: Billing) -> &'static str {
     match b {
         Billing::Free => "free",
@@ -77,13 +79,17 @@ pub fn billing_label(b: Billing) -> &'static str {
 }
 
 /// `1_250_000` micros of `USD` becomes `about 1.25 USD`; sub-cent amounts keep four places.
+/// Larger amounts keep two places, or up to four when the third or fourth is not zero, so a
+/// per-image price such as `39_000` reads `about 0.039 USD` rather than being cut to 0.03.
 pub fn cost_text(c: &CostEstimate) -> String {
     let whole = c.micros / 1_000_000;
     let frac = c.micros % 1_000_000;
     let amount = if c.micros < 10_000 {
         format!("{whole}.{:04}", frac / 100)
     } else {
-        format!("{whole}.{:02}", frac / 10_000)
+        let four = format!("{:04}", frac / 100);
+        let kept = four.trim_end_matches('0');
+        format!("{whole}.{kept:0<2}")
     };
     format!(
         "about {amount} {} ({})",

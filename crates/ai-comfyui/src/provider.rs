@@ -287,6 +287,11 @@ impl Provider for ComfyProvider {
             let source = self.upload(InputRole::Source, &source)?;
             let mask = self.upload(InputRole::Mask, &mask)?;
             workflow.render_with_uploads(request, &source, &mask)?
+        } else if workflow.capability().as_str() == "video.generate" && workflow.needs_uploads() {
+            // A video workflow's start image, read and checked before it is sent.
+            let source = self.read_role(request, InputRole::Source)?;
+            let source = self.upload(InputRole::Source, &source)?;
+            workflow.render_with_source(request, &source)?
         } else {
             workflow.render(request)?
         };

@@ -40,3 +40,18 @@ fn the_highest_rated_proposal_wins_and_nonsense_scores_never_do() {
     assert_eq!(best_proposal(&[f32::NAN, f32::NAN]), 0);
     assert_eq!(best_proposal(&[]), 0);
 }
+
+/// A model file larger than any published export is refused from its length, without reading it,
+/// and a small file that is not a model is a plain error.
+#[test]
+fn an_oversized_or_unreadable_model_file_is_refused_before_loading() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = std::fs::File::create(dir.path().join(ENCODER_FILE)).unwrap();
+    big.set_len(MAX_MODEL_FILE_BYTES + 1).unwrap(); // sparse: no disk is used
+    std::fs::write(dir.path().join(DECODER_FILE), b"not a model").unwrap();
+    let e = Rten::load(dir.path()).err().unwrap();
+    assert!(e.message.contains("not the SAM 2.1 model"), "{}", e.message);
+    big.set_len(16).unwrap();
+    assert!(Rten::load(dir.path()).is_err());
+    assert!(read_model_file(&dir.path().join(DECODER_FILE)).is_ok());
+}

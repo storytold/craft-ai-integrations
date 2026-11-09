@@ -195,3 +195,50 @@ pub(in crate::source) fn tidy(text: &str) -> String {
         line.trim().to_owned()
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_release_api_uses_the_default_host_without_a_token() {
+        let settings = SourceSettings::default();
+        let api = Api::new(&settings);
+        let token = SecretString::new("unused-token");
+        for pieces in [
+            &["repos", "owner", "repo", "releases", "tags", "v1"][..],
+            &["repos", "owner", "repo"][..],
+        ] {
+            let address = join(&settings.bases.github_api, pieces).unwrap();
+            let (url, forwarded) = api
+                .checked(SourceKind::GitHubRelease, &address, Some(&token))
+                .unwrap();
+            assert_eq!(url.as_str(), address);
+            assert!(forwarded.is_none(), "public release queries need no token");
+        }
+    }
+
+    #[test]
+    fn github_release_api_does_not_trust_other_github_hosts_or_lookalikes() {
+        let settings = SourceSettings::default();
+        let api = Api::new(&settings);
+        for host in [
+            "uploads.github.com",
+            "evilapi.github.com",
+            "sub.api.github.com",
+            "api.github.com.example.com",
+            "api.github.com.",
+        ] {
+            assert!(
+                api.checked(
+                    SourceKind::GitHubRelease,
+                    &format!("https://{host}/repos/owner/repo"),
+                    None,
+                )
+                .is_err(),
+                "unexpectedly allowed {host}",
+            );
+        }
+    }
+}

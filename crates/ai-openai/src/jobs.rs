@@ -217,7 +217,7 @@ fn run_image(http: &Http, cell: &JobCell, p: &ImagePlan) -> Result<Option<Usage>
     if cell.is_cancelled() {
         return Ok(None);
     }
-    let (outputs, usage) = images::parse_images(&v, p.fallback_media)?;
+    let (outputs, usage) = images::parse_images(&v, p.fallback_media, p.outputs)?;
     for o in outputs {
         cell.push(Event::Output(o));
     }

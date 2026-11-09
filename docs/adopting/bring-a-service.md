@@ -29,7 +29,7 @@ A `Provider` has five methods:
 | Method | Must |
 |---|---|
 | `models()` | List the models, each with the capabilities and inputs it really supports. This is also the "test connection" call. |
-| `estimate(model, request)` | Optional. A price estimate when you can give one. |
+| `estimate(model, request)` | Optional. A price estimate when you can give one. Apps already see one before consent from the `pricing` your `models()` returns (`Plan::estimate`); a figure here replaces it in the request history. |
 | `submit(model, request)` | Check the request against the model's spec and refuse **before sending anything** with `Unsupported` or `InvalidRequest`. Then start the job and return its id. |
 | `poll(job)` | Return the state and only the events that are new since the last poll. A finished state must stay the same. |
 | `cancel(job)` | Stop the job. If you cannot stop an unfinished job, return `Unsupported`. Calling it twice, or on a finished job, is not an error. An unknown job is. |

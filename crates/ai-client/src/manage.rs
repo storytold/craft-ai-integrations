@@ -27,6 +27,9 @@ use craft_ai_core::{
 use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
 use craft_ai_native::shared::SharedStore;
 
+use crate::assignments::{
+    UnavailableChoice, refreshed_models, unavailable_choices, without_withdrawn,
+};
 use crate::factory::ProviderFactory;
 
 mod probe;
@@ -66,6 +69,7 @@ pub enum SaveError {
 }
 
 impl std::fmt::Display for SaveError {
+    /// The message of the draft or store error, which is safe to show.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(e) => e.fmt(f),
@@ -82,6 +86,9 @@ pub struct Saved {
     pub id: ConnectionId,
     /// Something minor went wrong after the save (an old key could not be removed).
     pub warning: Option<String>,
+    /// Choices this connection can no longer serve after the save: the model is gone, or still
+    /// listed without the ability or an input the tool needs. They are kept, in case it comes back.
+    pub unavailable_choices: Vec<UnavailableChoice>,
 }
 
 /// A completed delete.
@@ -102,6 +109,10 @@ pub struct TestReport {
     pub elapsed: Duration,
     /// For a custom connection: what the test confirmed and could not confirm.
     pub probe: Option<ProbeReport>,
+    /// Choices the connection can no longer serve once a remembered refresh is saved: the model is
+    /// gone, or still listed without the ability or an input the tool needs. They are kept, in case
+    /// it comes back.
+    pub unavailable_choices: Vec<UnavailableChoice>,
 }
 
 /// Reads and writes the user's connections.
@@ -193,8 +204,8 @@ impl ConnectionManager {
         };
 
         // 2. The file, re-checked as it is now. Only file work happens under the lock.
-        let result = self.shared.update(
-            |file| -> Result<(ConnectionId, Option<SecretRef>), SaveError> {
+        let result = self.shared.try_update(
+            |file| -> Result<(ConnectionId, Option<SecretRef>, Vec<UnavailableChoice>), SaveError> {
                 let mut again = draft
                     .prepare(&file.connections)
                     .map_err(SaveError::Invalid)?;
@@ -206,6 +217,27 @@ impl ConnectionManager {
                 let new_ref = again.connection.auth.secret_ref().cloned();
                 let old_ref = match file.connections.iter_mut().find(|c| c.id == id) {
                     Some(slot) => {
+                        // The form's model list may be older than the file (another app assigned a
+                        // model since it opened) or a raw test answer. What a person declared for a
+                        // tool is not the form's to drop while the connection still points at the
+                        // same service, or a choice would stay selected with nothing to resolve.
+                        if slot.provider == again.connection.provider
+                            && slot.endpoint == again.connection.endpoint
+                        {
+                            let listed = std::mem::take(&mut again.connection.models);
+                            let listed = without_withdrawn(listed, &slot.models);
+                            let mut models = refreshed_models(&slot.models, listed);
+                            // A model listed after the form opened is news from elsewhere, not one
+                            // the form removed.
+                            for later in &slot.models {
+                                if !draft.opened_with().contains(&later.id)
+                                    && models.iter().all(|m| m.id != later.id)
+                                {
+                                    models.push(later.clone());
+                                }
+                            }
+                            again.connection.models = models;
+                        }
                         let old = slot.auth.secret_ref().cloned();
                         *slot = again.connection;
                         old
@@ -222,7 +254,8 @@ impl ConnectionManager {
                             .iter()
                             .any(|c| c.auth.secret_ref() == Some(r))
                 });
-                Ok((id, retired))
+                let unavailable = unavailable_choices(file, &id);
+                Ok((id, retired, unavailable))
             },
         );
         let outcome = match result {
@@ -232,7 +265,7 @@ impl ConnectionManager {
 
         // 3. The file did not change, so the slot just written is unused: drop it. It is ours
         // alone, so nothing else can be affected.
-        let (id, retired) = match outcome {
+        let (id, retired, unavailable_choices) = match outcome {
             Ok(done) => done,
             Err(e) => {
                 if let Some(slot) = &fresh {
@@ -246,7 +279,11 @@ impl ConnectionManager {
         let warning = retired
             .filter(|old| self.secrets.delete(old).is_err())
             .map(|_| "The old key could not be removed from the keychain.".to_owned());
-        Ok(Saved { id, warning })
+        Ok(Saved {
+            id,
+            warning,
+            unavailable_choices,
+        })
     }
 
     /// Writes `key` to a slot no other save can be using and returns where it went.
@@ -267,36 +304,40 @@ impl ConnectionManager {
 
     /// Turns a connection on or off without losing it.
     pub fn set_enabled(&self, id: &ConnectionId, enabled: bool) -> Result<(), AiError> {
-        let found = self.shared.update(|file| {
-            file.connections
+        // An unknown id writes nothing, so it never creates a file or rewrites one.
+        self.shared.try_update(|saved| {
+            saved
+                .connections
                 .iter_mut()
                 .find(|c| &c.id == id)
                 .map(|c| c.enabled = enabled)
-                .is_some()
-        })?;
-        if found { Ok(()) } else { Err(not_found(id)) }
+                .ok_or_else(|| not_found(id))
+        })?
     }
 
     /// Removes a connection, the choices that used it, and its key.
     pub fn delete(&self, id: &ConnectionId) -> Result<Removed, AiError> {
-        let (gone, bindings_removed, key_still_used) = self
-            .shared
-            .update(|file| {
-                let pos = file.connections.iter().position(|c| &c.id == id)?;
-                let gone = file.connections.remove(pos);
-                let before = count_bindings(file, id);
-                file.defaults.retain(|b| &b.connection != id);
-                for app in file.apps.values_mut() {
-                    app.overrides.retain(|b| &b.connection != id);
-                }
-                let key_still_used = gone.auth.secret_ref().is_some_and(|r| {
-                    file.connections
-                        .iter()
-                        .any(|c| c.auth.secret_ref() == Some(r))
-                });
-                Some((gone, before, key_still_used))
-            })?
-            .ok_or_else(|| not_found(id))?;
+        // An unknown id writes nothing, so the file's bytes stay as they were.
+        let (gone, bindings_removed, key_still_used) = self.shared.try_update(|saved| {
+            let pos = saved
+                .connections
+                .iter()
+                .position(|c| &c.id == id)
+                .ok_or_else(|| not_found(id))?;
+            let gone = saved.connections.remove(pos);
+            let before = count_bindings(saved, id);
+            saved.defaults.retain(|b| &b.connection != id);
+            for app in saved.apps.values_mut() {
+                app.overrides.retain(|b| &b.connection != id);
+            }
+            let key_still_used = gone.auth.secret_ref().is_some_and(|r| {
+                saved
+                    .connections
+                    .iter()
+                    .any(|c| c.auth.secret_ref() == Some(r))
+            });
+            Ok::<_, AiError>((gone, before, key_still_used))
+        })??;
         let key_removed = match gone.auth.secret_ref() {
             Some(r) if !key_still_used => self.secrets.delete(r).is_ok(),
             _ => true,
@@ -323,7 +364,8 @@ impl ConnectionManager {
     }
 
     /// Tests a saved connection. With `remember`, the models found replace the saved list, so apps
-    /// offer what the server really has.
+    /// offer what the server really has. A remembered answer is refused if the saved connection
+    /// changed or was removed while the test ran; the newer settings are kept.
     pub fn test_saved(&self, id: &ConnectionId, remember: bool) -> Result<TestReport, AiError> {
         let current = self.load()?;
         let connection = current
@@ -333,20 +375,34 @@ impl ConnectionManager {
             .cloned()
             .ok_or_else(|| not_found(id))?;
         let secret = secret_for(self.secrets.as_ref(), &connection)?;
-        let report = self.ask(connection, secret)?;
+        let mut report = self.ask(connection.clone(), secret)?;
         // Only a list the server reported itself is remembered; a custom connection's models
         // are the ones a person declared, and a test never replaces them with guesses.
         if remember && report.probe.is_none() {
             let models = report.models.clone();
-            self.shared.update(|file| {
-                if let Some(c) = file.connections.iter_mut().find(|c| &c.id == id) {
-                    c.models = models;
+            report.unavailable_choices = self.shared.try_update(|file| {
+                let saved = file
+                    .connections
+                    .iter_mut()
+                    .find(|c| &c.id == id)
+                    .ok_or_else(|| not_found(id))?;
+                // Compare and write under the same lock. The probe ran without that lock, so
+                // another app could have changed any part of the connection in the meantime.
+                if *saved != connection {
+                    return Err(AiError::invalid(
+                        "the connection changed during its test; test it again",
+                    ));
                 }
-            })?;
+                // What a person declared on top of the server's list is not the server's to remove.
+                saved.models = refreshed_models(&saved.models, models);
+                Ok(unavailable_choices(file, id))
+            })??;
         }
         Ok(report)
     }
 
+    /// Asks the server for its models, or runs the custom-connection probe, with nothing saved.
+    /// For a listed service the saved list is cleared first, so the answer comes from the server.
     fn ask(
         &self,
         mut connection: Connection,
@@ -359,6 +415,7 @@ impl ConnectionManager {
                 models: Vec::new(),
                 elapsed: start.elapsed(),
                 probe: Some(probe),
+                unavailable_choices: Vec::new(),
             });
         }
         // Saved models would be answered from the list, not the server.
@@ -370,6 +427,7 @@ impl ConnectionManager {
             models,
             elapsed: start.elapsed(),
             probe: None,
+            unavailable_choices: Vec::new(),
         })
     }
 }

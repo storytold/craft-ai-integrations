@@ -11,12 +11,15 @@ publish = false
 [dependencies]
 craft-ai-core.workspace = true
 craft-ai-http.workspace = true
+craft-ai-media = { path = "../ai-media", package = "craft-ai-media" }
+url = "2"
 serde_json.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+png = "0.18"
 
 [lints]
 workspace = true

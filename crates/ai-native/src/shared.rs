@@ -5,12 +5,14 @@
 //!
 //! - **Reads** never block on a writer. Writes replace the file atomically, so a reader sees the
 //!   old file or the new one.
-//! - **Writes** go through [`update`](SharedStore::update): lock, read, change, validate, write.
-//!   Two processes updating at once both land. A change that fails validation writes nothing.
+//! - **Writes** go through [`update`](SharedStore::update) or [`try_update`](SharedStore::try_update):
+//!   lock, read, change, validate, write. Two processes updating at once both land. A change that
+//!   fails validation writes nothing; `try_update` also aborts on callback failure.
 //! - **A newer schema is never overwritten.** An older build that meets one refuses to write.
-//! - **Unknown top-level fields survive** a rewrite by an older build of the same schema version,
-//!   so a newer launcher's additions are not silently dropped. (Nested unknown fields are not
-//!   preserved; only the launcher should rewrite the file in practice.)
+//! - **Unknown fields survive** a rewrite by an older build of the same schema version, at every
+//!   depth, so what a newer build saved is not silently dropped. Apps write this file too, not only
+//!   the launcher, each from its own pinned revision. See [`keep_unknown`], and `docs/STORE-SCHEMA.md`
+//!   for when a change needs a schema bump instead.
 //! - A missing file reads as an empty store, so an app works with no launcher installed.
 
 use std::fmt;
@@ -19,12 +21,14 @@ use std::path::{Path, PathBuf};
 
 use craft_ai_core::store::{MAX_STORE_BYTES, StoreError};
 use craft_ai_core::{AiError, ErrorKind, StoreFile};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::{fsutil, paths};
 
-/// A parsed store plus the top-level fields this build does not know.
-type Loaded = (StoreFile, Map<String, Value>);
+mod keep_unknown;
+
+/// A parsed store plus the text it came from, which holds the fields this build does not know.
+type Loaded = (StoreFile, String);
 
 /// Why a shared store operation failed.
 #[derive(Debug)]
@@ -110,14 +114,33 @@ impl SharedStore {
     ///
     /// Nothing is written if reading fails, if the file is a newer schema, or if the changed
     /// store is invalid or too large.
+    /// A `Result` returned by `f` is only a return value here; it does not abort the write.
+    /// Use [`try_update`](Self::try_update) when callback failure must leave the store untouched.
     pub fn update<T>(&self, f: impl FnOnce(&mut StoreFile) -> T) -> Result<T, SharedError> {
         self.locked(|| {
-            let (mut store, extras) = self
-                .read_raw()?
-                .unwrap_or_else(|| (StoreFile::default(), Map::new()));
+            let (mut store, before) = self.read_or_empty()?;
             let out = f(&mut store);
-            self.write(&store, extras)?;
+            self.write(&store, before.as_deref())?;
             Ok(out)
+        })
+    }
+
+    /// Locks, reads and changes the store, writing only when `f` returns `Ok` and validation passes.
+    /// An `Err` from `f` discards all in-memory changes without serialising, writing or creating
+    /// the store file. The outer result holds store/OS errors; the inner result holds the callback
+    /// outcome, so callers can propagate the two separately. The lock covers the read through commit.
+    pub fn try_update<T, E>(
+        &self,
+        f: impl FnOnce(&mut StoreFile) -> Result<T, E>,
+    ) -> Result<Result<T, E>, SharedError> {
+        self.locked(|| {
+            let (mut store, before) = self.read_or_empty()?;
+            let out = match f(&mut store) {
+                Ok(out) => out,
+                Err(error) => return Ok(Err(error)),
+            };
+            self.write(&store, before.as_deref())?;
+            Ok(Ok(out))
         })
     }
 
@@ -125,8 +148,8 @@ impl SharedStore {
     /// `<name>.corrupt`; a newer-schema file is refused, as in [`update`](Self::update).
     pub fn replace(&self, store: &StoreFile) -> Result<(), SharedError> {
         self.locked(|| {
-            let extras = match self.read_raw() {
-                Ok(found) => found.map_or_else(Map::new, |(_, extras)| extras),
+            let before = match self.read_raw() {
+                Ok(found) => found.map(|(_, text)| text),
                 Err(SharedError::Store(StoreError::TooNew { found, supported })) => {
                     return Err(StoreError::TooNew { found, supported }.into());
                 }
@@ -134,18 +157,27 @@ impl SharedStore {
                     let mut backup = self.path.clone().into_os_string();
                     backup.push(".corrupt");
                     let _ = std::fs::copy(&self.path, PathBuf::from(backup));
-                    Map::new()
+                    None
                 }
             };
-            self.write(store, extras)
+            self.write(store, before.as_deref())
         })
     }
 
+    /// Runs `f` while holding the store's file lock, so no other process writes in between.
     fn locked<T>(&self, f: impl FnOnce() -> Result<T, SharedError>) -> Result<T, SharedError> {
         fsutil::with_lock(&self.path, || Ok(f()))?
     }
 
-    /// Parses the file and also returns its top-level fields this build does not know.
+    /// The store and its text to change: an empty store with no text when there is no file yet.
+    fn read_or_empty(&self) -> Result<(StoreFile, Option<String>), SharedError> {
+        Ok(match self.read_raw()? {
+            Some((store, text)) => (store, Some(text)),
+            None => (StoreFile::default(), None),
+        })
+    }
+
+    /// Parses the file and also returns its text.
     fn read_raw(&self) -> Result<Option<Loaded>, SharedError> {
         let Some(bytes) = fsutil::read_capped(&self.path, MAX_STORE_BYTES).map_err(|e| {
             if e.kind() == io::ErrorKind::InvalidData {
@@ -163,17 +195,19 @@ impl SharedStore {
         let text = String::from_utf8(bytes)
             .map_err(|_| StoreError::Syntax("the file is not valid text".to_owned()))?;
         let store = StoreFile::parse(&text)?;
-        Ok(Some((store, unknown_fields(&text))))
+        Ok(Some((store, text)))
     }
 
-    fn write(&self, store: &StoreFile, extras: Map<String, Value>) -> Result<(), SharedError> {
+    /// Writes `store`, keeping the fields of the replaced text `before` that this build has no type
+    /// for. `before` was already parsed successfully, so neither step below can refuse it.
+    fn write(&self, store: &StoreFile, before: Option<&str>) -> Result<(), SharedError> {
         store.validate()?;
-        let mut value =
-            serde_json::to_value(store).map_err(|e| StoreError::Syntax(e.to_string()))?;
-        if let Value::Object(map) = &mut value {
-            for (k, v) in extras {
-                map.entry(k).or_insert(v);
-            }
+        let mut value = to_value(store)?;
+        if let Some(before) = before {
+            let file: Value =
+                serde_json::from_str(before).map_err(|e| StoreError::Syntax(e.to_string()))?;
+            let seen = to_value(&StoreFile::parse(before)?)?;
+            keep_unknown::carry(&file, &seen, &mut value);
         }
         let text =
             serde_json::to_string_pretty(&value).map_err(|e| StoreError::Syntax(e.to_string()))?;
@@ -189,21 +223,7 @@ impl SharedStore {
     }
 }
 
-/// Top-level keys of the document that `StoreFile` has no field for.
-fn unknown_fields(text: &str) -> Map<String, Value> {
-    const KNOWN: [&str; 6] = [
-        "schema_version",
-        "connections",
-        "defaults",
-        "apps",
-        "custom_tools",
-        "model_folders",
-    ];
-    match serde_json::from_str::<Value>(text) {
-        Ok(Value::Object(map)) => map
-            .into_iter()
-            .filter(|(k, _)| !KNOWN.contains(&k.as_str()))
-            .collect(),
-        _ => Map::new(),
-    }
+/// Serialises a store to a JSON value, reporting a failure as a store syntax error.
+fn to_value(store: &StoreFile) -> Result<Value, SharedError> {
+    serde_json::to_value(store).map_err(|e| StoreError::Syntax(e.to_string()).into())
 }

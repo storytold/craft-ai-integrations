@@ -69,7 +69,10 @@ impl Candidate {
         Needs {
             licence: self.licence.accept_required,
             unverified: self.sha256.is_none() && self.kind != SourceKind::Local,
-            pickle: self.format.runs_code_when_loaded(),
+            // The name decides what is installed and checked, so it decides the consent too; a
+            // `format` field that disagrees with the name can only add the requirement.
+            pickle: self.format.runs_code_when_loaded()
+                || Format::from_name(&self.filename).runs_code_when_loaded(),
             token: self.gated,
         }
     }

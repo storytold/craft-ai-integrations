@@ -42,8 +42,29 @@ pub fn preprocess(rgb: &[u8], w: usize, h: usize, side: usize) -> Result<Vec<f32
             rgb.len()
         )));
     }
+    if h > w {
+        // The horizontal pass keeps every source row, so a tall, narrow picture would need a
+        // buffer of h × side. Resample the picture on its side instead (w × side) and turn the
+        // result back: the filter is separable, so the order of the passes does not matter.
+        let mut turned = vec![0u8; n];
+        for (y, row) in rgb[..n].chunks_exact(w * 3).enumerate() {
+            for (x, px) in row.as_chunks::<3>().0.iter().enumerate() {
+                turned[(x * h + y) * 3..(x * h + y) * 3 + 3].copy_from_slice(px);
+            }
+        }
+        let on_side = preprocess(&turned, h, w, side)?;
+        let mut out = vec![0f32; on_side.len()];
+        for (c, plane) in on_side.chunks_exact(side * side).enumerate() {
+            for (y, row) in plane.chunks_exact(side).enumerate() {
+                for (x, v) in row.iter().enumerate() {
+                    out[(c * side + x) * side + y] = *v;
+                }
+            }
+        }
+        return Ok(out);
+    }
     let (wx, wy) = (weights(w, side), weights(h, side));
-    // horizontal pass: h rows × side columns × 3
+    // horizontal pass: h rows × side columns × 3 (h ≤ w here, so at most w × side)
     let mut tmp = vec![0f32; h * side * 3];
     for y in 0..h {
         for (ox, (lo, ws)) in wx.iter().enumerate() {
@@ -129,6 +150,31 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|v| (*v - 1.0).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn a_tall_picture_comes_out_the_right_way_up_and_round() {
+        // 4 wide, 40 tall: black on top, white below, and a white left column.
+        let (w, h, side) = (4, 40, 8);
+        let mut rgb = vec![0u8; w * h * 3];
+        for y in 0..h {
+            for x in 0..w {
+                if y >= h / 2 || x == 0 {
+                    rgb[(y * w + x) * 3..(y * w + x) * 3 + 3].fill(255);
+                }
+            }
+        }
+        let p = preprocess(&rgb, w, h, side).unwrap();
+        let at = |y: usize, x: usize| p[y * side + x]; // red plane
+        assert!(at(0, side - 1) < -0.9 && at(side - 1, side - 1) > 0.9);
+        assert!(at(0, 0) > 0.9, "the white column is on the left");
+        // A one-pixel-wide strip far taller than the model input is accepted.
+        assert_eq!(
+            preprocess(&vec![9; 20_000 * 3], 1, 20_000, side)
+                .unwrap()
+                .len(),
+            3 * 64
         );
     }
 
