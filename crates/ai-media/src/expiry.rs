@@ -175,7 +175,7 @@ fn unix_from(y: u64, mo: u64, d: u64, h: u64, mi: u64, s: u64) -> Option<u64> {
 /// Days in month `mo` (1 to 12) of year `y`, leap years included.
 fn days_in_month(y: u64, mo: u64) -> u64 {
     match mo {
-        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 if y.is_multiple_of(4) && (!y.is_multiple_of(100) || y.is_multiple_of(400)) => 29,
         2 => 28,
         4 | 6 | 9 | 11 => 30,
         _ => 31,
