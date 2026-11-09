@@ -56,8 +56,10 @@ impl Backoff {
     }
 
     /// Runs `call` until it succeeds, fails with an error `worth_retrying` refuses, or the
-    /// tries or budget run out. `sleep` takes each pause: `std::thread::sleep` in a worker, a
-    /// recorder in a test. A final error after more than one try says how many were made.
+    /// tries or budget run out. `worth_retrying` is asked again after each pause, so a condition
+    /// that changed meanwhile (the job was cancelled) stops the next try. `sleep` takes each
+    /// pause: `std::thread::sleep` in a worker, a recorder in a test. A final error after more
+    /// than one try says how many were made.
     pub fn run<T>(
         &self,
         worth_retrying: impl Fn(&AiError) -> bool,
@@ -80,6 +82,9 @@ impl Backoff {
                 return Err(tried(error, attempt));
             };
             sleep(wait);
+            if !worth_retrying(&error) {
+                return Err(tried(error, attempt));
+            }
             attempt = attempt.saturating_add(1);
         }
     }

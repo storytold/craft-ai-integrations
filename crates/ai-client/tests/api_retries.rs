@@ -36,6 +36,8 @@ struct Faults {
     cancels: AtomicUsize,
     /// How long each poll takes before it answers.
     poll_delay: Mutex<Duration>,
+    /// When each poll began.
+    poll_times: Mutex<Vec<Instant>>,
 }
 
 /// A mock provider that fails on cue.
@@ -60,6 +62,7 @@ impl Provider for Flaky {
     /// Counts the poll, waits the set delay, then hands back the next queued poll error or the mock's answer.
     fn poll(&self, job: &JobId) -> Result<JobSnapshot, AiError> {
         self.faults.polls.fetch_add(1, Ordering::SeqCst);
+        self.faults.poll_times.lock().unwrap().push(Instant::now());
         std::thread::sleep(*self.faults.poll_delay.lock().unwrap());
         match self.faults.poll.lock().unwrap().pop_front().flatten() {
             Some(error) => Err(error),
@@ -309,13 +312,16 @@ fn the_retry_pause_is_taken() {
         first_delay: Duration::from_millis(40),
         ..QUICK
     };
-    let (_dir, job) = started(faults, poll);
-    let began = Instant::now();
+    let (_dir, job) = started(faults.clone(), poll);
     job.wait(Duration::ZERO, Duration::from_secs(5)).unwrap();
+    let times = faults.poll_times.lock().unwrap();
     assert!(
-        began.elapsed() >= Duration::from_millis(120),
-        "{:?}",
-        began.elapsed()
+        times[1] - times[0] >= Duration::from_millis(40),
+        "{times:?}"
+    );
+    assert!(
+        times[2] - times[1] >= Duration::from_millis(80),
+        "{times:?}"
     );
 }
 
@@ -328,14 +334,10 @@ fn a_polls_retry_after_is_honoured() {
         .lock()
         .unwrap()
         .push_back(Some(busy().with_retry_after(1)));
-    let (_dir, job) = started(faults, QUICK);
-    let began = Instant::now();
+    let (_dir, job) = started(faults.clone(), QUICK);
     job.wait(Duration::ZERO, Duration::from_secs(5)).unwrap();
-    assert!(
-        began.elapsed() >= Duration::from_secs(1),
-        "{:?}",
-        began.elapsed()
-    );
+    let times = faults.poll_times.lock().unwrap();
+    assert!(times[1] - times[0] >= Duration::from_secs(1), "{times:?}");
 }
 
 /// The budget counts the failed poll itself: a slow poll that fails uses it up.
@@ -389,6 +391,38 @@ fn no_poll_starts_after_the_timeout() {
     let (_dir, job) = started(faults.clone(), QUICK);
     let error = job
         .wait(Duration::ZERO, Duration::from_millis(200))
+        .unwrap_err();
+    assert_eq!(error.message, "the job took too long");
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+    assert_eq!(faults.cancels.load(Ordering::SeqCst), 1);
+}
+
+/// A zero timeout asks nothing: the job is cancelled without a poll.
+#[test]
+fn a_zero_timeout_does_not_poll() {
+    let faults = Arc::new(Faults::default());
+    let (_dir, job) = started(faults.clone(), QUICK);
+    let error = job.wait(Duration::ZERO, Duration::ZERO).unwrap_err();
+    assert_eq!(error.message, "the job took too long");
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 0);
+    assert_eq!(faults.cancels.load(Ordering::SeqCst), 1);
+}
+
+/// A failed poll that outlasts both the budget and the timeout ends as a timeout: the job is
+/// cancelled rather than left running.
+#[test]
+fn a_failure_past_the_timeout_cancels_the_job() {
+    let faults = Arc::new(Faults::default());
+    faults.poll.lock().unwrap().push_back(Some(dropped()));
+    *faults.poll_delay.lock().unwrap() = Duration::from_millis(150);
+    let poll = Backoff {
+        max_attempts: 5,
+        first_delay: Duration::ZERO,
+        budget: Duration::from_millis(100),
+    };
+    let (_dir, job) = started(faults.clone(), poll);
+    let error = job
+        .wait(Duration::ZERO, Duration::from_millis(100))
         .unwrap_err();
     assert_eq!(error.message, "the job took too long");
     assert_eq!(faults.polls.load(Ordering::SeqCst), 1);

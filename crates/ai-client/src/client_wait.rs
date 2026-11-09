@@ -9,7 +9,8 @@
 //!   once [`POLL_RETRY`]'s tries or budget run out; a success resets the run. The budget counts
 //!   from the start of the first failed poll, and covers the whole pause, `interval` included.
 //! - The overall `timeout` still wins: no pause, retry or not, sleeps past it, and no poll starts
-//!   after it.
+//!   after it, the first included. A wait that ends past it, however it ends, cancels the job and
+//!   records the give-up.
 use std::time::{Duration, Instant};
 
 use craft_ai_core::retry::tried;
@@ -27,10 +28,14 @@ pub(crate) const POLL_RETRY: Backoff = Backoff {
 impl AiClient {
     /// Sets how sending a job retries after a rate limit (default [`Backoff::STANDARD`]) and how
     /// [`Job::wait`] retries a failed poll (default five tries within a minute). Pass
-    /// [`Backoff::NEVER`] to turn either off.
+    /// [`Backoff::NEVER`] to turn either off. The send rule also goes to the worker-backed
+    /// adapters the current factory builds (see
+    /// [`ProviderFactory::set_send_retry`](crate::ProviderFactory::set_send_retry)), so call
+    /// this after [`with_factory`](Self::with_factory).
     pub fn with_retries(mut self, submit: Backoff, poll: Backoff) -> Self {
         self.submit_retry = submit;
         self.poll_retry = poll;
+        self.factory.set_send_retry(submit);
         self
     }
 
@@ -60,6 +65,9 @@ impl Job {
         let mut failures = 0u8;
         let mut streak = Instant::now();
         loop {
+            if Instant::now() >= deadline {
+                return Err(self.give_up());
+            }
             let asked = Instant::now();
             let pause = match self.poll() {
                 Ok(snap) => {
@@ -87,19 +95,14 @@ impl Job {
                         .filter(|pause| elapsed.saturating_add(*pause) <= self.poll_retry.budget);
                     match pause {
                         Some(pause) => pause,
+                        None if Instant::now() >= deadline => return Err(self.give_up()),
                         None => return Err(tried(error, failures)),
                     }
                 }
                 Err(error) => return Err(error),
             };
             let now = Instant::now();
-            if now >= deadline {
-                return Err(self.give_up());
-            }
-            std::thread::sleep(pause.min(deadline - now));
-            if Instant::now() >= deadline {
-                return Err(self.give_up());
-            }
+            std::thread::sleep(pause.min(deadline.saturating_duration_since(now)));
         }
     }
 

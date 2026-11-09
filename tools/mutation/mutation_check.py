@@ -326,6 +326,7 @@ P10 = [
 # ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
 # dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
 WAIT = C + 'ai-client/src/client_wait.rs'
+FACTORY = C + 'ai-client/src/factory.rs'
 GEMINI_LIB = C + 'ai-gemini/src/lib.rs'
 OPENAI_JOBS = C + 'ai-openai/src/jobs.rs'
 SEND_GATE = 'error.kind == ErrorKind::RateLimited'
@@ -339,8 +340,14 @@ AR = [
     ('poll-never-gives-up', WAIT, 'None => return Err(tried(error, failures)),', 'None => continue,', CL, 'api_retries', 'a_poll_that_keeps_failing'),
     ('budget-starts-after-the-poll', WAIT, 'streak = asked;', 'streak = Instant::now();', CL, 'api_retries', 'the_budget_counts_the_failed_poll'),
     ('interval-outside-the-budget', WAIT, '.filter(|pause| elapsed.saturating_add(*pause) <= self.poll_retry.budget);', '.filter(|_| true);', CL, 'api_retries', 'the_interval_counts_against_the_budget'),
-    ('poll-after-the-timeout', WAIT, 'std::thread::sleep(pause.min(deadline - now));\n            if Instant::now() >= deadline {\n                return Err(self.give_up());\n            }', 'std::thread::sleep(pause.min(deadline - now));', CL, 'api_retries', 'no_poll_starts_after_the_timeout'),
-    ('pause-not-taken', WAIT, 'std::thread::sleep(pause.min(deadline - now));', 'let _ = (pause, now);', CL, 'api_retries', 'the_retry_pause_is_taken'),
+    ('poll-after-the-timeout', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up());\n            }\n            let asked', '            let asked', CL, 'api_retries', 'no_poll_starts_after_the_timeout'),
+    ('zero-timeout-polls', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up());\n            }\n            let asked', '            let asked', CL, 'api_retries', 'a_zero_timeout_does_not_poll'),
+    ('pause-not-taken', WAIT, 'std::thread::sleep(pause.min(deadline.saturating_duration_since(now)));', 'let _ = (pause, now);', CL, 'api_retries', 'the_retry_pause_is_taken'),
+    ('give-up-past-timeout-not-cancelled', WAIT, 'None if Instant::now() >= deadline => return Err(self.give_up()),', '', CL, 'api_retries', 'a_failure_past_the_timeout_cancels'),
+    ('cancel-during-pause-ignored', RETRY, '            if !worth_retrying(&error) {\n                return Err(tried(error, attempt));\n            }\n            attempt', '            attempt', M, 'lib', 'run_asks_again_after_the_pause'),
+    ('client-send-rule-not-passed', WAIT, '        self.factory.set_send_retry(submit);\n', '', CL, 'factory_send_retry', 'the_clients_send_rule_reaches_the_worker'),
+    ('apps-builder-replaced', FACTORY, '        self.standard_senders.remove(&name);\n        self.builders.insert(name, Arc::new(build));', '        self.builders.insert(name, Arc::new(build));', CL, 'factory_send_retry', 'an_apps_own_builder_is_kept'),
+    ('openai-send-rule-not-applied', FACTORY, '    config.send_retry = send_retry;\n', '', CL, 'factory_send_retry', 'never_turns_the_worker_retry_off'),
     ('gemini-worker-never-retries', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| false,', 'craft-ai-gemini', 'provider', 'a_rate_limited_send_is_sent_again'),
     ('gemini-worker-retries-anything', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| true,', 'craft-ai-gemini', 'provider', 'a_server_error_is_not_sent_again'),
     ('openai-worker-never-retries', OPENAI_JOBS, '|e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),', '|_: &AiError| false,', O, 'provider', 'a_rate_limited_send_is_sent_again'),

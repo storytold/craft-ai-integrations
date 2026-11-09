@@ -148,3 +148,20 @@ fn run_reports_the_tries_made() {
     assert_eq!(e.retry_after_secs, Some(0));
     assert_eq!(e.message, "busy (after 3 tries)");
 }
+
+/// A condition that changes during the pause (a cancel) stops the next try.
+#[test]
+fn run_asks_again_after_the_pause() {
+    let calls = Cell::new(0);
+    let cancelled = Cell::new(false);
+    let out: Result<(), _> = quick(3).run(
+        |_| !cancelled.get(),
+        || {
+            calls.set(calls.get() + 1);
+            Err(busy())
+        },
+        |_| cancelled.set(true),
+    );
+    assert_eq!(calls.get(), 1);
+    assert_eq!(out.unwrap_err().message, "busy");
+}
