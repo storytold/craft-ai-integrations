@@ -32,6 +32,7 @@
 )]
 
 mod dfn3;
+mod model_file;
 pub mod picture;
 pub mod resample;
 mod runner;

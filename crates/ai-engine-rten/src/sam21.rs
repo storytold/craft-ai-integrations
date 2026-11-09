@@ -18,6 +18,7 @@ use craft_ai_core::{AiError, ErrorKind};
 use rten::{Model, NodeId, Value};
 use rten_tensor::{AsView, Tensor};
 
+use crate::model_file;
 use crate::resample::{MASK_SIDE, SIDE};
 
 /// The two files, side by side in one folder. The first is the weights file the connection records.
@@ -69,21 +70,10 @@ fn failed(what: &str, e: impl std::fmt::Display) -> AiError {
 /// external-data file is ever opened, and a model that names one (with whatever length it likes)
 /// is refused instead of having that length reserved.
 fn read_model_file(path: &Path) -> Result<Vec<u8>, AiError> {
-    use std::io::Read;
-    let unreadable = |e: std::io::Error| failed("could not be read", e);
-    let file = std::fs::File::open(path).map_err(unreadable)?;
-    let meta = file.metadata().map_err(unreadable)?;
-    if !meta.is_file() || meta.len() > MAX_MODEL_FILE_BYTES {
-        return Err(not_this_model());
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_MODEL_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(unreadable)?;
-    if bytes.len() as u64 > MAX_MODEL_FILE_BYTES {
-        return Err(not_this_model());
-    }
-    Ok(bytes)
+    model_file::read_bounded(path, MAX_MODEL_FILE_BYTES).map_err(|e| match e {
+        model_file::Refused::TooBig => not_this_model(),
+        model_file::Refused::Unreadable(e) => failed("could not be read", e),
+    })
 }
 
 /// Said when the files load but are not the export this runner knows.

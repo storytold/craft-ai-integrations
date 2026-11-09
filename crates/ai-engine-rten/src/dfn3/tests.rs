@@ -435,3 +435,25 @@ fn files_that_are_not_all_three_in_one_folder_say_what_is_missing() {
         .unwrap();
     assert_eq!(e.kind, ErrorKind::Unsupported);
 }
+
+/// A model file larger than any published export is refused from its length, without reading it,
+/// and the folder's other files are never loaded.
+#[test]
+fn an_oversized_model_file_is_refused_before_loading() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = std::fs::File::create(dir.path().join(DFN3_ENCODER_FILE)).unwrap();
+    big.set_len(MAX_MODEL_FILE_BYTES + 1).unwrap(); // sparse: no disk is used
+    for name in [DFN3_ERB_DECODER_FILE, DFN3_DF_DECODER_FILE] {
+        std::fs::write(dir.path().join(name), b"not a model").unwrap();
+    }
+    let e = Rten::load(dir.path()).err().unwrap();
+    assert_eq!(e.kind, ErrorKind::Unsupported);
+    assert!(
+        e.message.contains("not the DeepFilterNet 3 model"),
+        "{}",
+        e.message
+    );
+    big.set_len(16).unwrap();
+    let e = Rten::load(dir.path()).err().unwrap();
+    assert!(e.message.contains("could not be loaded"), "{}", e.message);
+}

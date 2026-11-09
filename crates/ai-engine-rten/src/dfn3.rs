@@ -37,6 +37,8 @@ use rten::{Model, NodeId, Value};
 use rten_tensor::Tensor;
 use rten_tensor::prelude::*;
 
+use crate::model_file;
+
 pub(crate) mod dsp;
 pub(crate) mod wav;
 
@@ -51,6 +53,10 @@ pub const DFN3_ERB_DECODER_FILE: &str = "erb_dec.onnx";
 pub const DFN3_DF_DECODER_FILE: &str = "df_dec.onnx";
 /// The capability this runner answers.
 const CAPABILITY: &str = "audio.enhance";
+
+/// The most any one of the three files may hold. The published files are 1.9 to 3.4 MB, with their
+/// weights inside; this leaves room for a re-export without letting a damaged file reserve memory.
+const MAX_MODEL_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// The media type of the answer.
 pub const WAV: &str = "audio/wav";
 /// The param that caps the reduction, in dB.
@@ -231,6 +237,15 @@ fn not_this_model() -> AiError {
     )
 }
 
+/// A model file's bytes, read with the shared ceiling. The model is loaded from these bytes alone,
+/// so no external-data file is opened.
+fn read_model_file(path: &Path) -> Result<Vec<u8>, AiError> {
+    model_file::read_bounded(path, MAX_MODEL_FILE_BYTES).map_err(|e| match e {
+        model_file::Refused::TooBig => not_this_model(),
+        model_file::Refused::Unreadable(e) => failed("could not be read", e),
+    })
+}
+
 /// The real estimator: the three graphs loaded by rten, with the node ids looked up once.
 pub(crate) struct Rten {
     enc: Model,
@@ -248,7 +263,8 @@ pub(crate) struct Rten {
 impl Rten {
     fn load(dir: &Path) -> Result<Self, AiError> {
         let read = |file: &str| {
-            Model::load_file(dir.join(file)).map_err(|e| failed("could not be loaded", e))
+            Model::load(read_model_file(&dir.join(file))?)
+                .map_err(|e| failed("could not be loaded", e))
         };
         let (enc, erb_dec, df_dec) = (
             read(DFN3_ENCODER_FILE)?,
