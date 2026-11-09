@@ -18,10 +18,10 @@
 
 use crate::sniff::{self, HEAD_LEN};
 use crate::url_rules;
-use craft_ai_core::{AiError, ErrorKind, MediaType, Payload, PayloadHandle};
+use craft_ai_core::{AiError, Backoff, ErrorKind, MediaType, Payload, PayloadHandle};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use url::Url;
 
 /// How and where media is saved.
@@ -86,10 +86,6 @@ impl MediaStore {
         if config.max_bytes == 0 {
             return Err(AiError::invalid("the media size limit must be above zero"));
         }
-        let config = MediaStoreConfig {
-            max_attempts: config.max_attempts.clamp(1, 5),
-            ..config
-        };
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
@@ -114,26 +110,16 @@ impl MediaStore {
     /// Downloads the link and returns a `file:` handle to the saved copy, trying again when the
     /// host is busy (see the module notes). Blocks for the pauses, so call it from a worker.
     pub fn save(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
-        let started = Instant::now();
-        let mut attempt = 1u8;
-        loop {
-            let error = match self.fetch_once(handle) {
-                Ok(saved) => return Ok(saved),
-                Err(error) => error,
-            };
-            if !error.is_retryable() || attempt >= self.config.max_attempts {
-                return Err(tried(error, attempt));
-            }
-            let backoff = self.config.retry_delay.saturating_mul(1 << (attempt - 1));
-            let wait = error
-                .retry_after_secs
-                .map_or(backoff, |secs| backoff.max(Duration::from_secs(secs)));
-            if started.elapsed().saturating_add(wait) > self.config.retry_budget {
-                return Err(tried(error, attempt));
-            }
-            std::thread::sleep(wait);
-            attempt += 1;
-        }
+        let backoff = Backoff {
+            max_attempts: self.config.max_attempts,
+            first_delay: self.config.retry_delay,
+            budget: self.config.retry_budget,
+        };
+        backoff.run(
+            AiError::is_retryable,
+            || self.fetch_once(handle),
+            std::thread::sleep,
+        )
     }
 
     fn fetch_once(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
@@ -268,22 +254,6 @@ fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok())
-}
-
-/// The final error, saying how many tries were made when there was more than one.
-fn tried(error: AiError, attempts: u8) -> AiError {
-    if attempts <= 1 {
-        return error;
-    }
-    let retry_after = error.retry_after_secs;
-    let error = AiError::new(
-        error.kind,
-        format!("{} (after {attempts} tries)", error.message),
-    );
-    match retry_after {
-        Some(secs) => error.with_retry_after(secs),
-        None => error,
-    }
 }
 
 fn too_large() -> AiError {

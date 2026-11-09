@@ -297,27 +297,44 @@ P4 = [
 
 MEDIA = C + 'ai-media/src/store.rs'
 CM = 'craft-ai-media'
-RETRY_GATE = 'if !error.is_retryable() || attempt >= self.config.max_attempts {'
+RETRY = C + 'ai-core/src/retry.rs'
+RETRY_GATE = 'AiError::is_retryable,'
+TRY_LIMIT = 'if attempt >= self.max_attempts.clamp(1, 5) {'
+BUDGET = '(elapsed.saturating_add(wait) <= self.budget).then_some(wait)'
 # p10: a busy media host is tried again, a refused link is not, and the pauses are bounded
-# (crates/ai-media). Each mutant runs only the test that should notice it, so none can hang on a
-# real hour-long pause.
+# (crates/ai-media, whose pauses come from the shared rule in crates/ai-core/src/retry.rs). Each
+# mutant runs only the test that should notice it, so none can hang on a real hour-long pause.
 P10 = [
-    ('retry-never', MEDIA, RETRY_GATE, 'if true {', CM, 'retry', 'tried_again_until'),
-    ('retry-everything', MEDIA, RETRY_GATE, 'if attempt >= self.config.max_attempts {', CM, 'retry', 'will_not_get_better'),
-    ('one-try-too-many', MEDIA, RETRY_GATE, 'if !error.is_retryable() || attempt > self.config.max_attempts {', CM, 'retry', 'number_of_tries'),
-    ('tries-clamped-too-high', MEDIA, 'max_attempts: config.max_attempts.clamp(1, 5),', 'max_attempts: config.max_attempts.clamp(1, 50),', CM, 'retry', 'number_of_tries'),
-    ('tries-clamped-too-low', MEDIA, 'max_attempts: config.max_attempts.clamp(1, 5),', 'max_attempts: config.max_attempts.clamp(2, 5),', CM, 'retry', 'number_of_tries'),
-    ('pause-constant', MEDIA, '.saturating_mul(1 << (attempt - 1));', '.saturating_mul(1);', CM, 'retry', 'pause_doubles'),
-    ('pause-none', MEDIA, 'let backoff = self.config.retry_delay.saturating_mul(1 << (attempt - 1));', 'let backoff = Duration::ZERO;', CM, 'retry', 'pause_doubles'),
-    ('retry-after-ignored', MEDIA, '.map_or(backoff, |secs| backoff.max(Duration::from_secs(secs)));', '.map_or(backoff, |_| backoff);', CM, 'retry', 'asks_for_a_long_wait'),
-    ('budget-ignores-the-pause', MEDIA, 'if started.elapsed().saturating_add(wait) > self.config.retry_budget {', 'if started.elapsed() > self.config.retry_budget {', CM, 'retry', 'overrun_the_budget'),
-    ('budget-loosened', MEDIA, 'if started.elapsed().saturating_add(wait) > self.config.retry_budget {', 'if started.elapsed().saturating_add(wait) > self.config.retry_budget.saturating_mul(1000) {', CM, 'retry', 'overrun_the_budget'),
+    ('retry-never', MEDIA, RETRY_GATE, '|_: &AiError| false,', CM, 'retry', 'tried_again_until'),
+    ('retry-everything', MEDIA, RETRY_GATE, '|_: &AiError| true,', CM, 'retry', 'will_not_get_better'),
+    ('one-try-too-many', RETRY, TRY_LIMIT, 'if attempt > self.max_attempts.clamp(1, 5) {', CM, 'retry', 'number_of_tries'),
+    ('tries-clamped-too-high', RETRY, TRY_LIMIT, 'if attempt >= self.max_attempts.clamp(1, 50) {', CM, 'retry', 'number_of_tries'),
+    ('tries-clamped-too-low', RETRY, TRY_LIMIT, 'if attempt >= self.max_attempts.clamp(2, 5) {', CM, 'retry', 'number_of_tries'),
+    ('pause-constant', RETRY, '.saturating_mul(1 << doublings);', '.saturating_mul(1);', CM, 'retry', 'pause_doubles'),
+    ('pause-none', RETRY, 'let backoff = self.first_delay.saturating_mul(1 << doublings);', 'let backoff = Duration::ZERO;', CM, 'retry', 'pause_doubles'),
+    ('retry-after-ignored', RETRY, '.map_or(backoff, |secs| backoff.max(Duration::from_secs(secs)));', '.map_or(backoff, |_| backoff);', CM, 'retry', 'asks_for_a_long_wait'),
+    ('budget-ignores-the-pause', RETRY, BUDGET, '(elapsed <= self.budget).then_some(wait)', CM, 'retry', 'overrun_the_budget'),
+    ('budget-loosened', RETRY, BUDGET, '(elapsed.saturating_add(wait) <= self.budget.saturating_mul(1000)).then_some(wait)', CM, 'retry', 'overrun_the_budget'),
     ('gateway-timeout-not-retried', MEDIA, 'matches!(status, 408 | 500 | 502 | 503 | 504)', 'matches!(status, 408 | 500 | 502 | 503)', CM, 'retry', 'tried_again_until'),
     ('request-timeout-not-retried', MEDIA, 'matches!(status, 408 | 500 | 502 | 503 | 504)', 'matches!(status, 500 | 502 | 503 | 504)', CM, 'retry', 'tried_again_until'),
     ('slow-down-not-retried', MEDIA, 'if status == 429 {', 'if false {', CM, 'retry', 'says_slow_down'),
-    ('retry-after-not-kept', MEDIA, 'let retry_after = error.retry_after_secs;', 'let retry_after: Option<u64> = None;', CM, 'retry', 'last_answer'),
-    ('tries-not-reported', MEDIA, 'if attempts <= 1 {', 'if true {', CM, 'retry', 'number_of_tries'),
+    ('retry-after-not-kept', RETRY, 'let retry_after = error.retry_after_secs;', 'let retry_after: Option<u64> = None;', CM, 'retry', 'last_answer'),
+    ('tries-not-reported', RETRY, 'if attempts <= 1 {', 'if true {', CM, 'retry', 'number_of_tries'),
     ('cut-transfer-not-retried', MEDIA, '.map_err(|_| AiError::new(ErrorKind::Network, "media transfer failed"))?;', '.map_err(|_| AiError::new(ErrorKind::Provider, "media transfer failed"))?;', CM, 'retry', 'cut_transfer'),
+]
+
+# ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
+# dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
+WAIT = C + 'ai-client/src/client_wait.rs'
+SEND_GATE = 'error.kind == ErrorKind::RateLimited'
+POLL_GATE = 'Err(error) if error.is_retryable() => {'
+AR = [
+    ('dropped-send-sent-again', WAIT, SEND_GATE, 'true', CL, 'api_retries', 'a_dropped_send_is_not_sent_again'),
+    ('rate-limited-send-not-retried', WAIT, SEND_GATE, 'false', CL, 'api_retries', 'a_rate_limited_send_is_tried_again'),
+    ('failed-poll-ends-the-wait', WAIT, POLL_GATE, 'Err(error) if false => {', CL, 'api_retries', 'a_failed_poll_does_not_end_the_wait'),
+    ('poll-refusal-retried', WAIT, POLL_GATE, 'Err(error) if true => {', CL, 'api_retries', 'a_poll_refusal_is_not_retried'),
+    ('failure-run-not-reset', WAIT, 'failures = 0;', '', CL, 'api_retries', 'a_success_resets_the_failure_run'),
+    ('poll-never-gives-up', WAIT, 'None => return Err(tried(error, failures)),', 'None => continue,', CL, 'api_retries', 'a_poll_that_keeps_failing'),
 ]
 
 STORE = C + 'ai-core/src/store.rs'
@@ -481,7 +498,7 @@ CT = [
     ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, T, 'without_the_adapter'),
     ('picker-hides-missing-adapter', CT_PICKER, 'RoleStatus::Unavailable { reason } => Some(reason),', 'RoleStatus::Unavailable { reason } => {\n                    let _ = reason;\n                    None\n                }', CL, T, 'without_the_adapter'),
     ('consent-not-enforced', C + 'ai-client/src/client_run.rs', 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
-    ('request-not-forwarded', C + 'ai-client/src/client_run.rs', 'provider.submit(&plan.model, &plan.request) {', 'provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())) {', CL, T, 'two_apps_run'),
+    ('request-not-forwarded', C + 'ai-client/src/client_run.rs', '|| provider.submit(&plan.model, &plan.request),', '|| provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())),', CL, T, 'two_apps_run'),
     ('cancel-not-forwarded', CT_CLIENT, 'pub fn cancel(&self) -> Result<(), AiError> {\n        self.provider.cancel(&self.id)', 'pub fn cancel(&self) -> Result<(), AiError> {\n        let _ = &self.provider;\n        Ok(())', CL, T, 'cancelling_one'),
     ('old-store-needs-the-new-field', CT_STORE, '#[serde(default, skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', '#[serde(skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', CL, T, 'before_custom_tools'),
     ('removal-keeps-the-launcher-choice', CT_TOOLS, 'store.defaults.retain(|binding| &binding.role != id);', 'let _ = id;', CL, T, 'before_custom_tools'),
@@ -568,7 +585,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
+GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

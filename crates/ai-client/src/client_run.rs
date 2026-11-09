@@ -79,7 +79,13 @@ impl AiClient {
             .ok()
             .flatten()
             .or_else(|| plan.estimate.clone());
-        match provider.submit(&plan.model, &plan.request) {
+        // Only a rate limit is tried again: see `client_wait.rs` for why a dropped send is not.
+        let submitted = self.submit_retry().run(
+            super::wait::submit_worth_retrying,
+            || provider.submit(&plan.model, &plan.request),
+            std::thread::sleep,
+        );
+        match submitted {
             Ok(id) => {
                 let recorder = self.history.as_ref().map(|file| {
                     Arc::new(history::begin(file, plan, &id, estimate, self.keep_prompts))
@@ -88,6 +94,7 @@ impl AiClient {
                     provider,
                     id,
                     recorder,
+                    poll_retry: self.poll_retry(),
                 })
             }
             Err(e) => {

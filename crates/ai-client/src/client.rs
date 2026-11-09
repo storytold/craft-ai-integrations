@@ -17,14 +17,13 @@
 //! never in a [`Plan`], a [`Job`], a status or an error.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use craft_ai_core::job::Event;
 use craft_ai_core::model::InputRole;
 use craft_ai_core::picks::{Candidate, choose};
 use craft_ai_core::role::eligible;
 use craft_ai_core::{
-    AiError, AppId, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger,
+    AiError, AppId, Backoff, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger,
     CostEstimate, Disclosure, ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality,
     ModelId, Outcome, Pick, PickedBy, Provider, Request, Role, RoleId, Usage,
 };
@@ -40,6 +39,8 @@ use crate::route_support::{RouteFacts, RouteQuery, RouteSupport};
 mod plan_cost;
 #[path = "client_run.rs"]
 mod run;
+#[path = "client_wait.rs"]
+mod wait;
 
 /// What a person is told when the app has no adapter for the model they chose. One sentence, so
 /// status, plan and start agree and the plain-language test can pin it.
@@ -134,6 +135,7 @@ impl Plan {
         &self.connection.provider
     }
 
+    /// The model the plan will run, as resolved from the binding.
     pub fn model(&self) -> &ModelId {
         &self.model
     }
@@ -145,9 +147,11 @@ pub struct Job {
     provider: Arc<dyn Provider>,
     id: JobId,
     recorder: Option<Arc<Recorder>>,
+    poll_retry: Backoff,
 }
 
 impl std::fmt::Debug for Job {
+    /// Shows the job id only: the provider and its key stay out of logs.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Job({})", self.id)
     }
@@ -162,10 +166,14 @@ pub struct Finished {
 }
 
 impl Job {
+    /// The provider's id for this job.
     pub fn id(&self) -> &JobId {
         &self.id
     }
 
+    /// The job's state now. An error that [`AiError::is_retryable`] (a dropped connection, a
+    /// rate limit) says nothing about the job itself: poll again after a pause, honouring
+    /// `retry_after_secs`, as [`wait`](Self::wait) does.
     pub fn poll(&self) -> Result<JobSnapshot, AiError> {
         let snap = self.provider.poll(&self.id)?;
         if let Some(recorder) = &self.recorder {
@@ -174,34 +182,9 @@ impl Job {
         Ok(snap)
     }
 
+    /// Asks the provider to stop the job. A job that has already ended is the provider's to report.
     pub fn cancel(&self) -> Result<(), AiError> {
         self.provider.cancel(&self.id)
-    }
-
-    /// Polls every `interval` until the job ends or `timeout` passes, collecting events. For
-    /// scripts and tests; an app with its own job system polls instead.
-    pub fn wait(&self, interval: Duration, timeout: Duration) -> Result<Finished, AiError> {
-        let deadline = Instant::now() + timeout;
-        let mut events = Vec::new();
-        loop {
-            let snap = self.poll()?;
-            events.extend(snap.events);
-            if snap.state.is_terminal() {
-                return Ok(Finished {
-                    state: snap.state,
-                    events,
-                    usage: snap.usage,
-                });
-            }
-            if Instant::now() >= deadline {
-                let _ = self.cancel();
-                if let Some(recorder) = &self.recorder {
-                    recorder.gave_up();
-                }
-                return Err(AiError::new(ErrorKind::Network, "the job took too long"));
-            }
-            std::thread::sleep(interval);
-        }
     }
 }
 
@@ -214,9 +197,13 @@ pub struct AiClient {
     history: Option<Arc<HistoryFile>>,
     keep_prompts: bool,
     catalog: Catalog,
+    submit_retry: Backoff,
+    poll_retry: Backoff,
 }
 
 impl AiClient {
+    /// A client for `app` over the given shared store and key store, with the standard adapters,
+    /// no history file and the default retry rules.
     pub fn new(app: AppId, shared: SharedStore, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
             app,
@@ -226,6 +213,8 @@ impl AiClient {
             history: None,
             keep_prompts: false,
             catalog: Catalog::builtin(),
+            submit_retry: Backoff::STANDARD,
+            poll_retry: wait::POLL_RETRY,
         }
     }
 
