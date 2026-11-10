@@ -17,13 +17,15 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-fake-body";
 
 type Answer = Box<dyn Fn() -> Reply + Send + Sync>;
 
+/// A store config for `dir` that allows loopback links and pauses for no time.
 fn config(dir: &Path) -> MediaStoreConfig {
     let mut cfg = MediaStoreConfig::new(dir);
     cfg.allow_loopback = true;
-    cfg.retry_delay = Duration::ZERO;
+    cfg.retry.first_delay = Duration::ZERO;
     cfg
 }
 
+/// A handle to the scripted server's media link.
 fn link(server: &Server) -> PayloadHandle {
     let uri = format!("{}/media/out.png", server.url.trim_end_matches("/v1"));
     match Payload::handle(&uri, "image/png", None).unwrap() {
@@ -32,10 +34,12 @@ fn link(server: &Server) -> PayloadHandle {
     }
 }
 
+/// Saves the server's link with a store over `cfg`.
 fn save(cfg: MediaStoreConfig, server: &Server) -> Result<PayloadHandle, AiError> {
     MediaStore::new(cfg).unwrap().save(&link(server))
 }
 
+/// How many files are in `dir`.
 fn files(dir: &Path) -> usize {
     std::fs::read_dir(dir).unwrap().count()
 }
@@ -52,6 +56,7 @@ fn busy_then_ok(bad: usize, answer: impl Fn() -> Reply + Send + Sync + 'static) 
     })
 }
 
+/// A busy host is tried again until it answers.
 #[test]
 fn a_busy_host_is_tried_again_until_it_answers() {
     for status in [408u16, 500, 502, 503, 504] {
@@ -68,6 +73,7 @@ fn a_busy_host_is_tried_again_until_it_answers() {
     }
 }
 
+/// A host that says slow down is asked again when it says so.
 #[test]
 fn a_host_that_says_slow_down_is_asked_again_when_it_says_so() {
     let dir = tempfile::tempdir().unwrap();
@@ -76,6 +82,7 @@ fn a_host_that_says_slow_down_is_asked_again_when_it_says_so() {
     assert_eq!(server.count(), 2);
 }
 
+/// A cut transfer is tried again and leaves no partial file.
 #[test]
 fn a_cut_transfer_is_tried_again_and_leaves_no_partial_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -91,6 +98,7 @@ fn a_cut_transfer_is_tried_again_and_leaves_no_partial_file() {
     assert_eq!(files(dir.path()), 1, "only the finished copy is kept");
 }
 
+/// An unreachable host is tried again and then reported.
 #[test]
 fn an_unreachable_host_is_tried_again_and_then_reported() {
     let dir = tempfile::tempdir().unwrap();
@@ -110,6 +118,7 @@ fn an_unreachable_host_is_tried_again_and_then_reported() {
     assert!(error.message.contains("after 3 tries"), "{error:?}");
 }
 
+/// Links that will not get better are asked for once.
 #[test]
 fn links_that_will_not_get_better_are_asked_for_once() {
     let cases: Vec<(&str, Answer)> = vec![
@@ -147,6 +156,7 @@ fn links_that_will_not_get_better_are_asked_for_once() {
     }
 }
 
+/// A file over the size limit is refused once and not fetched again.
 #[test]
 fn a_file_over_the_limit_is_not_fetched_again() {
     let dir = tempfile::tempdir().unwrap();
@@ -157,12 +167,13 @@ fn a_file_over_the_limit_is_not_fetched_again() {
     assert_eq!(server.count(), 1);
 }
 
+/// The tries made follow `max_attempts`, clamped to 1..=5.
 #[test]
 fn the_number_of_tries_is_bounded_and_can_be_one() {
     for (asked, made) in [(0u8, 1usize), (1, 1), (2, 2), (3, 3), (5, 5), (99, 5)] {
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = config(dir.path());
-        cfg.max_attempts = asked;
+        cfg.retry.max_attempts = asked;
         let server = Server::start(|_| http_bytes(503, &[], b""));
         let error = save(cfg, &server).unwrap_err();
         assert_eq!(server.count(), made, "asked for {asked}");
@@ -176,11 +187,12 @@ fn the_number_of_tries_is_bounded_and_can_be_one() {
     }
 }
 
+/// Each pause between tries is twice the one before.
 #[test]
 fn the_pause_doubles_between_tries() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = config(dir.path());
-    cfg.retry_delay = Duration::from_millis(60);
+    cfg.retry.first_delay = Duration::from_millis(60);
     let server = Server::start(|_| http_bytes(503, &[], b""));
     let started = Instant::now();
     save(cfg, &server).unwrap_err();
@@ -193,12 +205,13 @@ fn the_pause_doubles_between_tries() {
     assert_eq!(server.count(), 3);
 }
 
+/// A pause that would go past the budget is not taken: the store gives up at once.
 #[test]
 fn a_wait_that_would_overrun_the_budget_is_not_taken() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = config(dir.path());
-    cfg.retry_delay = Duration::from_millis(400);
-    cfg.retry_budget = Duration::from_millis(100);
+    cfg.retry.first_delay = Duration::from_millis(400);
+    cfg.retry.budget = Duration::from_millis(100);
     let server = Server::start(|_| http_bytes(503, &[], b""));
     let started = Instant::now();
     save(cfg, &server).unwrap_err();
@@ -206,6 +219,7 @@ fn a_wait_that_would_overrun_the_budget_is_not_taken() {
     assert!(started.elapsed() < Duration::from_millis(300));
 }
 
+/// A host that asks for a long wait is not waited for.
 #[test]
 fn a_host_that_asks_for_a_long_wait_is_not_waited_for() {
     let dir = tempfile::tempdir().unwrap();
@@ -218,6 +232,7 @@ fn a_host_that_asks_for_a_long_wait_is_not_waited_for() {
     assert_eq!(error.retry_after_secs, Some(3600), "the caller can show it");
 }
 
+/// Every try goes to the same link with no credentials.
 #[test]
 fn every_try_goes_to_the_same_link_with_no_credentials() {
     let dir = tempfile::tempdir().unwrap();
@@ -230,6 +245,7 @@ fn every_try_goes_to_the_same_link_with_no_credentials() {
     }
 }
 
+/// The last answer is reported with what the host asked.
 #[test]
 fn the_last_answer_is_reported_with_what_the_host_asked() {
     let dir = tempfile::tempdir().unwrap();

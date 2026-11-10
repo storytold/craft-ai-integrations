@@ -53,6 +53,12 @@ impl AiClient {
     /// Starts the job. Refuses with [`ErrorKind::ConsentRequired`] if `ledger` does not cover the
     /// plan's disclosure. A plan for another app is an invalid request, refused before key access
     /// or provider and history side effects.
+    ///
+    /// Blocks the calling thread while it pauses between sends the service refused with a rate
+    /// limit (up to the send rule's budget, 30 seconds by default; see
+    /// [`with_retries`](Self::with_retries)). Call it from a worker, or turn the send retry off
+    /// with [`Backoff::NEVER`](craft_ai_core::Backoff::NEVER) before calling it from the
+    /// interface thread.
     pub fn start(&self, plan: &Plan, ledger: &ConsentLedger) -> Result<Job, AiError> {
         if plan.disclosure.app != self.app {
             return Err(AiError::invalid("this plan belongs to a different app"));
@@ -79,7 +85,13 @@ impl AiClient {
             .ok()
             .flatten()
             .or_else(|| plan.estimate.clone());
-        match provider.submit(&plan.model, &plan.request) {
+        // Only a rate limit is tried again: see `client_wait.rs` for why a dropped send is not.
+        let submitted = self.submit_retry().run(
+            super::wait::submit_worth_retrying,
+            || provider.submit(&plan.model, &plan.request),
+            std::thread::sleep,
+        );
+        match submitted {
             Ok(id) => {
                 let recorder = self.history.as_ref().map(|file| {
                     Arc::new(history::begin(file, plan, &id, estimate, self.keep_prompts))
@@ -88,6 +100,7 @@ impl AiClient {
                     provider,
                     id,
                     recorder,
+                    poll_retry: self.poll_retry(),
                 })
             }
             Err(e) => {

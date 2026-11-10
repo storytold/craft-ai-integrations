@@ -10,6 +10,8 @@ impl ToolDesk {
     /// [`TestStart::NeedsConsent`] disclosure, retain it, and pass `Some(&disclosure)` only
     /// after the person agrees. If the current disclosure differs, asks again without saving
     /// consent or building a provider. An existing agreement can still cover the new plan.
+    /// Starting can pause after a rate limit, as [`AiClient::start`](crate::AiClient::start)
+    /// does, so call it from a worker.
     pub fn start_test(
         &self,
         role: &Role,

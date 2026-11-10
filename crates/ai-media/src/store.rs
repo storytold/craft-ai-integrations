@@ -18,10 +18,10 @@
 
 use crate::sniff::{self, HEAD_LEN};
 use crate::url_rules;
-use craft_ai_core::{AiError, ErrorKind, MediaType, Payload, PayloadHandle};
+use craft_ai_core::{AiError, Backoff, ErrorKind, MediaType, Payload, PayloadHandle};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use url::Url;
 
 /// How and where media is saved.
@@ -38,15 +38,14 @@ pub struct MediaStoreConfig {
     /// Permit links to a loopback host (http or https). For a connection the user runs on this
     /// computer, and for tests. Other private addresses stay refused.
     pub allow_loopback: bool,
-    /// Most tries for one link, the first included. Clamped to 1..=5; 1 turns retries off.
-    pub max_attempts: u8,
-    /// Pause before the second try; each later pause doubles. Default 1 second.
-    pub retry_delay: Duration,
-    /// The most time the store will spend waiting between tries, in total (default 30 seconds).
-    pub retry_budget: Duration,
+    /// How a busy host is tried again (default [`Backoff::STANDARD`]: three tries, a one-second
+    /// first pause, 30 seconds of pauses at most). [`Backoff::NEVER`] turns retries off.
+    pub retry: Backoff,
 }
 
 impl MediaStoreConfig {
+    /// The defaults for saving into `dir`: 1 GiB, 15 s to connect, 30 minutes per transfer, three
+    /// redirects, no loopback, and three tries within 30 seconds.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
@@ -55,9 +54,7 @@ impl MediaStoreConfig {
             transfer_timeout: Duration::from_secs(30 * 60),
             max_redirects: 3,
             allow_loopback: false,
-            max_attempts: 3,
-            retry_delay: Duration::from_secs(1),
-            retry_budget: Duration::from_secs(30),
+            retry: Backoff::STANDARD,
         }
     }
 }
@@ -69,6 +66,7 @@ pub struct MediaStore {
 }
 
 impl std::fmt::Debug for MediaStore {
+    /// Shows the directory only.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MediaStore")
             .field("dir", &self.config.dir)
@@ -77,6 +75,7 @@ impl std::fmt::Debug for MediaStore {
 }
 
 impl MediaStore {
+    /// Checks the directory and size limit and builds the downloader. Nothing is fetched yet.
     pub fn new(config: MediaStoreConfig) -> Result<Self, AiError> {
         if !config.dir.is_absolute() || !config.dir.is_dir() {
             return Err(AiError::invalid(
@@ -86,10 +85,6 @@ impl MediaStore {
         if config.max_bytes == 0 {
             return Err(AiError::invalid("the media size limit must be above zero"));
         }
-        let config = MediaStoreConfig {
-            max_attempts: config.max_attempts.clamp(1, 5),
-            ..config
-        };
         let agent = ureq::Agent::new_with_config(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
@@ -114,26 +109,11 @@ impl MediaStore {
     /// Downloads the link and returns a `file:` handle to the saved copy, trying again when the
     /// host is busy (see the module notes). Blocks for the pauses, so call it from a worker.
     pub fn save(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
-        let started = Instant::now();
-        let mut attempt = 1u8;
-        loop {
-            let error = match self.fetch_once(handle) {
-                Ok(saved) => return Ok(saved),
-                Err(error) => error,
-            };
-            if !error.is_retryable() || attempt >= self.config.max_attempts {
-                return Err(tried(error, attempt));
-            }
-            let backoff = self.config.retry_delay.saturating_mul(1 << (attempt - 1));
-            let wait = error
-                .retry_after_secs
-                .map_or(backoff, |secs| backoff.max(Duration::from_secs(secs)));
-            if started.elapsed().saturating_add(wait) > self.config.retry_budget {
-                return Err(tried(error, attempt));
-            }
-            std::thread::sleep(wait);
-            attempt += 1;
-        }
+        self.config.retry.run(
+            AiError::is_retryable,
+            || self.fetch_once(handle),
+            std::thread::sleep,
+        )
     }
 
     fn fetch_once(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
@@ -268,22 +248,6 @@ fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok())
-}
-
-/// The final error, saying how many tries were made when there was more than one.
-fn tried(error: AiError, attempts: u8) -> AiError {
-    if attempts <= 1 {
-        return error;
-    }
-    let retry_after = error.retry_after_secs;
-    let error = AiError::new(
-        error.kind,
-        format!("{} (after {attempts} tries)", error.message),
-    );
-    match retry_after {
-        Some(secs) => error.with_retry_after(secs),
-        None => error,
-    }
 }
 
 fn too_large() -> AiError {
