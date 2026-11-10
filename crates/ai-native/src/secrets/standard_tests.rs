@@ -216,3 +216,32 @@ fn no_config_folder_leaves_environment_and_keychain_only() {
         vec!["environment", "keychain", "encrypted file"]
     );
 }
+
+/// A path no file check can answer for: a NUL byte makes every platform refuse it.
+fn unchecked_path() -> PathBuf {
+    PathBuf::from("no\0such").join("secrets.enc.json")
+}
+
+/// A file check that fails counts as a file that may hold keys, never as no file.
+#[test]
+fn a_failed_file_check_counts_as_locked_not_missing() {
+    assert!(on_disk(Err(std::io::Error::other("denied"))));
+    assert!(!on_disk(Ok(false)));
+    let s = chain(
+        no_env(),
+        Box::new(NoKeychain),
+        Some(unchecked_path()),
+        None,
+        cheap(),
+    );
+    let e = s.get(&key("a")).unwrap_err();
+    assert!(e.message.contains("locked"), "{}", e.message);
+    assert!(s.delete(&key("a")).is_err());
+}
+
+/// The unlocked file store does not report a delete as done when it cannot check the file.
+#[test]
+fn an_unlocked_delete_that_cannot_check_the_file_fails() {
+    let s = EncryptedFileStore::with_params(unchecked_path(), SecretString::new("pw"), cheap());
+    assert!(s.delete(&key("a")).is_err());
+}

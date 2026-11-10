@@ -152,9 +152,18 @@ impl SecretStore for EncryptedFileStore {
         })
     }
 
+    /// Removes `key` from the file. No file is nothing to remove; a file that cannot even be
+    /// checked is an error, so a delete never reports success while the key may still be there.
     fn delete(&self, key: &SecretRef) -> Result<(), AiError> {
-        if !self.path.exists() {
-            return Ok(());
+        match self.path.try_exists() {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(_) => {
+                return Err(storage_error(
+                    "encrypted file",
+                    "the file could not be checked",
+                ));
+            }
         }
         self.modify(|p| {
             p.secrets.remove(key.as_str());

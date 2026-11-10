@@ -34,8 +34,14 @@ pub enum PassphraseNeed {
 pub fn passphrase_need() -> PassphraseNeed {
     need_for(
         KeychainStore::is_available(),
-        crate::paths::secrets_path().map(|path| path.exists()),
+        crate::paths::secrets_path().map(|path| on_disk(path.try_exists())),
     )
+}
+
+/// Whether a file check found the file. A check that fails (a folder that denies access, say) counts
+/// as present: the file may hold keys, so it is reported as locked, never as missing.
+fn on_disk(found: std::io::Result<bool>) -> bool {
+    found.unwrap_or(true)
 }
 
 /// The rule behind [`passphrase_need`]. `file` is `None` when the OS reports no config folder, so
@@ -86,9 +92,14 @@ struct LockedFile {
 }
 
 impl LockedFile {
+    /// Whether the file is there, counting a failed check as there (see [`on_disk`]).
+    fn present(&self) -> bool {
+        on_disk(self.path.try_exists())
+    }
+
     /// The error for any use that needs the file's contents. Never carries a secret.
     fn refuse(&self) -> AiError {
-        if self.path.exists() {
+        if self.present() {
             AiError::new(
                 ErrorKind::Auth,
                 "the saved keys file is locked; enter its passphrase to use it",
@@ -109,9 +120,9 @@ impl SecretStore for LockedFile {
         "encrypted file"
     }
 
-    /// No file means no key here; a file we cannot open is an error, not "absent".
+    /// No file means no key here; a file we cannot open, or cannot even check, is an error.
     fn get(&self, _key: &SecretRef) -> Result<Option<SecretString>, AiError> {
-        if self.path.exists() {
+        if self.present() {
             return Err(self.refuse());
         }
         Ok(None)
@@ -124,7 +135,7 @@ impl SecretStore for LockedFile {
 
     /// Nothing to remove without a file; a locked file cannot be changed.
     fn delete(&self, _key: &SecretRef) -> Result<(), AiError> {
-        if self.path.exists() {
+        if self.present() {
             return Err(self.refuse());
         }
         Ok(())
