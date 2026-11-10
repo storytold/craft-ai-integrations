@@ -145,6 +145,7 @@ impl SecretStore for EncryptedFileStore {
             .map(SecretString::new))
     }
 
+    /// Saves `value` under `key`, re-encrypting the whole file under the lock.
     fn set(&self, key: &SecretRef, value: &SecretString) -> Result<(), AiError> {
         self.modify(|p| {
             p.secrets
