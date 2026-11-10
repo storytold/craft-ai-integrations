@@ -132,10 +132,12 @@ impl std::fmt::Debug for EncryptedFileStore {
 }
 
 impl SecretStore for EncryptedFileStore {
+    /// Short store name for messages.
     fn name(&self) -> &'static str {
         "encrypted file"
     }
 
+    /// The secret for `key` from the decrypted file; a missing file holds none.
     fn get(&self, key: &SecretRef) -> Result<Option<SecretString>, AiError> {
         self.check_passphrase()?;
         Ok(self
