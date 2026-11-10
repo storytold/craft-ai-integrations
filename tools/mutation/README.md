@@ -22,6 +22,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py gm` | Generic selection masks: size, one channel, the empty-mask answer and the picture header. |
 | `mutation_check.py s21` | SAM 2.1 selection (`sam21_session.rs`, `detector.rs`): the Florence-2-large preflight, the detector name and the choice check. |
 | `mutation_check.py ca` | Upstream contract alignment: model-test address provenance, required inputs, and app-facing refusal before key access. Cases in `mutation_contract.py`. |
+| `mutation_check.py fa` | FANTASTICO adapter (`ai-fantastico`): the param allow-list, key redaction, stream line, size and cut-short checks, the event backlog and job caps, turn roles, the chat-model filter, streamed text not repeated, the request timeout; the account client's key rules (each key only where it belongs, no fallback address, expiring keys replaced, the session on every mint, a new key only for a rejected one), retries only where nothing was generated, the request's fields over the account's, an explicit `max_tokens` kept, the budget over each request and wait. Cases in `mutation_fantastico.py`. |
 | `mutation_check.py ps` | Node pack status report (`pack/status.rs`): links, hidden folders, names, the install record. |
 | `mutation_check.py vx` | Vertex express adapter (`ai-vertex/src/lib.rs`): the API key travels in the `x-goog-api-key` header, never in the request URL. |
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |

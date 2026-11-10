@@ -2046,6 +2046,7 @@ dependencies = [
  "craft-ai-engine-burn",
  "craft-ai-engine-candle",
  "craft-ai-engine-rten",
+ "craft-ai-fantastico",
  "craft-ai-features",
  "craft-ai-gemini",
  "craft-ai-media",
@@ -2191,6 +2192,16 @@ dependencies = [
  "rten-tensor",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "craft-ai-fantastico"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-core",
+ "craft-ai-http",
+ "serde_json",
+ "ureq 3.5.1",
 ]
 
 [[package]]

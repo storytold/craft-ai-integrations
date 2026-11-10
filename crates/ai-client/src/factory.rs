@@ -16,6 +16,7 @@ use craft_ai_artcraft::{ArtCraftConfig, ArtCraftProvider};
 use craft_ai_bfl::{BflConfig, BflProvider};
 use craft_ai_comfyui::{ComfyConfig, ComfyProvider, WorkflowLibrary};
 use craft_ai_core::{AiError, Connection, Locality, Provider, SecretString};
+use craft_ai_fantastico::FantasticoProvider;
 use craft_ai_features::GpuVendor;
 use craft_ai_gemini::{GeminiConfig, GeminiProvider};
 use craft_ai_media::{MediaStore, MediaStoreConfig, PersistingProvider};
@@ -137,6 +138,16 @@ impl ProviderFactory {
                 cfg.request_timeout = request;
             }
             Ok(Arc::new(BflProvider::new(cfg)?))
+        });
+        f.register(craft_ai_fantastico::PROVIDER_NAME, move |c, s| {
+            let mut cfg = craft_ai_fantastico::config_for(c, s)?;
+            if let Some((connect, request)) = timeouts {
+                // Each HTTP request is bounded, and so is the adapter's retrying around them.
+                cfg.connect_timeout = Some(connect);
+                cfg.request_timeout = Some(request);
+                cfg.budget = request;
+            }
+            Ok(Arc::new(FantasticoProvider::new(cfg)?))
         });
         f.register("gemini", move |c, s| {
             let base = c
@@ -489,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_knows_the_openai_family_bfl_and_gemini() {
+    fn standard_knows_the_openai_family_bfl_gemini_and_fantastico() {
         let f = ProviderFactory::standard();
         for n in [
             "openai",
@@ -497,6 +508,7 @@ mod tests {
             "lmstudio",
             "openrouter",
             "bfl",
+            "fantastico",
             "gemini",
         ] {
             assert!(f.knows(n), "{n}");
