@@ -25,9 +25,9 @@ use craft_ai_core::role::eligible;
 use craft_ai_core::{
     AiError, AppId, Backoff, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger,
     CostEstimate, Disclosure, ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality,
-    ModelId, Outcome, Pick, PickedBy, Provider, Request, Role, RoleId, Usage,
+    ModelId, Outcome, Pick, PickedBy, Provider, Request, Role, RoleId, SecretString, Usage,
 };
-use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
+use craft_ai_native::secrets::{SecretStore, secret_for, standard_store};
 use craft_ai_native::shared::SharedStore;
 use craft_ai_native::{CatalogFile, HistoryFile};
 
@@ -204,8 +204,8 @@ pub struct AiClient {
 }
 
 impl AiClient {
-    /// A client for `app` over the given shared store and key store, with the standard adapters,
-    /// no history file and the default retry rules.
+    /// A client for `app` over the given shared store and secret store, with the standard
+    /// adapters, no history file, the built-in catalog and the default retry rules.
     pub fn new(app: AppId, shared: SharedStore, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
             app,
@@ -221,15 +221,25 @@ impl AiClient {
         }
     }
 
-    /// The usual setup: the standard shared store location, and keys from the environment then the
-    /// OS keychain. (The passphrase-encrypted file is not included, because only the caller can
-    /// supply its passphrase; build a [`LayeredStore`] and use [`new`](Self::new) to add it.)
+    /// The usual setup: the standard shared store location, and keys from the environment, then
+    /// the OS keychain, then the encrypted secret file (locked, so a key kept only there is
+    /// reported as locked rather than missing). Use
+    /// [`standard_with_passphrase`](Self::standard_with_passphrase) when
+    /// [`passphrase_need`](craft_ai_native::secrets::passphrase_need) says to ask for one.
     pub fn standard(app: AppId) -> Result<Self, AiError> {
+        Self::standard_from(app, None)
+    }
+
+    /// As [`standard`](Self::standard), with the secret file unlocked by `passphrase`: the
+    /// fallback for a machine with no OS keychain. The passphrase is held only in memory.
+    pub fn standard_with_passphrase(app: AppId, passphrase: SecretString) -> Result<Self, AiError> {
+        Self::standard_from(app, Some(passphrase))
+    }
+
+    /// Shared body of the two standard constructors.
+    fn standard_from(app: AppId, passphrase: Option<SecretString>) -> Result<Self, AiError> {
         let shared = SharedStore::at_default_location()?;
-        let secrets = LayeredStore::new(vec![
-            Box::new(EnvStore::new()),
-            Box::new(KeychainStore::new()),
-        ]);
+        let secrets = standard_store(passphrase);
         let mut client = Self::new(app, shared, Arc::new(secrets));
         client.history = HistoryFile::at_default_location().map(Arc::new);
         Ok(client)
