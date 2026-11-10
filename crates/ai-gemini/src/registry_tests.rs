@@ -67,7 +67,7 @@ fn unpolled_terminal_jobs_survive_tracking_pressure() {
         let error = p
             .submit(&ModelId::new(DEFAULT_MODEL).unwrap(), &request())
             .unwrap_err();
-        assert_eq!(error.kind, ErrorKind::RateLimited);
+        assert_eq!(error.kind, ErrorKind::Quota);
         assert_eq!(lock(&p.jobs).unwrap().len(), MAX_TRACKED);
         for id in ids {
             assert_eq!(p.poll(&id).unwrap().state, state);

@@ -60,7 +60,7 @@ fn held_picture_bytes_refuse_new_fills() {
     admit(&mut jobs, now).unwrap();
     jobs.insert(id(2), finished(now, Duration::ZERO, 1));
     let error = admit(&mut jobs, now).unwrap_err();
-    assert_eq!(error.kind, ErrorKind::RateLimited);
+    assert_eq!(error.kind, ErrorKind::Quota);
     assert_eq!(jobs.len(), 3, "a byte refusal must not forget results");
     // Collecting one picture frees its bytes.
     jobs.get_mut(&id(0)).unwrap().events.clear();

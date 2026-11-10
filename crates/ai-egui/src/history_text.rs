@@ -10,7 +10,7 @@ pub fn failure_reason(kind: ErrorKind) -> &'static str {
         ErrorKind::InvalidRequest => "bad request",
         ErrorKind::Auth => "sign-in problem",
         ErrorKind::RateLimited => "rate limited",
-        ErrorKind::Quota => "out of credit",
+        ErrorKind::Quota => "out of credit or over a limit",
         ErrorKind::Network => "network problem",
         ErrorKind::Provider => "provider error",
         ErrorKind::Cancelled => "cancelled",
@@ -180,7 +180,7 @@ mod tests {
             outcome_label(Some(&Outcome::Failed {
                 kind: ErrorKind::Quota
             })),
-            "Failed (out of credit)"
+            "Failed (out of credit or over a limit)"
         );
         assert_eq!(outcome_label(None), "Not finished");
     }

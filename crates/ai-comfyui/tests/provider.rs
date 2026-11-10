@@ -154,6 +154,30 @@ fn video_workflow_waits_then_fetches_video() {
         Payload::Inline { media_type, data } if media_type.as_str() == "video/mp4" && data == MP4_BYTES));
 }
 
+/// Eight unfinished jobs fill the adapter. The ninth is refused as `Quota`, not `RateLimited`,
+/// because only polling moves a job on, so a caller that pauses and sends again frees nothing.
+#[test]
+fn a_full_adapter_refuses_as_quota_without_sending() {
+    let n = Arc::new(AtomicUsize::new(0));
+    let next = Arc::clone(&n);
+    let s = Server::start(move |r| match r.path.as_str() {
+        "/object_info" => Reply::Json(200, installed()),
+        "/prompt" => {
+            let i = next.fetch_add(1, Ordering::SeqCst);
+            Reply::Json(200, json!({"prompt_id": format!("job-{i}")}).to_string())
+        }
+        _ => Reply::Json(404, "{}".into()),
+    });
+    let p = provider(&s, "image.generate");
+    let model = ModelId::new("local-workflow").unwrap();
+    for _ in 0..8 {
+        p.submit(&model, &request("image.generate")).unwrap();
+    }
+    let err = p.submit(&model, &request("image.generate")).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Quota, "{}", err.message);
+    assert_eq!(n.load(Ordering::SeqCst), 8);
+}
+
 #[test]
 fn unsupported_request_makes_no_traffic() {
     let s = Server::start(|_| Reply::Json(200, "{}".into()));
