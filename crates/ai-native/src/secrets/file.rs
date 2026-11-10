@@ -106,6 +106,8 @@ impl EncryptedFileStore {
     }
 }
 
+/// Turns a crypto failure into a store error that names no secret: a wrong passphrase or damage
+/// is `Auth`, everything else a storage fault.
 fn map_crypto(e: CryptoError) -> AiError {
     match e {
         CryptoError::WrongKeyOrDamaged => AiError::new(
@@ -124,6 +126,7 @@ fn map_crypto(e: CryptoError) -> AiError {
 }
 
 impl std::fmt::Debug for EncryptedFileStore {
+    /// Shows the path only; the passphrase never reaches debug output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EncryptedFileStore")
             .field("path", &self.path)
@@ -132,10 +135,12 @@ impl std::fmt::Debug for EncryptedFileStore {
 }
 
 impl SecretStore for EncryptedFileStore {
+    /// Short store name for messages.
     fn name(&self) -> &'static str {
         "encrypted file"
     }
 
+    /// The secret for `key` from the decrypted file; a missing file holds none.
     fn get(&self, key: &SecretRef) -> Result<Option<SecretString>, AiError> {
         self.check_passphrase()?;
         Ok(self
@@ -145,6 +150,7 @@ impl SecretStore for EncryptedFileStore {
             .map(SecretString::new))
     }
 
+    /// Saves `value` under `key`, re-encrypting the whole file under the lock.
     fn set(&self, key: &SecretRef, value: &SecretString) -> Result<(), AiError> {
         self.modify(|p| {
             p.secrets
@@ -152,9 +158,18 @@ impl SecretStore for EncryptedFileStore {
         })
     }
 
+    /// Removes `key` from the file. No file is nothing to remove; a file that cannot even be
+    /// checked is an error, so a delete never reports success while the key may still be there.
     fn delete(&self, key: &SecretRef) -> Result<(), AiError> {
-        if !self.path.exists() {
-            return Ok(());
+        match self.path.try_exists() {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(_) => {
+                return Err(storage_error(
+                    "encrypted file",
+                    "the file could not be checked",
+                ));
+            }
         }
         self.modify(|p| {
             p.secrets.remove(key.as_str());
