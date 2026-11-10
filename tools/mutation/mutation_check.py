@@ -326,7 +326,6 @@ P10 = [
 # ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
 # dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
 WAIT = C + 'ai-client/src/client_wait.rs'
-FACTORY = C + 'ai-client/src/factory.rs'
 GEMINI_LIB = C + 'ai-gemini/src/lib.rs'
 OPENAI_JOBS = C + 'ai-openai/src/jobs.rs'
 SEND_GATE = 'error.kind == ErrorKind::RateLimited'
