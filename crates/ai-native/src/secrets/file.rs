@@ -106,6 +106,8 @@ impl EncryptedFileStore {
     }
 }
 
+/// Turns a crypto failure into a store error that names no secret: a wrong passphrase or damage
+/// is `Auth`, everything else a storage fault.
 fn map_crypto(e: CryptoError) -> AiError {
     match e {
         CryptoError::WrongKeyOrDamaged => AiError::new(
@@ -124,6 +126,7 @@ fn map_crypto(e: CryptoError) -> AiError {
 }
 
 impl std::fmt::Debug for EncryptedFileStore {
+    /// Shows the path only; the passphrase never reaches debug output.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EncryptedFileStore")
             .field("path", &self.path)
