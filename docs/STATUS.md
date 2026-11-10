@@ -39,16 +39,17 @@ live-tested.
   certificate store, so such software can read traffic, API keys included, and there is no switch back
   to bundled roots.
 - macOS (CI runs the tests on Linux and Windows), and the macOS and Linux keychains. The real keychain
-  test is `#[ignore]`d.
+  test is `#[ignore]`d; it passed by hand against Windows Credential Manager on 10/11/2026.
 - Model download from Hugging Face and automatic node-pack installation against the real services.
 - The built-in recommended-models catalogue (`catalog.json`) is empty. Which models to recommend per tool
   is a curation decision, so "Recommended" never appears until someone makes it.
 - App adoption beyond the limited local PhotoCraft Omni check. Document pixel preservation, saved-result integrity and undo/redo were not verified there. A route-resolution test or a Ready badge is not inference adoption.
 - The keychain is no longer called while the shared file lock is held, but how long a slow real keychain
   takes is unmeasured.
-- The encrypted-file secret store is not in `ConnectionManager::standard()`. It layers the environment and
-  the OS keychain only, so on a machine with no keychain (a bare Linux session) a key cannot be saved
-  until an app supplies its own passphrase and builds a `LayeredStore` with `EncryptedFileStore`.
+- The encrypted-file fallback on a machine with no keychain. `standard()` now layers the environment, the
+  OS keychain and the encrypted file, which stays locked until a host calls `standard_with_passphrase`;
+  `passphrase_need()` says when to ask. Scripted tests stand in for a missing keychain. No host asks for
+  the passphrase yet, and no bare Linux session has run it.
 
 ## Design limits
 
