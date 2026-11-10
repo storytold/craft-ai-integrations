@@ -22,7 +22,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-fake-body";
 fn config(dir: &Path) -> MediaStoreConfig {
     let mut cfg = MediaStoreConfig::new(dir);
     cfg.allow_loopback = true;
-    cfg.retry_delay = Duration::ZERO;
+    cfg.retry.first_delay = Duration::ZERO;
     cfg
 }
 
@@ -128,7 +128,7 @@ fn run(dir: &Path, link: PayloadHandle) -> JobSnapshot {
 /// `links`.
 fn run_all(dir: &Path, links: Vec<PayloadHandle>) -> JobSnapshot {
     let mut cfg = config(dir);
-    cfg.max_attempts = 1;
+    cfg.retry.max_attempts = 1;
     let store = Arc::new(MediaStore::new(cfg).unwrap());
     let fake = Arc::new(Fake {
         outputs: Mutex::new(links.into_iter().map(Payload::Handle).collect()),

@@ -2,117 +2,16 @@
 //! starts over when it did not, when the file changed, or when the host's piece does not fit.
 //! Scripted localhost servers only.
 #![allow(dead_code)]
+mod resume_support;
 #[path = "../../ai-openai/tests/support/mod.rs"]
 mod support;
 
-use craft_ai_core::{AiError, ErrorKind, Payload, PayloadHandle};
-use craft_ai_media::{MediaStore, MediaStoreConfig};
-use std::path::{Path, PathBuf};
+use craft_ai_core::ErrorKind;
+use resume_support::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use support::{Recorded, Reply, Server, http_bytes};
-
-/// A picture long enough to cut part way: a PNG signature, then filler.
-fn picture() -> Vec<u8> {
-    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-    bytes.extend((0..200u8).map(|i| b'a' + i % 26));
-    bytes
-}
-
-/// The same size, but a different file from its first bytes on: another resource entirely.
-fn other_picture() -> Vec<u8> {
-    let mut bytes = picture();
-    bytes[20] = b'Q';
-    bytes
-}
-
-/// The same size, but a different file: the host's newer version.
-fn newer_picture() -> Vec<u8> {
-    let mut bytes = picture();
-    let last = bytes.len() - 1;
-    bytes[last] = b'Z';
-    bytes
-}
-
-const CUT: usize = 40;
-
-/// A store config in `dir` that may reach localhost and does not wait between tries.
-fn config(dir: &Path) -> MediaStoreConfig {
-    let mut cfg = MediaStoreConfig::new(dir);
-    cfg.allow_loopback = true;
-    cfg.retry_delay = Duration::ZERO;
-    cfg
-}
-
-/// Saves the server's `/media/out.png` through a fresh store in `dir`.
-fn save(server: &Server, dir: &Path) -> Result<PayloadHandle, AiError> {
-    save_with(server, config(dir))
-}
-
-/// Saves the server's `/media/out.png` through a fresh store with `cfg`.
-fn save_with(server: &Server, cfg: MediaStoreConfig) -> Result<PayloadHandle, AiError> {
-    let uri = format!("{}/media/out.png", server.url.trim_end_matches("/v1"));
-    let Payload::Handle(handle) = Payload::handle(&uri, "image/png", None).unwrap() else {
-        unreachable!()
-    };
-    MediaStore::new(cfg).unwrap().save(&handle)
-}
-
-/// A redirect to `path` on the same server.
-fn moved(path: &'static str) -> Answer {
-    Box::new(move |_| http_bytes(302, &[("Location", path)], b""))
-}
-
-/// The bytes of the local file a saved handle points at.
-fn saved_bytes(handle: &PayloadHandle) -> Vec<u8> {
-    let path: PathBuf = url::Url::parse(&handle.uri)
-        .unwrap()
-        .to_file_path()
-        .unwrap();
-    std::fs::read(path).unwrap()
-}
-
-/// A 200 that promises the whole picture, sends the first `CUT` bytes and closes.
-fn cut_whole(extra_headers: &str) -> Reply {
-    let full = picture();
-    let mut raw = format!(
-        "HTTP/1.1 200 X\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n",
-        full.len()
-    )
-    .into_bytes();
-    raw.extend_from_slice(&full[..CUT]);
-    Reply::Raw(raw)
-}
-
-/// A 206 carrying `bytes[start..]` of `full`, labelled as starting at `label_start`.
-fn piece(full: &[u8], start: usize, label_start: usize) -> Reply {
-    let range = format!(
-        "bytes {label_start}-{}/{}",
-        label_start + full.len() - start - 1,
-        full.len()
-    );
-    http_bytes(206, &[("Content-Range", range.as_str())], &full[start..])
-}
-
-/// One scripted answer: the reply to send for a recorded request.
-type Answer = Box<dyn Fn(&Recorded) -> Reply + Send + Sync>;
-
-/// A server that answers each request with the next scripted reply, recording what it was sent.
-fn scripted(replies: Vec<Answer>) -> Server {
-    let next = Arc::new(AtomicUsize::new(0));
-    Server::start(move |request| {
-        let i = next.fetch_add(1, Ordering::SeqCst);
-        replies[i.min(replies.len() - 1)](request)
-    })
-}
-
-/// The `name` header of the server's `i`th request, if it was sent.
-fn sent(server: &Server, i: usize, name: &str) -> Option<String> {
-    server.requests.lock().unwrap()[i]
-        .header(name)
-        .map(str::to_owned)
-}
+use support::{Reply, http_bytes};
 
 /// With a strong ETag, the second try asks for the rest against that version and the pieces join.
 #[test]
@@ -157,11 +56,22 @@ fn last_modified_serves_as_the_version() {
 #[test]
 fn a_cut_download_without_a_version_starts_over() {
     let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_path_buf();
+    let between = Arc::new(AtomicUsize::new(usize::MAX));
+    let seen = Arc::clone(&between);
     let server = scripted(vec![
         Box::new(|_| cut_whole("")),
-        Box::new(|_| http_bytes(200, &[], &picture())),
+        Box::new(move |_| {
+            // Nothing is kept between tries: the cut copy was deleted.
+            seen.store(
+                std::fs::read_dir(&folder).unwrap().count(),
+                Ordering::SeqCst,
+            );
+            http_bytes(200, &[], &picture())
+        }),
     ]);
     let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(between.load(Ordering::SeqCst), 0);
     assert_eq!(saved_bytes(&saved), picture());
     assert_eq!(sent(&server, 1, "range"), None);
     assert_eq!(sent(&server, 1, "if-range"), None);
@@ -196,7 +106,7 @@ fn a_piece_that_does_not_fit_starts_over() {
     assert_eq!(sent(&server, 2, "range"), None);
 }
 
-/// A 416 for the rest drops the copy and the next try starts over.
+/// A 416 for the rest drops the copy, and the whole file is asked for again.
 #[test]
 fn a_refused_range_starts_over() {
     let dir = tempfile::tempdir().unwrap();
@@ -322,7 +232,7 @@ fn time_spent_downloading_does_not_use_the_retry_budget() {
         Box::new(|_| piece(&picture(), CUT, CUT)),
     ]);
     let mut cfg = config(dir.path());
-    cfg.retry_budget = Duration::ZERO;
+    cfg.retry.budget = Duration::ZERO;
     let saved = save_with(&server, cfg).unwrap();
     assert_eq!(saved_bytes(&saved), picture());
     assert_eq!(server.count(), 2);
@@ -454,4 +364,66 @@ fn an_overlong_cut_piece_is_not_kept() {
     assert_eq!(saved_bytes(&saved), picture());
     assert_eq!(server.count(), 3);
     assert_eq!(sent(&server, 2, "range"), None);
+}
+
+/// A link that redirects to a freshly signed address on every request (a new signature in the
+/// query) still carries on: the copy belongs to the path, and the version keeps files apart.
+#[test]
+fn a_freshly_signed_redirect_still_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        moved("/media/a.png?X-Amz-Signature=one"),
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        moved("/media/a.png?X-Amz-Signature=two"),
+        Box::new(|_| piece(&picture(), CUT, CUT)),
+    ]);
+    let saved = save(&server, dir.path()).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 4);
+    assert_eq!(sent(&server, 3, "range").as_deref(), Some("bytes=40-"));
+}
+
+/// When the host cannot send the rest (416), the whole file is asked for at once in the same
+/// try: with two tries, one real cut and one refused range still end in a saved file.
+#[test]
+fn a_refused_range_does_not_cost_a_try() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| cut_whole("ETag: \"v1\"\r\n")),
+        Box::new(|_| http_bytes(416, &[], b"")),
+        Box::new(|_| http_bytes(200, &[], &picture())),
+    ]);
+    let mut cfg = config(dir.path());
+    cfg.retry.max_attempts = 2;
+    let saved = save_with(&server, cfg).unwrap();
+    assert_eq!(saved_bytes(&saved), picture());
+    assert_eq!(server.count(), 3);
+    assert_eq!(sent(&server, 2, "range"), None);
+}
+
+/// The time limit covers the whole save, not each try: the second try gets only what is left,
+/// and no further pause or try follows once it has run out.
+#[test]
+fn the_whole_save_has_one_time_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![
+        Box::new(|_| {
+            std::thread::sleep(Duration::from_millis(200));
+            cut_whole("")
+        }),
+        Box::new(|_| {
+            std::thread::sleep(Duration::from_millis(800));
+            http_bytes(200, &[], &picture())
+        }),
+    ]);
+    let mut cfg = config(dir.path());
+    cfg.transfer_timeout = Duration::from_secs(1);
+    cfg.retry.first_delay = Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let error = save_with(&server, cfg).unwrap_err();
+    let took = started.elapsed();
+    assert!(error.message.contains("time limit"), "{error:?}");
+    assert!(took < Duration::from_millis(1400), "{took:?}");
+    assert_eq!(server.count(), 2);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }

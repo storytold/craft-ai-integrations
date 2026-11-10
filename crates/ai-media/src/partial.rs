@@ -8,11 +8,15 @@
 //!   a host whose file has changed sends the whole new file (200) rather than a piece that does
 //!   not fit. A weak or malformed `ETag` means no version at all: it may not be sent, and it
 //!   rules out falling back to the date.
-//! - A kept copy belongs to the address its bytes came from, after redirects. A piece from any
-//!   other address is not joined on, whatever its version says.
+//! - A kept copy belongs to the address its bytes came from, after redirects: scheme, host,
+//!   port and path. A piece from any other address is not joined on, whatever its version says.
+//!   The query is left out, because a signed link is signed afresh on every request (a new
+//!   `X-Amz-Date` or signature), and a host that serves different files on one path by query
+//!   still answers `If-Range` for the file asked for, so the version keeps them apart.
 //! - A piece (206) is taken only when its `Content-Range` starts exactly where the copy ends, it
 //!   names no other version than the kept one, and its total agrees with any total already
-//!   known. Anything else throws the piece and the kept copy away, and the next try starts over.
+//!   known. Anything else throws the piece and the kept copy away, and the whole file is asked
+//!   for at once, in the same try.
 //! - The whole file's length, once any answer has said it, is kept with the copy, so a later
 //!   piece that leaves its total unsaid (`*`) cannot end the file early.
 //! - A body that ends before the end its headers promised is a cut transfer, however cleanly the
@@ -32,15 +36,24 @@ pub(crate) struct Partial {
     pub temp: tempfile::NamedTempFile,
     /// Bytes already in `temp`.
     pub written: u64,
-    /// The `If-Range` value: a strong ETag, or a `Last-Modified` date. Always present for a
-    /// kept download, so a download without one is never resumed.
-    pub validator: String,
+    /// The `If-Range` value: a strong ETag, or a `Last-Modified` date. A copy without one is
+    /// never kept, so a download without a version is never resumed.
+    pub validator: Option<String>,
     /// The media type read from the first bytes, kept because a piece has no first bytes.
     pub media: &'static str,
-    /// The address the kept bytes came from, after redirects.
+    /// The address the kept bytes came from, after redirects, as [`address`] gives it.
     pub source: String,
     /// The whole file's length, once any answer has said it.
     pub whole: Option<u64>,
+}
+
+/// The address a kept copy belongs to: `url` without its query or fragment (see the module
+/// notes).
+pub(crate) fn address(url: &url::Url) -> String {
+    let mut at = url.clone();
+    at.set_query(None);
+    at.set_fragment(None);
+    at.into()
 }
 
 /// The version a host gave the file, fit for `If-Range`: a strong ETag, else a strong

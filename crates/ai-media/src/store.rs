@@ -9,15 +9,19 @@
 //!   temporary file in the directory. Anything that fails leaves no file behind.
 //! - The saved file's media type comes from its bytes. It must be the same kind (image, video,
 //!   audio) the provider declared.
-//! - A busy host is tried again, a few times, with a doubling pause. Only failures that can pass
-//!   are retried (no connection, a cut transfer, 408, 429, 500, 502, 503, 504); an expired or
-//!   refused link, a page that is not media, a file over the limit and a refused address are
-//!   answered at once. A pause that would take the time spent waiting past the retry budget is
-//!   not taken: the store gives up and says so, rather than holding the job's worker for an hour
-//!   because a host said `Retry-After: 3600`. Only pauses count against the budget; each
-//!   transfer has its own time limit, so a long download that is cut can still carry on.
+//! - A busy host is tried again, a few times, with a doubling pause (`Backoff::run`). Only
+//!   failures that can pass are retried (no connection, a cut transfer, 408, 429, 500, 502, 503,
+//!   504); an expired or refused link, a page that is not media, a file over the limit and a
+//!   refused address are answered at once. Only pauses count against the retry budget, so a
+//!   long download that is cut can still carry on.
+//! - The whole save, every try, redirect and pause included, ends within `transfer_timeout`:
+//!   each request gets only the time left. A host that keeps cutting the transfer cannot hold
+//!   the job's worker for the number of tries times that limit.
 //! - A cut transfer whose host named the file's version carries on where it stopped on the next
-//!   try, instead of starting over (see `partial.rs`). Without a version it starts over.
+//!   try, instead of starting over (see `partial.rs`). Without a version it starts over. When
+//!   the host's answer does not continue the kept copy (a 416, another version, a piece that
+//!   does not fit), the copy is dropped and the whole file is asked for at once, in the same
+//!   try: a host that has moved on is not a failure, and costs no pause or try.
 //! - A link that is clearly past its expiry (the earlier of the handle's `expires_at` and the
 //!   expiry signed into the link) is refused before any request, and is not retried: it will not
 //!   get better. Each redirect target is checked the same way before it is asked for.
@@ -26,12 +30,15 @@ use crate::expiry;
 use crate::partial::{self, Partial};
 use crate::sniff::{self, HEAD_LEN};
 use crate::url_rules;
-use craft_ai_core::retry::tried;
 use craft_ai_core::{AiError, Backoff, ErrorKind, MediaType, Payload, PayloadHandle};
+use errors::{Stop, disk, out_of_time, retry_after, too_large, transfer_failed};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use url::Url;
+
+#[path = "store_errors.rs"]
+mod errors;
 
 /// How and where media is saved.
 #[derive(Clone, Debug)]
@@ -41,23 +48,21 @@ pub struct MediaStoreConfig {
     /// Largest file accepted. Default 1 GiB.
     pub max_bytes: u64,
     pub connect_timeout: Duration,
-    /// Time allowed for the whole transfer, including redirects. Default 30 minutes.
+    /// Time allowed for the whole save: every try, redirect and pause between tries. Default 30
+    /// minutes.
     pub transfer_timeout: Duration,
     pub max_redirects: u8,
     /// Permit links to a loopback host (http or https). For a connection the user runs on this
     /// computer, and for tests. Other private addresses stay refused.
     pub allow_loopback: bool,
-    /// Most tries for one link, the first included. Clamped to 1..=5; 1 turns retries off.
-    pub max_attempts: u8,
-    /// Pause before the second try; each later pause doubles. Default 1 second.
-    pub retry_delay: Duration,
-    /// The most time the store will spend waiting between tries, in total (default 30 seconds).
-    pub retry_budget: Duration,
+    /// How a busy host is tried again (default [`Backoff::STANDARD`]: three tries, a one-second
+    /// first pause, 30 seconds of pauses at most). [`Backoff::NEVER`] turns retries off.
+    pub retry: Backoff,
 }
 
 impl MediaStoreConfig {
-    /// The defaults for saving into `dir`: 1 GiB, 15 s to connect, 30 minutes per transfer, three
-    /// redirects, no loopback, and three tries within 30 seconds.
+    /// The defaults for saving into `dir`: 1 GiB, 15 s to connect, 30 minutes per save, three
+    /// redirects, no loopback, and three tries within 30 seconds of pauses.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
             dir: dir.into(),
@@ -66,9 +71,7 @@ impl MediaStoreConfig {
             transfer_timeout: Duration::from_secs(30 * 60),
             max_redirects: 3,
             allow_loopback: false,
-            max_attempts: 3,
-            retry_delay: Duration::from_secs(1),
-            retry_budget: Duration::from_secs(30),
+            retry: Backoff::STANDARD,
         }
     }
 }
@@ -123,51 +126,47 @@ impl MediaStore {
     /// Downloads the link and returns a `file:` handle to the saved copy, trying again when the
     /// host is busy (see the module notes). Blocks for the pauses, so call it from a worker.
     pub fn save(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
+        // None only when the limit is too far off for the clock: then each request's own limit.
+        let deadline = Instant::now().checked_add(self.config.transfer_timeout);
+        let in_time = || deadline.is_none_or(|d| Instant::now() < d);
         // A cut download carried from one try to the next; dropped (and deleted) on return.
         let mut kept: Option<Partial> = None;
-        self.retrying(AiError::is_retryable, || self.fetch_once(handle, &mut kept))
-    }
-
-    /// Runs `call` under the store's retry rule. Unlike `Backoff::run`, only the pauses count
-    /// against the budget, so a long transfer that is cut can still carry on.
-    fn retrying<T>(
-        &self,
-        worth_retrying: fn(&AiError) -> bool,
-        mut call: impl FnMut() -> Result<T, AiError>,
-    ) -> Result<T, AiError> {
-        let backoff = Backoff {
-            max_attempts: self.config.max_attempts,
-            first_delay: self.config.retry_delay,
-            budget: self.config.retry_budget,
-        };
-        let mut paused = Duration::ZERO;
-        let mut attempt = 1u8;
-        loop {
-            let error = match call() {
-                Ok(value) => return Ok(value),
-                Err(error) => error,
-            };
-            let wait = if worth_retrying(&error) {
-                backoff.next_wait(attempt, &error, paused)
-            } else {
-                None
-            };
-            let Some(wait) = wait else {
-                return Err(tried(error, attempt));
-            };
-            std::thread::sleep(wait);
-            paused = paused.saturating_add(wait);
-            attempt = attempt.saturating_add(1);
-        }
+        self.config.retry.run(
+            |error: &AiError| error.is_retryable() && in_time(),
+            || {
+                self.fetch_once(handle, &mut kept, deadline)
+                    .map_err(|e| if in_time() { e } else { out_of_time() })
+            },
+            std::thread::sleep,
+        )
     }
 
     /// One try. With `kept` set it asks only for the missing bytes; whatever the answer, `kept`
-    /// ends up holding the download to resume next time, or nothing.
+    /// ends up holding the download to resume next time, or nothing. When the answer does not
+    /// continue the kept copy, the whole file is asked for at once.
     fn fetch_once(
         &self,
         handle: &PayloadHandle,
         kept: &mut Option<Partial>,
+        deadline: Option<Instant>,
     ) -> Result<PayloadHandle, AiError> {
+        let resuming = kept.is_some();
+        match self.ask(handle, kept, deadline) {
+            // The copy is gone now, so this asks without a range and cannot start over again.
+            Err(Stop::StartOver(_)) if resuming => {
+                self.ask(handle, kept, deadline).map_err(Stop::into_error)
+            }
+            answer => answer.map_err(Stop::into_error),
+        }
+    }
+
+    /// One request for the link, following redirects, and its body saved or kept.
+    fn ask(
+        &self,
+        handle: &PayloadHandle,
+        kept: &mut Option<Partial>,
+        deadline: Option<Instant>,
+    ) -> Result<PayloadHandle, Stop> {
         let mut url = Url::parse(&handle.uri)
             .map_err(|_| AiError::new(ErrorKind::Provider, "media link is not a valid URL"))?;
         let mut hops = 0u8;
@@ -179,24 +178,35 @@ impl MediaStore {
                 return Err(AiError::new(
                     ErrorKind::Provider,
                     format!("the media link expired at {}", expiry::utc_text(at)),
-                ));
+                )
+                .into());
             }
             url_rules::check_resolved(&url, self.config.allow_loopback)?;
+            let left = match deadline {
+                Some(d) => d.saturating_duration_since(Instant::now()),
+                None => self.config.transfer_timeout,
+            };
+            if left.is_zero() {
+                return Err(out_of_time().into());
+            }
+            let request = self
+                .agent
+                .get(url.as_str())
+                .config()
+                .timeout_global(Some(left));
             // The agent itself carries no proxy, so a loopback link can never leave this
             // machine; a hosted link may use the environment's proxy, hop by hop.
             let mut request = if url_rules::is_loopback(&url) {
-                self.agent.get(url.as_str())
+                request.build()
             } else {
-                self.agent
-                    .get(url.as_str())
-                    .config()
-                    .proxy(craft_ai_http::hosted_proxy())
-                    .build()
+                request.proxy(craft_ai_http::hosted_proxy()).build()
             };
-            if let Some(part) = kept.as_ref() {
+            if let Some(part) = kept.as_ref()
+                && let Some(version) = part.validator.as_deref()
+            {
                 request = request
                     .header("range", format!("bytes={}-", part.written))
-                    .header("if-range", part.validator.as_str());
+                    .header("if-range", version);
             }
             let response = request
                 .call()
@@ -208,15 +218,15 @@ impl MediaStore {
                     return Err(AiError::new(
                         ErrorKind::Provider,
                         "media link redirects too often",
-                    ));
+                    )
+                    .into());
                 }
                 let location = response
                     .headers()
                     .get("location")
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("");
-                let next = url_rules::redirect_target(&url, location)?;
-                url = next;
+                url = url_rules::redirect_target(&url, location)?;
                 continue;
             }
             if status == 429 {
@@ -225,25 +235,21 @@ impl MediaStore {
                 return Err(match retry_after(&response) {
                     Some(secs) => error.with_retry_after(secs),
                     None => error,
-                });
+                }
+                .into());
             }
             if matches!(status, 408 | 500 | 502 | 503 | 504) {
-                return Err(AiError::new(
-                    ErrorKind::Network,
-                    format!("the media host answered {status}"),
-                ));
+                let busy = format!("the media host answered {status}");
+                return Err(AiError::new(ErrorKind::Network, busy).into());
             }
             if status == 416 && kept.take().is_some() {
-                return Err(AiError::new(
-                    ErrorKind::Network,
+                return Err(Stop::StartOver(
                     "the media host could not send the rest; starting over",
                 ));
             }
             if !(200..300).contains(&status) {
-                return Err(AiError::new(
-                    ErrorKind::Provider,
-                    format!("media link answered {status}; it may have expired"),
-                ));
+                let refused = format!("media link answered {status}; it may have expired");
+                return Err(AiError::new(ErrorKind::Provider, refused).into());
             }
             break response;
         };
@@ -258,7 +264,7 @@ impl MediaStore {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
         if declared.is_some_and(|d| d > self.config.max_bytes) {
-            return Err(too_large());
+            return Err(too_large().into());
         }
         let version = partial::validator(response.headers());
         self.write(
@@ -277,33 +283,32 @@ impl MediaStore {
         kept: &mut Option<Partial>,
         source: &Url,
         response: ureq::http::Response<ureq::Body>,
-    ) -> Result<PayloadHandle, AiError> {
+    ) -> Result<PayloadHandle, Stop> {
         let Some(mut part) = kept.take() else {
             return Err(AiError::new(
                 ErrorKind::Network,
                 "the media host sent part of a file that was not asked for",
-            ));
+            )
+            .into());
         };
-        if part.source != source.as_str() {
-            return Err(AiError::new(
-                ErrorKind::Network,
+        if part.source != partial::address(source) {
+            return Err(Stop::StartOver(
                 "the media link now leads to another address; starting over",
             ));
         }
-        if partial::contradicts(&part.validator, response.headers()) {
-            return Err(AiError::new(
-                ErrorKind::Network,
+        let headers = response.headers();
+        if (part.validator.as_deref()).is_none_or(|v| partial::contradicts(v, headers)) {
+            return Err(Stop::StartOver(
                 "the media host sent a piece of another version; starting over",
             ));
         }
-        match partial::content_range(response.headers()) {
+        match partial::content_range(headers) {
             Some((start, end, total)) if start == part.written => {
                 if total.is_some_and(|t| t > self.config.max_bytes) {
-                    return Err(too_large());
+                    return Err(too_large().into());
                 }
                 if total.zip(part.whole).is_some_and(|(t, w)| t != w) {
-                    return Err(AiError::new(
-                        ErrorKind::Network,
+                    return Err(Stop::StartOver(
                         "the media host gave the file another size; starting over",
                     ));
                 }
@@ -311,8 +316,7 @@ impl MediaStore {
                 let body = response.into_body().into_reader();
                 self.fill(part, body, Some(end.saturating_add(1)), kept)
             }
-            _ => Err(AiError::new(
-                ErrorKind::Network,
+            _ => Err(Stop::StartOver(
                 "the media host sent a piece that does not continue the download; starting over",
             )),
         }
@@ -328,14 +332,14 @@ impl MediaStore {
         version: Option<String>,
         from: (&Url, Option<u64>),
         kept: &mut Option<Partial>,
-    ) -> Result<PayloadHandle, AiError> {
+    ) -> Result<PayloadHandle, Stop> {
         let mut head = [0u8; HEAD_LEN];
         let mut filled = 0;
         while filled < HEAD_LEN {
             match body.read(&mut head[filled..]) {
                 Ok(0) => break,
                 Ok(n) => filled += n,
-                Err(_) => return Err(transfer_failed()),
+                Err(_) => return Err(transfer_failed().into()),
             }
         }
         let (media, extension) = sniff::media_type(&head[..filled])
@@ -346,7 +350,8 @@ impl MediaStore {
             return Err(AiError::new(
                 ErrorKind::Provider,
                 "the link returned a different kind of media than the provider declared",
-            ));
+            )
+            .into());
         }
         let mut temp = tempfile::Builder::new()
             .prefix("craft-ai-")
@@ -359,9 +364,9 @@ impl MediaStore {
         let part = Partial {
             temp,
             written: filled as u64,
-            validator: version.unwrap_or_default(),
+            validator: version,
             media,
-            source: from.0.to_string(),
+            source: partial::address(from.0),
             whole: from.1,
         };
         self.fill(part, body, from.1, kept)
@@ -378,7 +383,13 @@ impl MediaStore {
         body: impl Read,
         end: Option<u64>,
         kept: &mut Option<Partial>,
-    ) -> Result<PayloadHandle, AiError> {
+    ) -> Result<PayloadHandle, Stop> {
+        // Only a copy with a version is kept; one without is dropped, which deletes it.
+        let keep = |part: Partial, kept: &mut Option<Partial>| {
+            if part.validator.is_some() {
+                *kept = Some(part);
+            }
+        };
         let room = self.config.max_bytes.saturating_sub(part.written);
         match std::io::copy(&mut body.take(room + 1), part.temp.as_file_mut()) {
             Ok(copied) => part.written += copied,
@@ -386,22 +397,20 @@ impl MediaStore {
                 // A failed read writes nothing, so the file's length is what arrived intact.
                 let on_disk = part.temp.as_file().metadata().map(|m| m.len());
                 if let Ok(len) = on_disk
-                    && !part.validator.is_empty()
                     && len <= self.config.max_bytes
                     && end.is_none_or(|e| len <= e)
                 {
                     part.written = len;
-                    *kept = Some(part);
+                    keep(part, kept);
                 }
-                return Err(transfer_failed());
+                return Err(transfer_failed().into());
             }
         }
         if part.written > self.config.max_bytes {
-            return Err(too_large());
+            return Err(too_large().into());
         }
         if end.is_some_and(|e| part.written > e) {
-            return Err(AiError::new(
-                ErrorKind::Network,
+            return Err(Stop::StartOver(
                 "the media host sent more than it said; starting over",
             ));
         }
@@ -409,10 +418,8 @@ impl MediaStore {
         let short =
             end.is_some_and(|e| part.written < e) || part.whole.is_some_and(|w| part.written < w);
         if short {
-            if !part.validator.is_empty() {
-                *kept = Some(part);
-            }
-            return Err(transfer_failed());
+            keep(part, kept);
+            return Err(transfer_failed().into());
         }
         let Partial {
             temp,
@@ -427,39 +434,9 @@ impl MediaStore {
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not keep the media file"))?;
         match Payload::handle(uri.as_str(), media, Some(size))? {
             Payload::Handle(saved) => Ok(saved),
-            _ => Err(AiError::new(
-                ErrorKind::Internal,
-                "could not describe the media file",
-            )),
+            _ => Err(AiError::new(ErrorKind::Internal, "could not describe the media file").into()),
         }
     }
-}
-
-/// Seconds from a `Retry-After` header. A date form is ignored, so the normal pause applies.
-fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<u64> {
-    response
-        .headers()
-        .get("retry-after")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<u64>().ok())
-}
-
-/// A transfer that stopped part way. Network, so the store tries again.
-fn transfer_failed() -> AiError {
-    AiError::new(ErrorKind::Network, "media transfer failed")
-}
-
-/// The disk would not take the file.
-fn disk(_: std::io::Error) -> AiError {
-    AiError::new(ErrorKind::Internal, "could not write the media file")
-}
-
-/// The error for media past the configured size limit.
-fn too_large() -> AiError {
-    AiError::new(
-        ErrorKind::Provider,
-        "the media is larger than the configured limit",
-    )
 }
 
 #[cfg(test)]

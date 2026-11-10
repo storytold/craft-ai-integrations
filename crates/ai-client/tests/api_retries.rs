@@ -228,7 +228,8 @@ fn a_success_resets_the_failure_run() {
     assert_eq!(faults.polls.load(Ordering::SeqCst), 6);
 }
 
-/// A poll that keeps failing ends the wait once the tries run out, with the count.
+/// A poll that keeps failing ends the wait once the tries run out, with the count, and the job
+/// is cancelled rather than left running unwatched.
 #[test]
 fn a_poll_that_keeps_failing_ends_the_wait() {
     let faults = Arc::new(Faults::default());
@@ -250,6 +251,7 @@ fn a_poll_that_keeps_failing_ends_the_wait() {
         error.message
     );
     assert_eq!(faults.polls.load(Ordering::SeqCst), 3);
+    assert_eq!(faults.cancels.load(Ordering::SeqCst), 1);
 }
 
 /// A poll error that cannot pass (the provider refused the key) ends the wait at once.
@@ -340,9 +342,9 @@ fn a_polls_retry_after_is_honoured() {
     assert!(times[1] - times[0] >= Duration::from_secs(1), "{times:?}");
 }
 
-/// The budget counts the failed poll itself: a slow poll that fails uses it up.
+/// A slow poll that fails (a timeout) does not use up the budget: it is still retried.
 #[test]
-fn the_budget_counts_the_failed_poll() {
+fn a_slow_failed_poll_is_still_retried() {
     let faults = Arc::new(Faults::default());
     faults.poll.lock().unwrap().push_back(Some(dropped()));
     *faults.poll_delay.lock().unwrap() = Duration::from_millis(150);
@@ -352,30 +354,52 @@ fn the_budget_counts_the_failed_poll() {
         budget: Duration::from_millis(100),
     };
     let (_dir, job) = started(faults.clone(), poll);
-    let error = job
-        .wait(Duration::ZERO, Duration::from_secs(5))
-        .unwrap_err();
-    assert_eq!(error.kind, ErrorKind::Network);
-    assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+    job.wait(Duration::ZERO, Duration::from_secs(5)).unwrap();
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 3);
 }
 
-/// A polling interval longer than the budget ends the wait instead of sleeping through it.
+/// A polling interval longer than the budget still retries a failed poll, and keeps the
+/// interval as the least pause.
 #[test]
-fn the_interval_counts_against_the_budget() {
+fn a_long_interval_still_retries() {
     let faults = Arc::new(Faults::default());
     faults.poll.lock().unwrap().push_back(Some(dropped()));
-    let (_dir, job) = started(faults.clone(), QUICK);
-    let began = Instant::now();
-    let error = job
-        .wait(Duration::from_secs(10), Duration::from_secs(30))
-        .unwrap_err();
-    assert_eq!(error.kind, ErrorKind::Network);
-    assert_eq!(faults.polls.load(Ordering::SeqCst), 1);
+    let poll = Backoff {
+        budget: Duration::from_millis(100),
+        ..QUICK
+    };
+    let (_dir, job) = started(faults.clone(), poll);
+    job.wait(Duration::from_millis(300), Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 3);
+    let times = faults.poll_times.lock().unwrap();
     assert!(
-        began.elapsed() < Duration::from_secs(3),
-        "{:?}",
-        began.elapsed()
+        times[1] - times[0] >= Duration::from_millis(300),
+        "{times:?}"
     );
+}
+
+/// The budget counts the pauses taken: one-second waits within a 2.5 s budget allow two
+/// pauses, although each alone would fit, so the wait ends after three polls.
+#[test]
+fn the_budget_counts_the_pauses() {
+    let faults = Arc::new(Faults::default());
+    faults.poll.lock().unwrap().extend([
+        Some(busy().with_retry_after(1)),
+        Some(busy().with_retry_after(1)),
+        Some(busy().with_retry_after(1)),
+    ]);
+    let poll = Backoff {
+        max_attempts: 5,
+        first_delay: Duration::ZERO,
+        budget: Duration::from_millis(2500),
+    };
+    let (_dir, job) = started(faults.clone(), poll);
+    let error = job
+        .wait(Duration::ZERO, Duration::from_secs(10))
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::RateLimited);
+    assert_eq!(faults.polls.load(Ordering::SeqCst), 3);
 }
 
 /// A pause that reaches the timeout ends the wait there: no further poll, and the job is
@@ -408,19 +432,14 @@ fn a_zero_timeout_does_not_poll() {
     assert_eq!(faults.cancels.load(Ordering::SeqCst), 1);
 }
 
-/// A failed poll that outlasts both the budget and the timeout ends as a timeout: the job is
-/// cancelled rather than left running.
+/// A failed poll that may not be retried and ends past the timeout is reported as a timeout,
+/// not as the poll's own error, and the job is cancelled rather than left running.
 #[test]
 fn a_failure_past_the_timeout_cancels_the_job() {
     let faults = Arc::new(Faults::default());
     faults.poll.lock().unwrap().push_back(Some(dropped()));
     *faults.poll_delay.lock().unwrap() = Duration::from_millis(150);
-    let poll = Backoff {
-        max_attempts: 5,
-        first_delay: Duration::ZERO,
-        budget: Duration::from_millis(100),
-    };
-    let (_dir, job) = started(faults.clone(), poll);
+    let (_dir, job) = started(faults.clone(), Backoff::NEVER);
     let error = job
         .wait(Duration::ZERO, Duration::from_millis(100))
         .unwrap_err();

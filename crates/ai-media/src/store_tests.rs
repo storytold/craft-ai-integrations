@@ -47,6 +47,7 @@ fn the_running_limit_stops_the_transfer_not_just_the_verdict() {
     let from = Url::parse("https://media.example/out.png").unwrap();
     let error = store
         .write(body, &declared, None, (&from, None), &mut None)
+        .map_err(errors::Stop::into_error)
         .unwrap_err();
     assert!(error.message.contains("larger than"));
     assert!(pulled.load(Ordering::SeqCst) <= 101 + 8192, "{pulled:?}");

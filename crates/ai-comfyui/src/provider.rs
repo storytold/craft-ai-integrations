@@ -262,8 +262,10 @@ impl Provider for ComfyProvider {
                 .count()
                 >= 8
             {
+                // `Quota`, not `RateLimited`: a job's state moves on only when the app polls it,
+                // so a pause before trying again frees nothing.
                 return Err(AiError::new(
-                    ErrorKind::RateLimited,
+                    ErrorKind::Quota,
                     "too many local workflow jobs",
                 ));
             }

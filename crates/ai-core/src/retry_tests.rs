@@ -165,3 +165,53 @@ fn run_asks_again_after_the_pause() {
     assert_eq!(calls.get(), 1);
     assert_eq!(out.unwrap_err().message, "busy");
 }
+
+/// The budget counts the pauses taken: one-second waits within a 2.5 s budget allow two pauses,
+/// although each alone would fit.
+#[test]
+fn run_budget_counts_the_pauses() {
+    let calls = Cell::new(0);
+    let pauses = RefCell::new(Vec::new());
+    let rule = Backoff {
+        max_attempts: 5,
+        first_delay: Duration::ZERO,
+        budget: Duration::from_millis(2500),
+    };
+    let out: Result<(), _> = rule.run(
+        |_| true,
+        || {
+            calls.set(calls.get() + 1);
+            Err(busy().with_retry_after(1))
+        },
+        |d| pauses.borrow_mut().push(d),
+    );
+    assert!(out.is_err());
+    assert_eq!(*pauses.borrow(), vec![Duration::from_secs(1); 2]);
+    assert_eq!(calls.get(), 3);
+}
+
+/// A slow call that fails does not use up the budget: the time spent calling is not a pause.
+#[test]
+fn run_slow_failure_is_still_retried() {
+    let calls = Cell::new(0);
+    let rule = Backoff {
+        max_attempts: 3,
+        first_delay: Duration::from_millis(10),
+        budget: Duration::from_millis(20),
+    };
+    let out = rule.run(
+        |_| true,
+        || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                std::thread::sleep(Duration::from_millis(40));
+                Err(busy())
+            } else {
+                Ok(())
+            }
+        },
+        |_| {},
+    );
+    assert!(out.is_ok());
+    assert_eq!(calls.get(), 2);
+}

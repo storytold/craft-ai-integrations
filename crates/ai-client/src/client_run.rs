@@ -53,6 +53,12 @@ impl AiClient {
     /// Starts the job. Refuses with [`ErrorKind::ConsentRequired`] if `ledger` does not cover the
     /// plan's disclosure. A plan for another app is an invalid request, refused before key access
     /// or provider and history side effects.
+    ///
+    /// Blocks the calling thread while it pauses between sends the service refused with a rate
+    /// limit (up to the send rule's budget, 30 seconds by default; see
+    /// [`with_retries`](Self::with_retries)). Call it from a worker, or turn the send retry off
+    /// with [`Backoff::NEVER`](craft_ai_core::Backoff::NEVER) before calling it from the
+    /// interface thread.
     pub fn start(&self, plan: &Plan, ledger: &ConsentLedger) -> Result<Job, AiError> {
         if plan.disclosure.app != self.app {
             return Err(AiError::invalid("this plan belongs to a different app"));

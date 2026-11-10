@@ -9,19 +9,7 @@ use std::sync::Arc;
 
 use craft_ai_core::Backoff;
 
-use super::{OPENAI_FAMILY, ProviderFactory, build_gemini, build_openai};
-
-/// Every name the standard factory builds with a worker-backed adapter.
-pub(super) const STANDARD_SENDERS: [&str; OPENAI_FAMILY.len() + 1] = {
-    let mut names = [""; OPENAI_FAMILY.len() + 1];
-    let mut i = 0;
-    while i < OPENAI_FAMILY.len() {
-        names[i] = OPENAI_FAMILY[i];
-        i += 1;
-    }
-    names[OPENAI_FAMILY.len()] = "gemini";
-    names
-};
+use super::{ProviderFactory, build_gemini, build_openai};
 
 impl ProviderFactory {
     /// Sets how the Gemini and OpenAI-compatible adapters this factory builds retry a send the

@@ -284,12 +284,12 @@ fn call(
         .map_err(|_| AiError::new(ErrorKind::Provider, "Gemini returned invalid JSON"))
 }
 
-/// One fill, start to finish: the picture, or why there is none.
 /// True while the job is known and not yet ended (a cancel ends it).
 fn still_wanted(jobs: &Jobs, job: &JobId) -> bool {
     lock(jobs).is_ok_and(|jobs| jobs.get(job).is_some_and(|s| !s.state.is_terminal()))
 }
 
+/// One fill, start to finish: the picture, or why there is none.
 fn run_fill(
     agent: &ureq::Agent,
     url: &str,

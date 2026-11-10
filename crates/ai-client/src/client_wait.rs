@@ -7,10 +7,13 @@
 //! - A poll that fails with a retryable error (a dropped connection, a rate limit) does not end
 //!   the wait. Polling only reads, so another try is safe. A run of such failures ends the wait
 //!   once [`POLL_RETRY`]'s tries or budget run out; a success resets the run. The budget counts
-//!   from the start of the first failed poll, and covers the whole pause, `interval` included.
+//!   the retry pauses only: not the failed polls (a poll that times out can still be retried)
+//!   and not `interval`, which is the floor of every pause (a long interval still retries).
 //! - The overall `timeout` still wins: no pause, retry or not, sleeps past it, and no poll starts
-//!   after it, the first included. A wait that ends past it, however it ends, cancels the job and
-//!   records the give-up.
+//!   after it, the first included.
+//! - A wait that gives up, at the timeout or because polls kept failing, cancels the job and
+//!   records the give-up, so a paid job is not left running unwatched. A refusal (a poll error
+//!   that cannot pass) is returned as it is.
 use std::time::{Duration, Instant};
 
 use craft_ai_core::retry::tried;
@@ -29,14 +32,21 @@ impl AiClient {
     /// Sets how sending a job retries after a rate limit (default [`Backoff::STANDARD`]) and how
     /// [`Job::wait`] retries a failed poll (default five tries within a minute). Pass
     /// [`Backoff::NEVER`] to turn either off. The send rule also goes to the worker-backed
-    /// adapters the current factory builds (see
-    /// [`ProviderFactory::set_send_retry`](crate::ProviderFactory::set_send_retry)), so call
-    /// this after [`with_factory`](Self::with_factory).
+    /// adapters the factory builds (see
+    /// [`ProviderFactory::set_send_retry`](crate::ProviderFactory::set_send_retry)), including a
+    /// factory set later with [`with_factory`](Self::with_factory).
     pub fn with_retries(mut self, submit: Backoff, poll: Backoff) -> Self {
         self.submit_retry = submit;
         self.poll_retry = poll;
+        self.send_rule_chosen = true;
         self.factory.set_send_retry(submit);
         self
+    }
+
+    /// True once [`with_retries`](Self::with_retries) chose the send rule, so a factory set
+    /// afterwards takes it too. Until then a factory keeps the rule it was built with.
+    pub(crate) fn send_rule_chosen(&self) -> bool {
+        self.send_rule_chosen
     }
 
     /// The submit retry rule [`start`](Self::start) uses.
@@ -63,15 +73,14 @@ impl Job {
         let deadline = Instant::now() + timeout;
         let mut events = Vec::new();
         let mut failures = 0u8;
-        let mut streak = Instant::now();
+        let mut paused = Duration::ZERO;
         loop {
             if Instant::now() >= deadline {
-                return Err(self.give_up());
+                return Err(self.give_up(took_too_long()));
             }
-            let asked = Instant::now();
             let pause = match self.poll() {
                 Ok(snap) => {
-                    failures = 0;
+                    (failures, paused) = (0, Duration::ZERO);
                     events.extend(snap.events);
                     if snap.state.is_terminal() {
                         return Ok(Finished {
@@ -83,20 +92,16 @@ impl Job {
                     interval
                 }
                 Err(error) if error.is_retryable() => {
-                    if failures == 0 {
-                        streak = asked;
-                    }
                     failures = failures.saturating_add(1);
-                    let elapsed = streak.elapsed();
-                    let pause = self
-                        .poll_retry
-                        .next_wait(failures, &error, elapsed)
-                        .map(|wait| wait.max(interval))
-                        .filter(|pause| elapsed.saturating_add(*pause) <= self.poll_retry.budget);
-                    match pause {
-                        Some(pause) => pause,
-                        None if Instant::now() >= deadline => return Err(self.give_up()),
-                        None => return Err(tried(error, failures)),
+                    match self.poll_retry.next_wait(failures, &error, paused) {
+                        Some(wait) => {
+                            paused = paused.saturating_add(wait);
+                            wait.max(interval)
+                        }
+                        None if Instant::now() >= deadline => {
+                            return Err(self.give_up(took_too_long()));
+                        }
+                        None => return Err(self.give_up(tried(error, failures))),
                     }
                 }
                 Err(error) => return Err(error),
@@ -106,12 +111,18 @@ impl Job {
         }
     }
 
-    /// Ends a wait that ran out of time: asks the provider to stop and records the give-up.
-    fn give_up(&self) -> AiError {
+    /// Ends a wait that gave up: asks the provider to stop, records the give-up, and returns
+    /// `error`.
+    fn give_up(&self, error: AiError) -> AiError {
         let _ = self.cancel();
         if let Some(recorder) = &self.recorder {
             recorder.gave_up();
         }
-        AiError::new(ErrorKind::Network, "the job took too long")
+        error
     }
+}
+
+/// The error for a wait that reached its timeout.
+fn took_too_long() -> AiError {
+    AiError::new(ErrorKind::Network, "the job took too long")
 }

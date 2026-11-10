@@ -73,7 +73,8 @@ pub(crate) fn lock(jobs: &Jobs) -> Result<MutexGuard<'_, HashMap<JobId, Slot>>, 
 ///
 /// Expired uncollected jobs are always forgotten. Delivered finished jobs are forgotten only when
 /// the count is full, so a caller can still poll a result it has already seen. Running jobs are
-/// never forgotten.
+/// never forgotten. A full registry is `Quota`, not `RateLimited`: only the caller collecting a
+/// result frees room, so trying again after a pause cannot help.
 pub(crate) fn admit(jobs: &mut HashMap<JobId, Slot>, now: Instant) -> Result<(), AiError> {
     jobs.retain(|_, s| {
         !s.ended
@@ -84,13 +85,13 @@ pub(crate) fn admit(jobs: &mut HashMap<JobId, Slot>, now: Instant) -> Result<(),
     }
     if jobs.len() >= MAX_TRACKED {
         return Err(AiError::new(
-            ErrorKind::RateLimited,
+            ErrorKind::Quota,
             "too many Gemini results are waiting; check a finished fill first",
         ));
     }
     if jobs.values().map(Slot::held_bytes).sum::<u64>() >= MAX_HELD_BYTES {
         return Err(AiError::new(
-            ErrorKind::RateLimited,
+            ErrorKind::Quota,
             "finished Gemini pictures are waiting to be collected; check a finished fill first",
         ));
     }
