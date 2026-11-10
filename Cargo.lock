@@ -2055,7 +2055,9 @@ dependencies = [
  "craft-ai-seedance",
  "craft-ai-vertex",
  "png",
+ "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "url",
 ]

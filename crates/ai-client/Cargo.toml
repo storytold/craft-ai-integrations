@@ -38,6 +38,11 @@ craft-ai-engine-rten = { path = "../ai-engine-rten", package = "craft-ai-engine-
 craft-ai-engine-burn = { path = "../ai-engine-burn", package = "craft-ai-engine-burn", optional = true }
 # Reads `file:` addresses to measure what the consent prompt shows.
 url = "2"
+# Run records (`run_record.rs`): JSON lines with a SHA-256 of each result. sha2 0.11 is already
+# in the tree through craft-ai-comfy-env.
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.11"
 
 [dev-dependencies]
 serde_json.workspace = true

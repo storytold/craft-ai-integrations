@@ -5,7 +5,12 @@
 //! cargo run -p craft-ai-client --example live_openai -- probe
 //! cargo run -p craft-ai-client --example live_openai -- text
 //! cargo run -p craft-ai-client --example live_openai -- image <out.png>
+//! cargo run -p craft-ai-client --example live_openai -- text --record <runs.jsonl>
 //! ```
+//!
+//! `--record <file>` appends a [`RunRecord`] line for the run: what was sent (kinds and sizes, not
+//! the prompt), where, how long it took, and each result's type, size and SHA-256. That line is the
+//! evidence a real run leaves; it is refused if it would contain the key.
 //!
 //! It works on a copy of the shared store in a temporary folder, so the person's real connections,
 //! bindings and history are never written. The key is read through the same keychain code the apps
@@ -16,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use craft_ai_client::{AiClient, ProviderFactory, RoleStatus, ToolDesk};
+use craft_ai_client::{AiClient, ProviderFactory, RoleStatus, RunRecord, ToolDesk};
 use craft_ai_core::{
     Auth, CapabilityId, ConsentLedger, Event, InputRole, JobState, Payload, Request, Role, RoleId,
     SecretString,
@@ -32,6 +37,7 @@ struct Say {
 }
 
 impl Say {
+    /// Prints `text` with the key replaced, and keeps a copy for the final leak check.
     fn line(&self, text: impl AsRef<str>) {
         let mut text = text.as_ref().to_owned();
         if !self.key.is_empty() && text.contains(&self.key) {
@@ -42,8 +48,12 @@ impl Say {
     }
 }
 
+/// Runs the chosen mode (`probe`, `text` or `image`) on a copy of the store, prints what happened
+/// through `Say`, appends a run record when `--record` is given, then proves the real store and
+/// every written file are free of the key.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let record_to = take_record_flag(&mut args)?;
     let mode = args.first().map(String::as_str).unwrap_or("probe");
 
     // The real store, read only. Its bytes are compared at the end to prove it was not touched.
@@ -174,8 +184,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The person said go to this run, so the run grants consent for exactly this plan.
     let mut ledger = ConsentLedger::default();
     ledger.grant(plan.disclosure());
+    let started = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
+    let clock = std::time::Instant::now();
     let job = client.start(&plan, &ledger)?;
     let done = job.wait(Duration::from_millis(500), Duration::from_secs(180))?;
+    if let Some(path) = &record_to {
+        let line =
+            RunRecord::new(&plan, &done, started, clock.elapsed()).to_json_line(&[&say.key])?;
+        append_line(path, &line)?;
+        say.line(format!("run recorded in {}", path.display()));
+    }
     say.line(format!("job ended: {:?}", short(&done.state)));
     let mut wrote: Vec<PathBuf> = vec![dir.path().to_owned()];
     for event in &done.events {
@@ -203,6 +221,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     say.line(format!("history entries written: {entries}"));
     wrote.push(dir.path().to_owned());
     finish(&say, &real, &before, &wrote)
+}
+
+/// Removes `--record <file>` from the arguments and returns the file.
+fn take_record_flag(args: &mut Vec<String>) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    let Some(at) = args.iter().position(|a| a == "--record") else {
+        return Ok(None);
+    };
+    if at + 1 >= args.len() {
+        return Err("--record needs a file".into());
+    }
+    let path = PathBuf::from(args.remove(at + 1));
+    args.remove(at);
+    Ok(Some(path))
+}
+
+/// Appends one line, so several runs collect in one file.
+fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{line}")
 }
 
 fn short(state: &JobState) -> String {
