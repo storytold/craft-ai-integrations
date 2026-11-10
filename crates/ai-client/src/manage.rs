@@ -24,7 +24,7 @@ use craft_ai_core::{
     AiError, Auth, Connection, ConnectionDraft, ConnectionId, DraftError, ErrorKind, KeyChange,
     ModelInfo, SecretRef, SecretString, StoreFile,
 };
-use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
+use craft_ai_native::secrets::{SecretStore, secret_for, standard_store};
 use craft_ai_native::shared::SharedStore;
 
 use crate::assignments::{
@@ -124,6 +124,7 @@ pub struct ConnectionManager {
 }
 
 impl ConnectionManager {
+    /// A manager over the given shared store and secret store, testing with the probing adapters.
     pub fn new(shared: SharedStore, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
             shared,
@@ -132,15 +133,24 @@ impl ConnectionManager {
         }
     }
 
-    /// The usual setup: the standard store location, keys in the environment (read only) then the
-    /// OS keychain.
+    /// The usual setup: the standard store location, keys in the environment (read only), then the
+    /// OS keychain, then the encrypted secret file, locked. On a machine with no keychain a save
+    /// is refused with a request for a passphrase; use
+    /// [`standard_with_passphrase`](Self::standard_with_passphrase) once the person gives one.
     pub fn standard() -> Result<Self, AiError> {
+        Self::standard_from(None)
+    }
+
+    /// As [`standard`](Self::standard), with the secret file unlocked by `passphrase`, so keys
+    /// can be saved where there is no OS keychain. The passphrase is held only in memory.
+    pub fn standard_with_passphrase(passphrase: SecretString) -> Result<Self, AiError> {
+        Self::standard_from(Some(passphrase))
+    }
+
+    /// Shared body of the two standard constructors.
+    fn standard_from(passphrase: Option<SecretString>) -> Result<Self, AiError> {
         let shared = SharedStore::at_default_location()?;
-        let secrets = LayeredStore::new(vec![
-            Box::new(EnvStore::new()),
-            Box::new(KeychainStore::new()),
-        ]);
-        Ok(Self::new(shared, Arc::new(secrets)))
+        Ok(Self::new(shared, Arc::new(standard_store(passphrase))))
     }
 
     /// Replaces the factory used by the Test button, to add adapters.
