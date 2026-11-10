@@ -65,11 +65,8 @@ fn read_file(uri: &str, max: u64) -> Result<Vec<u8>, AiError> {
         ));
     }
     let path = url.to_file_path().map_err(|_| unreadable())?;
-    let file = std::fs::File::open(path).map_err(|_| unreadable())?;
+    let file = open_plain_file(&path).map_err(|_| unreadable())?;
     let meta = file.metadata().map_err(|_| unreadable())?;
-    if !meta.is_file() {
-        return Err(unreadable());
-    }
     if meta.len() > max {
         return Err(too_big());
     }
@@ -77,6 +74,22 @@ fn read_file(uri: &str, max: u64) -> Result<Vec<u8>, AiError> {
     // grows (or lies about its length) is still stopped.
     let data = read_bounded(file, max).map_err(|_| unreadable())?;
     Ok(data)
+}
+
+/// Opens `path` for reading and refuses anything but a plain file, judged on the open handle so
+/// nothing can be swapped in between. On Unix the open does not block (`O_NONBLOCK`), so a pipe or
+/// device at the path is refused at once instead of stalling the caller; it has no effect on the
+/// reads of a plain file.
+pub(crate) fn open_plain_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK);
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a plain file"));
+    }
+    Ok(file)
 }
 
 /// At most `max + 1` bytes of `reader`: one past the limit is enough to see it was crossed, and
@@ -118,6 +131,21 @@ mod tests {
             "asked for {} bytes of an endless reader",
             endless.read
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_is_refused_at_once_not_waited_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.png");
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        if !made.is_ok_and(|s| s.success()) {
+            eprintln!("skipped: mkfifo is not available");
+            return;
+        }
+        let uri = url::Url::from_file_path(&path).unwrap().to_string();
+        assert!(read_file(&uri, 100).is_err());
+        assert!(open_plain_file(&path).is_err());
     }
 
     #[test]

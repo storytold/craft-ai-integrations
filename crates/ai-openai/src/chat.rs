@@ -163,13 +163,14 @@ pub(crate) fn parse_completion(v: &Value) -> Result<Completion, AiError> {
     })
 }
 
+/// The server's own error message, whole. It is shortened by [`crate::http::scrub`], after the key
+/// is redacted, so a cut can never leave part of a key behind.
 pub(crate) fn error_text(e: &Value) -> String {
-    let msg = e
-        .get("message")
+    e.get("message")
         .and_then(Value::as_str)
         .or_else(|| e.as_str())
-        .unwrap_or("the server reported an error");
-    msg.chars().take(300).collect()
+        .unwrap_or("the server reported an error")
+        .to_owned()
 }
 
 /// Turns a finished reply into events: structured replies become one JSON output.

@@ -22,6 +22,7 @@ craft-ai-openai = { path = "../ai-openai", package = "craft-ai-openai" }
 craft-ai-artcraft = { path = "../ai-artcraft", package = "craft-ai-artcraft" }
 craft-ai-bfl = { path = "../ai-bfl", package = "craft-ai-bfl" }
 craft-ai-fantastico = { path = "../ai-fantastico", package = "craft-ai-fantastico" }
+craft-ai-gemini = { path = "../ai-gemini", package = "craft-ai-gemini" }
 craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 craft-ai-media = { path = "../ai-media", package = "craft-ai-media" }
 craft-ai-comfyui = { path = "../ai-comfyui", package = "craft-ai-comfyui" }
@@ -36,11 +37,12 @@ craft-ai-engine-candle = { path = "../ai-engine-candle", package = "craft-ai-eng
 chrono = { workspace = true }
 craft-ai-engine-rten = { path = "../ai-engine-rten", package = "craft-ai-engine-rten", optional = true }
 craft-ai-engine-burn = { path = "../ai-engine-burn", package = "craft-ai-engine-burn", optional = true }
+# Reads `file:` addresses to measure what the consent prompt shows.
+url = "2"
 
 [dev-dependencies]
 serde_json.workspace = true
 tempfile = "3"
-url = "2"
 png = "0.18"
 
 [lints]

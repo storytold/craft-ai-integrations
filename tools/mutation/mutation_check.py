@@ -122,7 +122,9 @@ U3 = [
     ('host-suffix-by-text', HOSTS, 'host.len() > rest.len() + 1 && host.ends_with(&format!(".{rest}"))', 'host.ends_with(rest)', E, 'source_basics', 'host_pattern_matches'),
     ('host-exact-by-suffix', HOSTS, 'None => host == pattern,', 'None => host.ends_with(&pattern),', E, 'source_basics', 'host_pattern_matches'),
     ('subdomain-pattern-matches-apex', HOSTS, 'host.len() > rest.len() + 1 && host.ends_with(&format!(".{rest}"))', 'host == rest || host.ends_with(&format!(".{rest}"))', E, 'source_basics', 'host_pattern_matches'),
-    ('github-gets-a-token-host', HOSTS, 'download: &["github.com", ".githubusercontent.com"],\n                token_host: None,', 'download: &["github.com", ".githubusercontent.com"],\n                token_host: Some("github.com"),', E, 'source_basics', 'names_its_own_hosts'),
+    ('github-gets-a-token-host', HOSTS, 'download: &["api.github.com", "github.com", ".githubusercontent.com"],\n                token_host: None,', 'download: &["api.github.com", "github.com", ".githubusercontent.com"],\n                token_host: Some("github.com"),', E, 'source_basics', 'names_its_own_hosts'),
+    ('github-release-api-host-missing', HOSTS, 'download: &["api.github.com", "github.com", ".githubusercontent.com"],', 'download: &["github.com", ".githubusercontent.com"],', E, 'lib', 'github_release_api_uses_the_default_host'),
+    ('github-release-api-host-widened', HOSTS, 'download: &["api.github.com", "github.com", ".githubusercontent.com"],', 'download: &[".github.com", "github.com", ".githubusercontent.com"],', E, 'lib', 'github_release_api_does_not_trust'),
     ('hugging-face-token-host-widened', HOSTS, 'download: &["huggingface.co", ".huggingface.co", ".hf.co"],\n                token_host: Some("huggingface.co"),', 'download: &["huggingface.co", ".huggingface.co", ".hf.co"],\n                token_host: Some(".hf.co"),', E, 'source_basics', 'names_its_own_hosts'),
     ('pickle-runs-no-code', FORMAT, 'self == Self::Pickle', 'false', E, 'source_basics', 'extension_and_pickle'),
     ('bin-not-pickle', FORMAT, '"ckpt" | "pt" | "pth" | "bin" | "pkl" | "pickle"', '"ckpt" | "pt" | "pth" | "pkl" | "pickle"', E, 'source_basics', 'extension_and_pickle'),
@@ -261,6 +263,15 @@ UPLOAD_ORDER_NEW = """let source = self.read_role(request, InputRole::Source)?;
 MASK_JPEG_OLD = """|| (role == InputRole::Source
                                 && h.media_type.as_str() == "image/jpeg") => {}"""
 MASK_JPEG_NEW = """|| h.media_type.as_str() == "image/jpeg" => {}"""
+START_IMAGE_OLD = """let source = self.read_role(request, InputRole::Source)?;
+            let source = self.upload(InputRole::Source, &source)?;"""
+# A video workflow's start image read straight from the request: no byte check, no size limit.
+START_IMAGE_NEW = """let source = match &request.inputs.iter().find(|i| i.role == InputRole::Source).ok_or_else(|| AiError::invalid("missing source input"))?.payload {
+                craft_ai_core::Payload::Inline { media_type, data } => crate::input::Image { media_type: media_type.as_str().to_owned(), data: data.clone() },
+                craft_ai_core::Payload::Handle(h) => crate::input::Image { media_type: h.media_type.as_str().to_owned(), data: std::fs::read(url::Url::parse(&h.uri).map_err(|_| AiError::invalid("bad address"))?.to_file_path().map_err(|_| AiError::invalid("bad address"))?).map_err(|_| AiError::invalid("unreadable"))? },
+                _ => return Err(AiError::invalid("an image is needed")),
+            };
+            let source = self.upload(InputRole::Source, &source)?;"""
 # p4: media going to and coming from ComfyUI is judged by its bytes (crates/ai-comfyui).
 P4 = [
     ('output-not-checked', CF_OUT, 'if sniff::media_type(head).map(|(media, _)| media) == Some(expected) {', 'if true {', CF, 'media_checks', 'an_output_that_is'),
@@ -281,6 +292,7 @@ P4 = [
     ('input-file-read-unbounded', CF_IN, 'reader.take(max.saturating_add(1))', 'reader.take(u64::MAX)', CF, 'lib', 'a_reader_is_read_no_further'),
     ('input-sent-before-all-checked', CF_PROV, UPLOAD_ORDER_OLD, UPLOAD_ORDER_NEW, CF, 'media_checks', 'never_uploaded'),
     ('input-jpeg-mask-accepted', CF_FLOW, MASK_JPEG_OLD, MASK_JPEG_NEW, CF, 'media_checks', 'mask_must_be_a_png'),
+    ('start-image-sent-unchecked', CF_PROV, START_IMAGE_OLD, START_IMAGE_NEW, CF, 'video_start_image', 'never_uploaded'),
 ]
 
 MEDIA = C + 'ai-media/src/store.rs'
@@ -318,10 +330,10 @@ V1 = [
     ('launcher-default-ignored', STORE, '&[overrides, self.defaults.as_slice()],', '&[overrides],', CL, 'one_binding', ''),
     ('app-choice-ignored', STORE, '&[overrides, self.defaults.as_slice()],', '&[self.defaults.as_slice()],', CL, 'one_binding', ''),
     ('default-beats-app-choice', STORE, '&[overrides, self.defaults.as_slice()],', '&[self.defaults.as_slice(), overrides],', CL, 'one_binding', ''),
-    ('status-reads-one-fixed-app', CLIENT, STATUS_RESOLVE, 'let resolved = match store.resolve(&AppId::new("launcher").unwrap_or_else(|_| self.app.clone()), role) {', CL, 'one_binding', ''),
+    ('status-reads-one-fixed-app', CLIENT, STATUS_RESOLVE + '\n            Ok(r) => r,\n            Err(e) => return unavailable(', 'let resolved = match store.resolve(&AppId::new("launcher").unwrap_or_else(|_| self.app.clone()), role) {\n            Ok(r) => r,\n            Err(e) => return unavailable(', CL, 'one_binding', ''),
     ('unbound-reads-as-broken', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(r) => write!(f, \"'{r}' is broken\"),", CL, 'one_binding', ''),
     ('unbound-hides-the-tool', ROLE, "Self::Unbound(r) => write!(f, \"no model is chosen for '{r}'\"),", "Self::Unbound(_) => write!(f, \"no model is chosen\"),", CL, 'one_binding', ''),
-    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(true)', '            let _ = binding;\n            Ok(true)', CL, 'one_binding', ''),
+    ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(())', '            let _ = binding;\n            Ok(())', CL, 'one_binding', ''),
 ]
 
 PICK_G = C + 'ai-client/src/picker_groups.rs'
@@ -369,7 +381,7 @@ V3 = [
     ('service-claims-a-download', OPT, 'usable: true,\n                    size_bytes: None,', 'usable: true,\n                    size_bytes: Some(1),', FE, 'options', ''),
     ('size-dropped-in-the-picker', PICK_G, 'size_bytes: option.size_bytes,', 'size_bytes: None,', CL, 'picker', ''),
     ('fix-group-claims-a-download', PICK_G, '            size_bytes: None,', '            size_bytes: Some(1),', CL, 'picker', ''),
-    ('choose-skips-the-check', TOOLS_RS, '            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)\n                .map_err(|e| AiError::invalid(e.to_string()))?;\n            set_default(store, binding);', '            resolve(role, &[std::slice::from_ref(&binding)], &store.connections)\n                .ok();\n            set_default(store, binding);', CL, 'popup', ''),
+    ('choose-skips-the-check', TOOLS_RS, 'let resolved = resolve(role, &[std::slice::from_ref(&binding)], &store.connections)\n                .map_err(|e| Stop::Refused(AiError::invalid(e.to_string())))?;', 'let Ok(resolved) = resolve(role, &[std::slice::from_ref(&binding)], &store.connections) else {\n                set_default(store, binding);\n                return Ok(());\n            };', CL, 'popup', ''),
     ('popup-shown-when-ready', TOOLS_RS, 'let RoleStatus::Unavailable { reason } = self.client.status(role) else {\n            return Ok(None);\n        };', 'let reason = match self.client.status(role) {\n            RoleStatus::Unavailable { reason } => reason,\n            RoleStatus::Ready(_) => String::new(),\n        };', CL, 'popup', ''),
     ('popup-without-ways-to-set-up', TOOLS_RS, 'self.client.picker(role, &setup_options(features))?', 'self.client.picker(role, &[])?', CL, 'popup', ''),
     ('popup-reason-blank', TOOLS_RS, 'title: role.label.clone(),\n            reason,', 'title: role.label.clone(),\n            reason: String::new(),', CL, 'popup', ''),
@@ -388,8 +400,8 @@ SDC = 'craft-ai-seedance'
 BYTEPLUS = 'https://ark.ap-southeast.bytepluses.com/api/v3'
 # sd: Seedance connects through BytePlus ModelArk (ai-seedance/tests/provider.rs, draft tests)
 SD = [
-    ('any-address-accepted', SD_LIB, '(!endpoint.is_loopback() && base != "' + BYTEPLUS + '")', '(!endpoint.is_loopback() && false)', SDC, 'provider', ''),
-    ('volcengine-address-accepted', SD_LIB, 'base != "' + BYTEPLUS + '"', 'base != "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
+    ('any-address-accepted', SD_LIB, 'e.is_loopback() || base == "' + BYTEPLUS + '"', 'true', SDC, 'provider', ''),
+    ('volcengine-address-accepted', SD_LIB, 'base == "' + BYTEPLUS + '"', 'base == "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
     ('query-string-allowed', SD_LIB, "base.contains(['?', '#'])", 'false', SDC, 'provider', ''),
     ('old-model-served', SD_LIB, 'const MODEL: &str = "dreamina-seedance-2-0-260128";', 'const MODEL: &str = "doubao-seedance-2-0-260128";', SDC, 'provider', ''),
     ('preset-points-at-volcengine', C + 'ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
@@ -495,6 +507,7 @@ from mutation_burn_preparation import BP  # noqa: E402
 from mutation_burn_engine import BE  # noqa: E402
 from mutation_built_in_only import BO  # noqa: E402
 from mutation_first_run import FR  # noqa: E402
+from mutation_gemini import GI  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -556,7 +569,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'fa': FA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
+GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'fa': FA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

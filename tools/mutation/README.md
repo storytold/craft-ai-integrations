@@ -50,3 +50,5 @@ files while one runs. Afterwards read the restored source and rerun the focused 
 
 Logs go to `tools/mutation/verification/` (not committed) after passing through `scrub.py`, which
 replaces a Windows or Unix profile folder with `%USERPROFILE%` so no account name is written.
+
+`gi` checks that Gemini retains unread terminal states and that a running poll does not mark a result delivered. It uses seeded job tracking and a closed loopback endpoint, with no live provider.
