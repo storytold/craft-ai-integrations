@@ -265,10 +265,10 @@ fn a_failed_run_keeps_the_reason_and_a_key_in_it_stops_the_line() {
     assert!(line.contains("\"outcome\":\"failed\""), "{line}");
 }
 
-/// A wait that returned before the job ended is recorded as unfinished, with its notices and
-/// usage; a cancelled job reads as cancelled.
+/// A result built by the caller from a job that has not ended is recorded as unfinished, with its
+/// notices and usage; a cancelled job reads as cancelled.
 #[test]
-fn notices_usage_and_a_wait_that_ended_early_are_all_kept() {
+fn notices_usage_and_a_job_not_yet_ended_are_all_kept() {
     let world = mock_world(Script::default());
     let plan = world.client.plan(&role(), request()).unwrap();
     let usage = Usage {

@@ -62,7 +62,9 @@ pub enum RunOutcome {
     Succeeded,
     Failed,
     Cancelled,
-    /// The wait returned before the job ended. Kept so a timed-out run is still evidence.
+    /// The caller built the [`Finished`] from a job that had not ended (`Queued` or `Running`), for
+    /// example from its own polling. [`Job::wait`](crate::Job::wait) never gives this: it returns
+    /// an error on a timeout, so a run that times out there leaves no record.
     Unfinished,
 }
 

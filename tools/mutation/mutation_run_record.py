@@ -14,9 +14,9 @@ RR = [
     ('link-address-kept', R, 'media_type: h.media_type.as_str().to_owned(),\n                size_bytes', 'media_type: h.uri.clone(),\n                size_bytes', CL, T, 'never_a_link'),
     ('hash-of-nothing', R, 'sha256: hex(&Sha256::digest(data)),', 'sha256: hex(&Sha256::digest(b"")),', CL, T, 'type_size_and_hash'),
     ('failure-reads-as-success', R, '                RunOutcome::Failed,\n', '                RunOutcome::Succeeded,\n', CL, T, 'a_failed_run_keeps_the_reason'),
-    ('early-wait-reads-as-cancelled', R, 'JobState::Queued | JobState::Running { .. } => (RunOutcome::Unfinished, None),', 'JobState::Queued | JobState::Running { .. } => (RunOutcome::Cancelled, None),', CL, T, 'a_wait_that_ended_early'),
-    ('notices-dropped', R, 'Event::Notice { message } => notices.push(message.clone()),', 'Event::Notice { .. } => {}', CL, T, 'a_wait_that_ended_early'),
+    ('unended-job-reads-as-cancelled', R, 'JobState::Queued | JobState::Running { .. } => (RunOutcome::Unfinished, None),', 'JobState::Queued | JobState::Running { .. } => (RunOutcome::Cancelled, None),', CL, T, 'a_job_not_yet_ended'),
+    ('notices-dropped', R, 'Event::Notice { message } => notices.push(message.clone()),', 'Event::Notice { .. } => {}', CL, T, 'a_job_not_yet_ended'),
     ('streamed-text-dropped', R, 'Event::TextDelta { text } => streamed.push_str(text),', 'Event::TextDelta { .. } => {}', CL, T, 'never_a_link'),
     ('start-time-to-the-second', R, 'SecondsFormat::Millis, true', 'SecondsFormat::Secs, true', CL, T, 'recorded_without_its_words'),
-    ('usage-dropped', R, 'usage: finished.usage.clone(),', 'usage: None,', CL, T, 'a_wait_that_ended_early'),
+    ('usage-dropped', R, 'usage: finished.usage.clone(),', 'usage: None,', CL, T, 'a_job_not_yet_ended'),
 ]
