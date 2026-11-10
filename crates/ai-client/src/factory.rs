@@ -206,9 +206,11 @@ impl ProviderFactory {
             f.comfyui_output_dir.clone(),
             comfy_timeouts,
         );
-        f.standard_senders = send_retry::STANDARD_SENDERS
+        f.standard_senders = OPENAI_FAMILY
             .iter()
-            .map(|name| (*name).to_owned())
+            .copied()
+            .chain(["gemini"])
+            .map(str::to_owned)
             .collect();
         f.register_declarative();
         f.register_engines(crate::engines::built_in());

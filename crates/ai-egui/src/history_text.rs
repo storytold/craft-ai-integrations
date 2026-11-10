@@ -19,6 +19,7 @@ pub fn failure_reason(kind: ErrorKind) -> &'static str {
     }
 }
 
+/// How a job ended, in plain words; `None` reads as not finished.
 pub fn outcome_label(outcome: Option<&Outcome>) -> String {
     match outcome {
         Some(Outcome::Done) => "Done".to_owned(),
@@ -28,6 +29,7 @@ pub fn outcome_label(outcome: Option<&Outcome>) -> String {
     }
 }
 
+/// Milliseconds as seconds: one decimal under 100 s, whole seconds above.
 fn seconds(ms: u64) -> String {
     if ms < 100_000 {
         format!("{}.{} s", ms / 1000, ms % 1000 / 100)
@@ -110,6 +112,7 @@ pub fn group_line(label: &str, t: &Totals) -> String {
     format!("{label}  \u{b7}  {} {noun}{cost}", t.jobs)
 }
 
+/// The note for `n` history lines that could not be read.
 pub fn skipped_line(n: usize) -> String {
     if n == 1 {
         "1 line in the history could not be read and was left out.".to_owned()
@@ -125,6 +128,7 @@ mod tests {
     use craft_ai_core::history::{EndRecord, HISTORY_SCHEMA, HistoryRecord, StartRecord, merge};
     use craft_ai_core::job::Usage;
 
+    /// History entries with the given outcomes and costs.
     fn entries(outcomes: &[(Option<Outcome>, Option<u64>)]) -> Vec<HistoryEntry> {
         let mut records = Vec::new();
         for (i, (outcome, cost)) in outcomes.iter().enumerate() {
@@ -165,6 +169,7 @@ mod tests {
         merge(records, 0).entries
     }
 
+    /// A history entry reads as one plain line.
     #[test]
     fn a_job_reads_as_one_plain_line() {
         let e = entries(&[(Some(Outcome::Done), Some(31_000))]);
@@ -174,6 +179,7 @@ mod tests {
         );
     }
 
+    /// A failed outcome names its kind in plain words, never the provider's own message.
     #[test]
     fn failures_say_why_without_the_providers_words() {
         assert_eq!(
@@ -185,6 +191,7 @@ mod tests {
         assert_eq!(outcome_label(None), "Not finished");
     }
 
+    /// Counts and costs are honest about what is unknown.
     #[test]
     fn counts_and_costs_are_honest_about_what_is_unknown() {
         let e = entries(&[
@@ -208,6 +215,7 @@ mod tests {
         assert_eq!(counts_line(&totals(&e[..0])), "0 jobs: 0 done.");
     }
 
+    /// Skipped lines are mentioned in the singular and plural.
     #[test]
     fn skipped_lines_are_mentioned_in_the_singular_and_plural() {
         assert!(skipped_line(1).starts_with("1 line "));

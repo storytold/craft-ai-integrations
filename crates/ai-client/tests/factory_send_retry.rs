@@ -108,27 +108,27 @@ fn an_apps_own_builder_is_kept() {
     assert_eq!(builds.load(Ordering::SeqCst), 1);
 }
 
-/// `AiClient::with_retries` passes its send rule to the factory: NEVER on the client turns the
-/// worker's retry off too.
-#[test]
-fn the_clients_send_rule_reaches_the_worker() {
+/// A client over one local connection to `url`, built by `make` from the shared store.
+fn client_for(
+    url: &str,
+    dir: &std::path::Path,
+    make: impl FnOnce(craft_ai_client::AiClient) -> craft_ai_client::AiClient,
+) -> u64 {
     use craft_ai_client::AiClient;
     use craft_ai_core::{AppId, Binding, ConnectionId, ConsentLedger, Role, RoleId, StoreFile};
     use craft_ai_native::secrets::MemoryStore;
     use craft_ai_native::shared::SharedStore;
 
-    let (server, seen) = refuses_once();
-    let dir = tempfile::tempdir().unwrap();
     let role = Role {
         id: RoleId::new("rewrite").unwrap(),
         label: "Rewrite".into(),
         capability: CapabilityId::parse("text.complete").unwrap(),
         inputs: vec![InputRole::Prompt],
     };
-    let shared = SharedStore::new(dir.path().join("connections.json"));
+    let shared = SharedStore::new(dir.join("connections.json"));
     shared
         .replace(&StoreFile {
-            connections: vec![connection(&server.url)],
+            connections: vec![connection(url)],
             defaults: vec![Binding {
                 role: role.id.clone(),
                 connection: ConnectionId::new("here").unwrap(),
@@ -137,12 +137,11 @@ fn the_clients_send_rule_reaches_the_worker() {
             ..StoreFile::default()
         })
         .unwrap();
-    let client = AiClient::new(
+    let client = make(AiClient::new(
         AppId::new("wordcraft").unwrap(),
         shared,
         Arc::new(MemoryStore::default()),
-    )
-    .with_retries(Backoff::NEVER, QUICK);
+    ));
     let request =
         Request::new(role.capability.clone()).with_input(InputRole::Prompt, Payload::text("hi"));
     let plan = client.plan(&role, request).unwrap();
@@ -150,6 +149,31 @@ fn the_clients_send_rule_reaches_the_worker() {
     let done = job
         .wait(Duration::from_millis(5), Duration::from_secs(5))
         .unwrap();
-    assert!(matches!(done.state, JobState::Failed { .. }));
+    u64::from(matches!(done.state, JobState::Failed { .. }))
+}
+
+/// `AiClient::with_retries` passes its send rule to the factory: NEVER on the client turns the
+/// worker's retry off too.
+#[test]
+fn the_clients_send_rule_reaches_the_worker() {
+    let (server, seen) = refuses_once();
+    let dir = tempfile::tempdir().unwrap();
+    let failed = client_for(&server.url, dir.path(), |c| {
+        c.with_retries(Backoff::NEVER, QUICK)
+    });
+    assert_eq!(failed, 1);
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
+}
+
+/// A factory set after `with_retries` takes the chosen send rule too: the order does not matter.
+#[test]
+fn a_later_factory_takes_the_send_rule() {
+    let (server, seen) = refuses_once();
+    let dir = tempfile::tempdir().unwrap();
+    let failed = client_for(&server.url, dir.path(), |c| {
+        c.with_retries(Backoff::NEVER, QUICK)
+            .with_factory(ProviderFactory::standard())
+    });
+    assert_eq!(failed, 1);
     assert_eq!(seen.load(Ordering::SeqCst), 1);
 }

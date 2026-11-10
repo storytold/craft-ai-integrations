@@ -199,6 +199,8 @@ pub struct AiClient {
     catalog: Catalog,
     submit_retry: Backoff,
     poll_retry: Backoff,
+    /// Set by `with_retries`, so `with_factory` hands the send rule to a later factory.
+    send_rule_chosen: bool,
 }
 
 impl AiClient {
@@ -215,6 +217,7 @@ impl AiClient {
             catalog: Catalog::builtin(),
             submit_retry: Backoff::STANDARD,
             poll_retry: wait::POLL_RETRY,
+            send_rule_chosen: false,
         }
     }
 
@@ -282,15 +285,21 @@ impl AiClient {
             .map_err(|e| AiError::new(ErrorKind::Internal, format!("history unavailable: {e}")))
     }
 
+    /// The history file, or `Unsupported` when this client keeps no history.
     fn history_file(&self) -> Result<&Arc<HistoryFile>, AiError> {
         self.history.as_ref().ok_or_else(|| {
             AiError::new(ErrorKind::Unsupported, "request history is turned off here")
         })
     }
 
-    /// Replaces the provider factory, to add adapters.
+    /// Replaces the provider factory, to add adapters. A send rule already chosen with
+    /// [`with_retries`](Self::with_retries) is applied to it, so the order of the two calls does
+    /// not matter.
     pub fn with_factory(mut self, factory: ProviderFactory) -> Self {
         self.factory = factory;
+        if self.send_rule_chosen() {
+            self.factory.set_send_retry(self.submit_retry());
+        }
         self
     }
 

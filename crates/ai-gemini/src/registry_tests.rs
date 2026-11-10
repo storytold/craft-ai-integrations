@@ -53,6 +53,7 @@ fn seed(provider: &GeminiProvider, state: JobState) -> Vec<JobId> {
         .collect()
 }
 
+/// A full registry refuses new fills as `Quota` and keeps every finished result unpolled.
 #[test]
 fn unpolled_terminal_jobs_survive_tracking_pressure() {
     for state in [

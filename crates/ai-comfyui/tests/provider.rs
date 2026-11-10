@@ -14,6 +14,7 @@ use support::{Reply, Server, http_bytes};
 const PNG_BYTES: &[u8] = b"\x89PNG\r\n\x1a\nPNG data";
 const MP4_BYTES: &[u8] = b"\0\0\0\x18ftypisom video bytes";
 
+/// A two-node workflow (prompt text into an output node) for capability `cap`.
 fn workflow(cap: &str) -> Workflow {
     Workflow::import(
         "local-workflow",
@@ -27,6 +28,7 @@ fn workflow(cap: &str) -> Workflow {
     )
     .unwrap()
 }
+/// The node list of a server with both of the workflow's nodes installed.
 fn installed() -> String {
     json!({
         "CLIPTextEncode":{"input":{"required":{"text":["STRING",{}]}}},
@@ -34,15 +36,18 @@ fn installed() -> String {
     })
     .to_string()
 }
+/// A prompt-only request for capability `cap`.
 fn request(cap: &str) -> Request {
     Request::new(CapabilityId::parse(cap).unwrap())
         .with_input(InputRole::Prompt, Payload::text("a lighthouse"))
 }
+/// A provider for the scripted server `s`, holding one workflow for `cap`.
 fn provider(s: &Server, cap: &str) -> ComfyProvider {
     ComfyProvider::new(ComfyConfig::new(s.url.trim_end_matches("/v1")).with_workflow(workflow(cap)))
         .unwrap()
 }
 
+/// Model probe refuses a workflow with missing nodes.
 #[test]
 fn model_probe_refuses_a_workflow_with_missing_nodes() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -58,6 +63,7 @@ fn model_probe_refuses_a_workflow_with_missing_nodes() {
     assert!(!s.recorded().iter().any(|r| r.path == "/prompt"));
 }
 
+/// Submit refuses an uninstalled node before sending prompt.
 #[test]
 fn submit_refuses_an_uninstalled_node_before_sending_prompt() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -79,6 +85,7 @@ fn submit_refuses_an_uninstalled_node_before_sending_prompt() {
     assert!(!s.recorded().iter().any(|r| r.path == "/prompt"));
 }
 
+/// An image workflow is sent once and polled for its output node only.
 #[test]
 fn image_workflow_submits_and_polls_only_its_output_node() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -127,6 +134,7 @@ fn image_workflow_submits_and_polls_only_its_output_node() {
     );
 }
 
+/// A video workflow is polled until it ends, then its video is fetched.
 #[test]
 fn video_workflow_waits_then_fetches_video() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -178,6 +186,7 @@ fn a_full_adapter_refuses_as_quota_without_sending() {
     assert_eq!(n.load(Ordering::SeqCst), 8);
 }
 
+/// Unsupported request makes no traffic.
 #[test]
 fn unsupported_request_makes_no_traffic() {
     let s = Server::start(|_| Reply::Json(200, "{}".into()));
@@ -195,6 +204,7 @@ fn unsupported_request_makes_no_traffic() {
     assert_eq!(s.count(), 0);
 }
 
+/// Cancellation targets its own prompt never global.
 #[test]
 fn cancellation_targets_its_own_prompt_never_global() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -231,6 +241,7 @@ fn cancellation_targets_its_own_prompt_never_global() {
     );
 }
 
+/// Remote http and missing history are not misreported as success.
 #[test]
 fn remote_http_and_missing_history_are_not_misreported_as_success() {
     assert!(
@@ -255,6 +266,7 @@ fn remote_http_and_missing_history_are_not_misreported_as_success() {
     assert_eq!(p.poll(&id).unwrap().state, JobState::Queued);
 }
 
+/// Model probe does not follow redirect to another server.
 #[test]
 fn model_probe_does_not_follow_redirect_to_another_server() {
     let destination = Server::start(|_| Reply::Json(200, "{}".into()));
@@ -271,6 +283,7 @@ fn model_probe_does_not_follow_redirect_to_another_server() {
     assert_eq!(destination.count(), 0);
 }
 
+/// Cancellation is off until targeted interrupt is confirmed for the server.
 #[test]
 fn cancellation_is_off_until_targeted_interrupt_is_confirmed_for_the_server() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -289,6 +302,7 @@ fn cancellation_is_off_until_targeted_interrupt_is_confirmed_for_the_server() {
     assert_eq!(s.count(), 2);
 }
 
+/// Cancelled job is idempotent and conformant.
 #[test]
 fn cancelled_job_is_idempotent_and_conformant() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -319,6 +333,7 @@ fn cancelled_job_is_idempotent_and_conformant() {
     );
 }
 
+/// Server refusal is actionable and bounded.
 #[test]
 fn server_refusal_is_actionable_and_bounded() {
     let s = Server::start(|r| match r.path.as_str() {
@@ -338,6 +353,7 @@ fn server_refusal_is_actionable_and_bounded() {
     );
 }
 
+/// History gap does not regress a running job to queued.
 #[test]
 fn history_gap_does_not_regress_a_running_job_to_queued() {
     let count = Arc::new(AtomicUsize::new(0));
@@ -374,6 +390,7 @@ fn history_gap_does_not_regress_a_running_job_to_queued() {
     );
 }
 
+/// Provider passes shared conformance without network for bad input.
 #[test]
 fn provider_passes_shared_conformance_without_network_for_bad_input() {
     let s = Server::start(|r| match r.path.as_str() {

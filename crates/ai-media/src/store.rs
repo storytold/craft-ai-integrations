@@ -38,12 +38,9 @@ pub struct MediaStoreConfig {
     /// Permit links to a loopback host (http or https). For a connection the user runs on this
     /// computer, and for tests. Other private addresses stay refused.
     pub allow_loopback: bool,
-    /// Most tries for one link, the first included. Clamped to 1..=5; 1 turns retries off.
-    pub max_attempts: u8,
-    /// Pause before the second try; each later pause doubles. Default 1 second.
-    pub retry_delay: Duration,
-    /// The most time the store will spend waiting between tries, in total (default 30 seconds).
-    pub retry_budget: Duration,
+    /// How a busy host is tried again (default [`Backoff::STANDARD`]: three tries, a one-second
+    /// first pause, 30 seconds of pauses at most). [`Backoff::NEVER`] turns retries off.
+    pub retry: Backoff,
 }
 
 impl MediaStoreConfig {
@@ -57,9 +54,7 @@ impl MediaStoreConfig {
             transfer_timeout: Duration::from_secs(30 * 60),
             max_redirects: 3,
             allow_loopback: false,
-            max_attempts: 3,
-            retry_delay: Duration::from_secs(1),
-            retry_budget: Duration::from_secs(30),
+            retry: Backoff::STANDARD,
         }
     }
 }
@@ -114,12 +109,7 @@ impl MediaStore {
     /// Downloads the link and returns a `file:` handle to the saved copy, trying again when the
     /// host is busy (see the module notes). Blocks for the pauses, so call it from a worker.
     pub fn save(&self, handle: &PayloadHandle) -> Result<PayloadHandle, AiError> {
-        let backoff = Backoff {
-            max_attempts: self.config.max_attempts,
-            first_delay: self.config.retry_delay,
-            budget: self.config.retry_budget,
-        };
-        backoff.run(
+        self.config.retry.run(
             AiError::is_retryable,
             || self.fetch_once(handle),
             std::thread::sleep,

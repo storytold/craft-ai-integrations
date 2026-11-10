@@ -326,6 +326,7 @@ P10 = [
 # ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
 # dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
 WAIT = C + 'ai-client/src/client_wait.rs'
+CLIENT = C + 'ai-client/src/client.rs'
 GEMINI_LIB = C + 'ai-gemini/src/lib.rs'
 OPENAI_JOBS = C + 'ai-openai/src/jobs.rs'
 SEND_GATE = 'error.kind == ErrorKind::RateLimited'
@@ -335,15 +336,18 @@ AR = [
     ('rate-limited-send-not-retried', WAIT, SEND_GATE, 'false', CL, 'api_retries', 'a_rate_limited_send_is_tried_again'),
     ('failed-poll-ends-the-wait', WAIT, POLL_GATE, 'Err(error) if false => {', CL, 'api_retries', 'a_failed_poll_does_not_end_the_wait'),
     ('poll-refusal-retried', WAIT, POLL_GATE, 'Err(error) if true => {', CL, 'api_retries', 'a_poll_refusal_is_not_retried'),
-    ('failure-run-not-reset', WAIT, 'failures = 0;', '', CL, 'api_retries', 'a_success_resets_the_failure_run'),
-    ('poll-never-gives-up', WAIT, 'None => return Err(tried(error, failures)),', 'None => continue,', CL, 'api_retries', 'a_poll_that_keeps_failing'),
-    ('budget-starts-after-the-poll', WAIT, 'streak = asked;', 'streak = Instant::now();', CL, 'api_retries', 'the_budget_counts_the_failed_poll'),
-    ('interval-outside-the-budget', WAIT, '.filter(|pause| elapsed.saturating_add(*pause) <= self.poll_retry.budget);', '.filter(|_| true);', CL, 'api_retries', 'the_interval_counts_against_the_budget'),
-    ('poll-after-the-timeout', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up());\n            }\n            let asked', '            let asked', CL, 'api_retries', 'no_poll_starts_after_the_timeout'),
-    ('zero-timeout-polls', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up());\n            }\n            let asked', '            let asked', CL, 'api_retries', 'a_zero_timeout_does_not_poll'),
+    ('failure-run-not-reset', WAIT, '(failures, paused) = (0, Duration::ZERO);', '', CL, 'api_retries', 'a_success_resets_the_failure_run'),
+    ('poll-never-gives-up', WAIT, 'None => return Err(self.give_up(tried(error, failures))),', 'None => continue,', CL, 'api_retries', 'a_poll_that_keeps_failing'),
+    ('pauses-not-counted', WAIT, 'paused = paused.saturating_add(wait);', '', CL, 'api_retries', 'the_budget_counts_the_pauses'),
+    ('give-up-not-cancelled', WAIT, 'None => return Err(self.give_up(tried(error, failures))),', 'None => return Err(tried(error, failures)),', CL, 'api_retries', 'a_poll_that_keeps_failing'),
+    ('interval-not-the-floor', WAIT, 'wait.max(interval)', 'wait', CL, 'api_retries', 'a_long_interval_still_retries'),
+    ('poll-after-the-timeout', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up(took_too_long()));\n            }\n            let pause = match', '            let pause = match', CL, 'api_retries', 'no_poll_starts_after_the_timeout'),
+    ('zero-timeout-polls', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up(took_too_long()));\n            }\n            let pause = match', '            let pause = match', CL, 'api_retries', 'a_zero_timeout_does_not_poll'),
     ('pause-not-taken', WAIT, 'std::thread::sleep(pause.min(deadline.saturating_duration_since(now)));', 'let _ = (pause, now);', CL, 'api_retries', 'the_retry_pause_is_taken'),
-    ('give-up-past-timeout-not-cancelled', WAIT, 'None if Instant::now() >= deadline => return Err(self.give_up()),', '', CL, 'api_retries', 'a_failure_past_the_timeout_cancels'),
+    ('give-up-past-timeout-not-cancelled', WAIT, '                        None if Instant::now() >= deadline => {\n                            return Err(self.give_up(took_too_long()));\n                        }\n', '', CL, 'api_retries', 'a_failure_past_the_timeout_cancels'),
+    ('run-pauses-not-counted', RETRY, '            paused = paused.saturating_add(wait);\n', '', M, 'lib', 'run_budget_counts_the_pauses'),
     ('cancel-during-pause-ignored', RETRY, '            if !worth_retrying(&error) {\n                return Err(tried(error, attempt));\n            }\n            attempt', '            attempt', M, 'lib', 'run_asks_again_after_the_pause'),
+    ('later-factory-ignores-the-rule', CLIENT, '        if self.send_rule_chosen() {\n            self.factory.set_send_retry(self.submit_retry());\n        }\n', '', CL, 'factory_send_retry', 'a_later_factory_takes_the_send_rule'),
     ('client-send-rule-not-passed', WAIT, '        self.factory.set_send_retry(submit);\n', '', CL, 'factory_send_retry', 'the_clients_send_rule_reaches_the_worker'),
     ('apps-builder-replaced', FACTORY, '        self.standard_senders.remove(&name);\n        self.builders.insert(name, Arc::new(build));', '        self.builders.insert(name, Arc::new(build));', CL, 'factory_send_retry', 'an_apps_own_builder_is_kept'),
     ('openai-send-rule-not-applied', FACTORY, '    config.send_retry = send_retry;\n', '', CL, 'factory_send_retry', 'never_turns_the_worker_retry_off'),

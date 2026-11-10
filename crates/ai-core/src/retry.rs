@@ -6,11 +6,13 @@
 //!   must not be retried by its caller, or the person could pay twice.
 //! - Each pause doubles, starting at `first_delay`, and is never shorter than the server's own
 //!   `Retry-After` when the error carries one.
-//! - A pause that would take the time spent past `budget` is not taken. The caller gives up and
-//!   says so, rather than holding a worker for an hour because a server said `Retry-After: 3600`.
+//! - `budget` bounds the time spent pausing, not the calls: a pause that would take the pauses so
+//!   far past it is not taken. The caller gives up and says so, rather than holding a worker for
+//!   an hour because a server said `Retry-After: 3600`. A slow call that fails (a timeout) does
+//!   not use up the budget, so the failure retries were made for can still be retried.
 //! - `max_attempts` counts every try, the first included, and is clamped to 1..=5.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::error::AiError;
 
@@ -21,7 +23,7 @@ pub struct Backoff {
     pub max_attempts: u8,
     /// Pause before the second try. Each later pause doubles.
     pub first_delay: Duration,
-    /// The most time to spend from the first try to the last pause, in total.
+    /// The most time to spend pausing between tries, in total. The calls themselves do not count.
     pub budget: Duration,
 }
 
@@ -41,8 +43,8 @@ impl Backoff {
     };
 
     /// The pause before the next try, after try number `attempt` (counting from 1) failed with
-    /// `error` and `elapsed` has passed since the first try began. `None` means give up: the
-    /// tries are used up, or the pause would go past the budget.
+    /// `error` and `elapsed` has already been spent pausing. `None` means give up: the tries are
+    /// used up, or the pause would go past the budget.
     pub fn next_wait(&self, attempt: u8, error: &AiError, elapsed: Duration) -> Option<Duration> {
         if attempt >= self.max_attempts.clamp(1, 5) {
             return None;
@@ -66,7 +68,7 @@ impl Backoff {
         mut call: impl FnMut() -> Result<T, AiError>,
         mut sleep: impl FnMut(Duration),
     ) -> Result<T, AiError> {
-        let started = Instant::now();
+        let mut paused = Duration::ZERO;
         let mut attempt = 1u8;
         loop {
             let error = match call() {
@@ -74,7 +76,7 @@ impl Backoff {
                 Err(error) => error,
             };
             let wait = if worth_retrying(&error) {
-                self.next_wait(attempt, &error, started.elapsed())
+                self.next_wait(attempt, &error, paused)
             } else {
                 None
             };
@@ -82,6 +84,7 @@ impl Backoff {
                 return Err(tried(error, attempt));
             };
             sleep(wait);
+            paused = paused.saturating_add(wait);
             if !worth_retrying(&error) {
                 return Err(tried(error, attempt));
             }
