@@ -391,15 +391,16 @@ impl MediaStore {
             }
         };
         let room = self.config.max_bytes.saturating_sub(part.written);
-        match std::io::copy(&mut body.take(room + 1), part.temp.as_file_mut()) {
+        match copy_body(body.take(room + 1), part.temp.as_file_mut()) {
             Ok(copied) => part.written += copied,
-            Err(_) => {
-                // A failed read writes nothing, so the file's length is what arrived intact.
-                let on_disk = part.temp.as_file().metadata().map(|m| m.len());
-                if let Ok(len) = on_disk
-                    && len <= self.config.max_bytes
-                    && end.is_none_or(|e| len <= e)
-                {
+            // The disk would not take the bytes: asking the host again will not help, and the
+            // copy is dropped.
+            Err(CopyFailed::Disk(error)) => return Err(disk(error).into()),
+            Err(CopyFailed::Cut(copied)) => {
+                // Every byte read before the cut was written, so the copy is intact up to here.
+                let len = part.written.saturating_add(copied);
+                let fits = len <= self.config.max_bytes;
+                if fits && end.is_none_or(|e| len <= e) {
                     part.written = len;
                     keep(part, kept);
                 }
@@ -436,6 +437,31 @@ impl MediaStore {
             Payload::Handle(saved) => Ok(saved),
             _ => Err(AiError::new(ErrorKind::Internal, "could not describe the media file").into()),
         }
+    }
+}
+
+/// Why copying a body into the file stopped early.
+enum CopyFailed {
+    /// The body could not be read: a cut transfer, after this many bytes were copied.
+    Cut(u64),
+    /// The file would not take the bytes.
+    Disk(std::io::Error),
+}
+
+/// Copies `body` into `file` and returns the bytes copied, telling a failed read (a cut
+/// transfer) from a failed write (the disk), which `std::io::copy` does not.
+fn copy_body(mut body: impl Read, file: &mut impl Write) -> Result<u64, CopyFailed> {
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut copied = 0u64;
+    loop {
+        let n = match body.read(&mut buf) {
+            Ok(0) => return Ok(copied),
+            Ok(n) => n.min(buf.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(CopyFailed::Cut(copied)),
+        };
+        file.write_all(&buf[..n]).map_err(CopyFailed::Disk)?;
+        copied = copied.saturating_add(n as u64);
     }
 }
 
