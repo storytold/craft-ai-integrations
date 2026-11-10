@@ -305,9 +305,17 @@ impl ConnectionManager {
             }
             slot = slot::fresh(id).map_err(SaveError::Failed)?;
         }
-        if self.secrets.set(&slot, key).is_err() {
+        if let Err(e) = self.secrets.set(&slot, key) {
             let _ = self.secrets.delete(&slot);
-            return Err(SaveError::Failed(key_not_saved(&slot)));
+            // A credentials refusal (the secret file needs a passphrase, or is locked; the
+            // keychain denied access) says what the person must do; store errors never carry a
+            // secret, so it is safe to show. Anything else gets the general advice.
+            let shown = if e.kind == ErrorKind::Auth {
+                e
+            } else {
+                key_not_saved(&slot)
+            };
+            return Err(SaveError::Failed(shown));
         }
         Ok(slot)
     }
