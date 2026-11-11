@@ -4,24 +4,9 @@ use super::*;
 use crate::fsutil;
 use std::fs;
 
-/// `path`'s whole security descriptor as SDDL, which is locale-neutral, read with PowerShell.
+/// `path`'s owner and access list as SDDL, which is locale-neutral, read in-process.
 fn sddl(path: &Path) -> String {
-    let out = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-Acl -LiteralPath $env:CRAFT_ACL_PATH).Sddl",
-        ])
-        .env("CRAFT_ACL_PATH", path)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "Get-Acl failed for {}",
-        path.display()
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    super::win_acl::sddl_of(path).unwrap()
 }
 
 /// The DACL part of `path`'s security descriptor, such as `D:P(A;;FA;;;S-1-5-21-...)(A;;FA;;;SY)`.
@@ -48,7 +33,12 @@ fn expected() -> Vec<String> {
 fn owner(path: &Path) -> String {
     let sddl = sddl(path);
     let start = sddl.find("O:").map_or(0, |i| i + 2);
-    let end = sddl[start..].find("G:").map_or(sddl.len(), |i| start + i);
+    // The owner ends where the group or the access list starts.
+    let end = ["G:", "D:"]
+        .iter()
+        .filter_map(|tag| sddl[start..].find(tag))
+        .min()
+        .map_or(sddl.len(), |i| start + i);
     sddl[start..end].to_owned()
 }
 

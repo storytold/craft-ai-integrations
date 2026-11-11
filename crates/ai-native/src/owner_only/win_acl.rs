@@ -109,8 +109,9 @@ impl Descriptor {
 
 impl Drop for Descriptor {
     fn drop(&mut self) {
-        // SAFETY: `self.0` came from ConvertStringSecurityDescriptorToSecurityDescriptorW, which
-        // allocates with LocalAlloc, and this is the only place it is freed.
+        // SAFETY: `self.0` came from ConvertStringSecurityDescriptorToSecurityDescriptorW or
+        // GetNamedSecurityInfoW, both of which allocate with LocalAlloc, and this is the only
+        // place it is freed.
         unsafe { LocalFree(self.0) };
     }
 }
@@ -181,17 +182,70 @@ pub(super) fn user_sid() -> io::Result<String> {
     if ok == 0 || text.is_null() {
         return Err(io::Error::last_os_error());
     }
+    Ok(take_local_string(text))
+}
+
+/// Copies a NUL-terminated wide string the system allocated with LocalAlloc, then frees it.
+fn take_local_string(text: windows_sys::core::PWSTR) -> String {
     let mut len = 0;
-    // SAFETY: `text` is a NUL-terminated string the system allocated; reading up to its NUL
-    // stays in bounds.
+    // SAFETY: the caller passes a non-null, NUL-terminated string; reading up to its NUL stays
+    // in bounds.
     while unsafe { *text.add(len) } != 0 {
         len += 1;
     }
     // SAFETY: `text` is valid for `len` elements, as just counted.
     let out = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
-    // SAFETY: ConvertSidToStringSidW allocates with LocalAlloc; freed once here.
+    // SAFETY: the string came from LocalAlloc and is freed once, here.
     unsafe { LocalFree(text.cast()) };
-    Ok(out)
+    out
+}
+
+/// The owner and access list of `path` as SDDL, read in-process. Tests only: they check what
+/// the creation calls stored. Running PowerShell's `Get-Acl` instead failed on the
+/// `windows-latest` CI runner.
+#[cfg(test)]
+pub(super) fn sddl_of(path: &Path) -> io::Result<String> {
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION};
+    let name = wide_path(path)?;
+    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `name` is NUL-terminated and outlives the call; the owner, group and list out
+    // pointers may be null when `sd` is requested; `sd` is a valid out pointer.
+    let code = unsafe {
+        GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            info,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if code != 0 {
+        return Err(io::Error::from_raw_os_error(code.cast_signed()));
+    }
+    let sd = Descriptor(sd);
+    let mut text: windows_sys::core::PWSTR = ptr::null_mut();
+    // SAFETY: `sd.0` is a valid descriptor owned by `sd`; `text` is a valid out pointer and the
+    // length out pointer may be null.
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd.0,
+            SDDL_REVISION_1,
+            info,
+            &mut text,
+            ptr::null_mut(),
+        )
+    };
+    if ok == 0 || text.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(take_local_string(text))
 }
 
 /// `path` as a NUL-terminated wide string the creation calls accept past the old 260-character
