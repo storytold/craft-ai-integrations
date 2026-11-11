@@ -102,7 +102,7 @@ impl MediaStore {
         if config.max_bytes == 0 {
             return Err(AiError::invalid("the media size limit must be above zero"));
         }
-        let agent = ureq::Agent::new_with_config(
+        let agent = ureq::Agent::with_parts(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
                 .proxy(craft_ai_http::loopback_proxy())
@@ -112,6 +112,8 @@ impl MediaStore {
                 .timeout_connect(Some(config.connect_timeout))
                 .timeout_global(Some(config.transfer_timeout))
                 .build(),
+            ureq::unversioned::transport::DefaultConnector::new(),
+            url_rules::GuardedResolver::new(config.allow_loopback),
         );
         Ok(Self { config, agent })
     }

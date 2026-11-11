@@ -287,7 +287,7 @@ P4 = [
     ('input-limit-not-passed-on', CF_PROV, 'crate::input::read_image(&input.payload, self.max_upload_bytes)', 'crate::input::read_image(&input.payload, crate::input::DEFAULT_MAX_UPLOAD_BYTES)', CF, 'media_checks', 'over_the_limit'),
     ('input-web-address-read', CF_IN, 'if url.scheme() != "file" {', 'if false {', CF, 'media_checks', 'only_plain_local'),
     ('input-other-machine-read', CF_IN, 'if !matches!(url.host_str(), None | Some("" | "localhost")) {', 'if false {', CF, 'media_checks', 'only_plain_local'),
-    ('input-folder-read', CF_IN, 'if !meta.is_file() {', 'if false {', CF, 'media_checks', 'only_plain_local'),
+    ('input-folder-read', CF_IN, 'if !file.metadata()?.is_file() {', 'if false {', CF, 'media_checks', 'only_plain_local'),
     ('input-file-size-looked-at-late', CF_IN, 'if meta.len() > max {', 'if false {', CF, 'lib', 'a_file_over_the_limit'),
     ('input-file-read-unbounded', CF_IN, 'reader.take(max.saturating_add(1))', 'reader.take(u64::MAX)', CF, 'lib', 'a_reader_is_read_no_further'),
     ('input-sent-before-all-checked', CF_PROV, UPLOAD_ORDER_OLD, UPLOAD_ORDER_NEW, CF, 'media_checks', 'never_uploaded'),

@@ -19,9 +19,10 @@ data, consent and jobs. It does not own any app's interface. Each app decides ho
 Crates keep the flat `crates/` folder on purpose. The exact planning checkouts reproduced no app
 dependency on `craft-ai-egui`; recheck any current path consumer before moving a crate.
 
-`docs/design/` holds design notes. `docs/STATUS.md` says what is tested and what is open.
-`docs/evidence/` keeps the run records of real runs. The deliberate-bug scripts are in
-`tools/mutation/`; everything a script saves goes through `tools/mutation/scrub.py`.
+`docs/design/` holds design notes. `docs/adr/` records each decision that shapes the layer and
+why, one file each. `docs/STATUS.md` says what is tested and what is open. `docs/evidence/` keeps
+the run records of real runs. The deliberate-bug scripts are in `tools/mutation/`; everything a
+script saves goes through `tools/mutation/scrub.py`.
 
 ## Not in this repository
 

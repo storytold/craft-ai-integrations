@@ -23,6 +23,10 @@ impl Converter for Fake {
 }
 
 /// A supported test bundle and original files, separate from the cache folder.
+/// Held while a child process is forked and while any preparation runs: a forked child briefly
+/// shares the open lock file of a preparation in flight, which then looks locked to the next run.
+static FORK_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Rig {
     _dir: TempDir,
     source: PathBuf,
@@ -64,6 +68,10 @@ impl Rig {
 
     /// Runs the production cache lifecycle with the supplied tiny converter.
     fn prepare(&self, converter: &dyn Converter) -> Result<PreparedWeights, AiError> {
+        // A process forked meanwhile (see `FORK_GUARD`) would hold this run's lock file open.
+        let _quiet = FORK_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         prepare(
             &self.bundle,
             &self.source,
@@ -82,6 +90,29 @@ fn a_source_hash_mismatch_never_reaches_the_converter() {
     let fake = Fake::default();
     let error = r.prepare(&fake).unwrap_err();
     assert!(error.message.contains("original model files"), "{error:?}");
+    assert_eq!(fake.0.get(), 0);
+}
+
+/// An original that exists but cannot be opened is a file-access failure, not a claim that its
+/// contents differ. The test ends quietly where the permission is not enforced (a run as the
+/// superuser).
+#[cfg(unix)]
+#[test]
+fn an_unreadable_original_is_reported_as_file_access() {
+    use std::os::unix::fs::PermissionsExt;
+    let r = Rig::new();
+    let encoder = r.source.join("encoder.onnx");
+    fs::set_permissions(&encoder, fs::Permissions::from_mode(0o000)).unwrap();
+    if File::open(&encoder).is_ok() {
+        return;
+    }
+    let fake = Fake::default();
+    let error = r.prepare(&fake).unwrap_err();
+    assert!(
+        error.message.contains("could not be read or written"),
+        "{error:?}"
+    );
+    assert!(!error.message.contains("do not match"), "{error:?}");
     assert_eq!(fake.0.get(), 0);
 }
 
@@ -240,3 +271,38 @@ fn a_manifest_that_cannot_be_opened_is_a_damaged_copy() {
 mod boundaries;
 #[path = "safety.rs"]
 mod safety;
+
+/// A pipe in place of an original is refused at once, not waited on with the model lock held.
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_place_of_an_original_is_refused_without_blocking() {
+    let r = Rig::new();
+    let encoder = r.source.join("encoder.onnx");
+    fs::remove_file(&encoder).unwrap();
+    let made = {
+        let _quiet = FORK_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::process::Command::new("mkfifo").arg(&encoder).status()
+    };
+    if !made.is_ok_and(|s| s.success()) {
+        eprintln!("skipped: mkfifo is not available");
+        return;
+    }
+    // Run the preparation away from the test thread: a regression that makes the open block on
+    // the pipe then fails these assertions instead of hanging the test run.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let fake = Fake::default();
+        let outcome = match r.prepare(&fake) {
+            Ok(_) => ("prepared despite the pipe".to_owned(), fake.0.get()),
+            Err(error) => (error.message, fake.0.get()),
+        };
+        let _ = sender.send(outcome);
+    });
+    let (message, conversions) = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("prepare blocked on the pipe instead of refusing it");
+    assert!(message.contains("original model files"), "{message}");
+    assert_eq!(conversions, 0);
+}

@@ -8,10 +8,12 @@
 use crate::feature::{AppStatus, AppUse, Feature};
 use crate::recipe::CloudOption;
 
+mod ben2_vitmatte;
 mod florence2;
 mod inspyrenet;
 mod sam21;
 mod sam3;
+use ben2_vitmatte::ben2_vitmatte;
 use craft_ai_core::{CapabilityId, InputRole};
 pub use florence2::FLORENCE2_LARGE_DIR;
 use inspyrenet::inspyrenet;
@@ -83,8 +85,9 @@ fn try_builtin() -> Option<Vec<Feature>> {
     )?;
     background.inputs = vec![InputRole::Source];
     background.uses = uses(&[("PhotoCraft", "Remove Background")]);
-    // One model, built in only (Burn), and no hosted route yet.
-    background.locals = vec![inspyrenet()];
+    // Built in only: InSPyReNet (Burn, any graphics card) and BEN2 + ViTMatte (rten, on the
+    // processor); no hosted route yet.
+    background.locals = vec![inspyrenet(), ben2_vitmatte()];
 
     let mut remove = feature(
         "remove-object",
