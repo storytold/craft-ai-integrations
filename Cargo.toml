@@ -18,7 +18,9 @@ serde_json = "1"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, so the one named exception can allow it (see AGENTS.md).
+# `crates/ai-native/tests/unsafe_exception.rs` fails if `unsafe` is allowed anywhere else.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
