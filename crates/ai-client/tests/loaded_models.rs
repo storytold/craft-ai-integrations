@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use craft_ai_client::{AiClient, EngineRegistry, FreeMemory, ProviderFactory, ToolDesk};
 use craft_ai_core::{
-    AppId, Connection, ConnectionId, ConsentLedger, InputRole, JobState, ModelId, Payload,
-    Provider, Request, StoreFile,
+    AppId, Connection, ConnectionId, ConsentLedger, InputRole, JobState, ModelId, Payload, Request,
+    StoreFile,
 };
 use craft_ai_engine::testing::FakeRunner;
 use craft_ai_features::Feature;
