@@ -192,7 +192,11 @@ impl Kept {
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         let mut retiring = self.retiring.lock().unwrap_or_else(PoisonError::into_inner);
-        retiring.retain(|(_, _, p)| p.is_busy() || !p.loaded_models().is_empty());
+        // Kept while anything else still holds it: a caller that got it before the swap may
+        // submit through it later, and the model that job loads must stay in sight.
+        retiring.retain(|(_, _, p)| {
+            Arc::strong_count(p) > 1 || p.is_busy() || !p.loaded_models().is_empty()
+        });
         out.extend(retiring.iter().cloned());
         out
     }

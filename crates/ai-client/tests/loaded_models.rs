@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use craft_ai_client::{AiClient, EngineRegistry, FreeMemory, ProviderFactory, ToolDesk};
 use craft_ai_core::{
-    AppId, ConnectionId, ConsentLedger, InputRole, JobState, ModelId, Payload, Request, StoreFile,
+    AppId, Connection, ConnectionId, ConsentLedger, InputRole, JobState, ModelId, Payload,
+    Provider, Request, StoreFile,
 };
 use craft_ai_engine::testing::FakeRunner;
 use craft_ai_features::Feature;
@@ -363,4 +364,57 @@ fn a_job_loading_when_its_connection_changes_leaves_nothing_behind() {
     );
     assert_eq!(app.unload_all_models().freed.len(), 1);
     assert!(app.loaded_models().is_empty());
+}
+
+fn candle_connection(w: &World) -> Connection {
+    w.shared
+        .load()
+        .unwrap()
+        .connections
+        .into_iter()
+        .find(|c| c.provider == "candle")
+        .unwrap()
+}
+
+/// A caller got the provider before the connection changed and submits through it afterwards,
+/// after a listing has already run. The model that late job loads is still listed while it runs,
+/// and goes when it finishes.
+#[test]
+fn a_provider_held_across_a_swap_is_listed_when_it_loads_later() {
+    let w = World::new(4);
+    let mut r = runner();
+    let hold = Arc::new(AtomicBool::new(true));
+    r.hold = Some(hold.clone());
+    let runs = r.runs.clone();
+    let f = factory(registry(&r));
+    let app = w.bare("lightcraft").with_factory(f.clone());
+    let held = f.build(&candle_connection(&w), None).unwrap();
+
+    let file = w.dir.path().join("sam3-new.safetensors");
+    std::fs::write(&file, b"new").unwrap();
+    let desk = ToolDesk::new(w.bare("launcher"), w.shared.clone(), None);
+    desk.enable_native_with(&select_subject(), "candle", &file)
+        .unwrap();
+    f.build(&candle_connection(&w), None).unwrap();
+    assert!(
+        app.loaded_models().is_empty(),
+        "a listing runs before the late job"
+    );
+
+    let request = Request::new(select_subject().capability.clone())
+        .with_input(InputRole::Source, Payload::text("the picture"));
+    let job = held.submit(&sam3(), &request).unwrap();
+    until("the late job is running", || {
+        runs.load(Ordering::SeqCst) == 1
+    });
+    let loaded = app.loaded_models();
+    assert_eq!(loaded.len(), 1, "the late job's model is in sight");
+    assert_eq!(loaded[0].model.bytes, 4);
+    assert_eq!(app.unload_all_models().after_run, vec![sam3()]);
+
+    hold.store(false, Ordering::SeqCst);
+    until("the late job finishes", || {
+        held.poll(&job).unwrap().state.is_terminal()
+    });
+    until("its model is let go of", || app.loaded_models().is_empty());
 }
