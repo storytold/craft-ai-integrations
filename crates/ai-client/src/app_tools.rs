@@ -17,18 +17,30 @@
 //!   and never falls back to some other model.
 //! - The answer is computed on every call, so a choice made in the launcher while the app is open
 //!   is seen at once.
+//! - A wait that ends without the job ending (a timeout, a poll that cannot pass) asks the job to
+//!   stop. When the job cannot be stopped, the sentence returned says it may still be running;
+//!   it is never reported as stopped.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use craft_ai_core::{AppId, ConsentLedger, Event, JobState, Output, Request, Role};
+use craft_ai_core::{
+    AppId, ConsentLedger, Event, JobState, Locality, Output, Payload, Request, Role,
+};
 use craft_ai_features::builtin;
 
 use crate::{AiClient, Job, Plan, RoleStatus};
 
-/// How often a running job is looked at.
+/// How often a running job on this computer is looked at.
 const STEP: Duration = Duration::from_millis(15);
+/// How often a running job at an online service is looked at, so it is not asked many times a
+/// second.
+const REMOTE_STEP: Duration = Duration::from_secs(1);
+/// Added to a sentence when a job could not be stopped.
+const NOT_STOPPED: &str = "It could not be stopped, so it may still be running.";
+/// Shown for a tool the catalogue and the shared store do not have.
+const UNKNOWN: &str = "This tool is not part of the suite yet.";
 /// The longest [`AppTools::run`] waits for a job before it gives up and cancels it.
 const LIMIT: Duration = Duration::from_secs(180);
 
@@ -61,11 +73,37 @@ pub struct Canceller(Running);
 
 impl Canceller {
     /// Asks every job being waited for to stop. Does nothing when none is running.
-    pub fn cancel(&self) {
+    ///
+    /// # Errors
+    /// Returns the sentence to show when a job could not be stopped (some online services cannot
+    /// stop a job once it has started), so the app does not tell the person it stopped.
+    pub fn cancel(&self) -> Result<(), String> {
         let jobs: Vec<Job> = lock(&self.0).iter().map(|(_, job)| job.clone()).collect();
+        let mut refused = 0usize;
         for job in jobs {
-            let _ = job.cancel();
+            if !stop(&job) {
+                refused = refused.saturating_add(1);
+            }
         }
+        match refused {
+            0 => Ok(()),
+            1 => Err(format!("One job did not stop. {NOT_STOPPED}")),
+            n => Err(format!("{n} jobs did not stop. They may still be running.")),
+        }
+    }
+
+    /// How many jobs are being waited for now, so an app can show or hide its stop button.
+    pub fn waiting(&self) -> usize {
+        lock(&self.0).len()
+    }
+}
+
+/// Asks `job` to stop. True when it stopped or had already ended; false when the provider refused
+/// and the job still reads as running (or cannot be read at all).
+fn stop(job: &Job) -> bool {
+    match job.cancel() {
+        Ok(()) => true,
+        Err(_) => job.poll().is_ok_and(|snap| snap.state.is_terminal()),
     }
 }
 
@@ -105,7 +143,9 @@ impl AppTools {
     /// its status right now. Each call reads the store and may touch the key store, so call it
     /// when a menu or page opens, not on every frame.
     pub fn report(&self) -> Vec<ToolReport> {
-        let custom = self.custom_tools();
+        // A store that cannot be read lists no custom tools here; every catalogue tool's status
+        // then carries the store's reason.
+        let custom = self.custom_tools().unwrap_or_default();
         let builtin = self
             .roles
             .iter()
@@ -124,34 +164,44 @@ impl AppTools {
     /// The status of one tool by catalogue id. An id the catalogue does not have is `Unavailable`,
     /// so a typo greys a tool out rather than running something else.
     pub fn status(&self, tool: &str) -> RoleStatus {
-        match self.role(tool) {
-            Some(role) => self.client.status(&role),
-            None => RoleStatus::Unavailable {
-                reason: "This tool is not part of the suite yet.".to_owned(),
+        match self.find(tool) {
+            Ok(Some(role)) => self.client.status(&role),
+            Ok(None) => RoleStatus::Unavailable {
+                reason: UNKNOWN.to_owned(),
             },
+            Err(reason) => RoleStatus::Unavailable { reason },
         }
     }
 
     /// The tool's role, for the `plan` and `start` calls on [`client`](Self::client). The role is
     /// owned because a custom tool is read from the shared store on each call.
     pub fn role(&self, tool: &str) -> Option<Role> {
-        if let Some((_, role)) = self.roles.iter().find(|(_, role)| role.id.as_str() == tool) {
-            return Some(role.clone());
-        }
-        self.custom_tools()
-            .into_iter()
-            .find(|role| role.id.as_str() == tool)
+        self.find(tool).ok().flatten()
     }
 
-    /// The tools people declared in the shared store. A store that cannot be read has none here;
-    /// [`RoleStatus`] carries the reason for each tool it is asked about. The store refuses a custom
-    /// tool whose id is a catalogue id, so the two lists never overlap.
-    fn custom_tools(&self) -> Vec<Role> {
+    /// The tool's role: catalogue first, then the shared store. An error is the store's reason,
+    /// so a store that cannot be read is not mistaken for a tool that does not exist.
+    fn find(&self, tool: &str) -> Result<Option<Role>, String> {
+        if let Some((_, role)) = self.roles.iter().find(|(_, role)| role.id.as_str() == tool) {
+            return Ok(Some(role.clone()));
+        }
+        Ok(self
+            .custom_tools()?
+            .into_iter()
+            .find(|role| role.id.as_str() == tool))
+    }
+
+    /// The tools people declared in the shared store; a missing store has none. The store
+    /// refuses a custom tool whose id is a catalogue id, so the two lists never overlap.
+    ///
+    /// # Errors
+    /// Returns the store's reason when it cannot be read.
+    fn custom_tools(&self) -> Result<Vec<Role>, String> {
         self.client
             .shared
             .load()
             .map(|store| store.custom_tools)
-            .unwrap_or_default()
+            .map_err(|e| e.to_string())
     }
 
     /// A request for `tool`: its capability and no inputs yet. `None` for an unknown tool.
@@ -166,9 +216,7 @@ impl AppTools {
     /// Returns the sentence to show: the tool is unknown, nothing runnable is chosen, or the
     /// request does not fit the chosen model.
     pub fn plan(&self, tool: &str, request: Request) -> Result<Plan, String> {
-        let role = self
-            .role(tool)
-            .ok_or("This tool is not part of the suite yet.")?;
+        let role = self.find(tool)?.ok_or(UNKNOWN)?;
         self.client.plan(&role, request).map_err(|e| e.message)
     }
 
@@ -185,7 +233,9 @@ impl AppTools {
     }
 
     /// [`run`](Self::run) with the longest wait chosen by the app. A job still running when
-    /// `limit` passes is cancelled, never left running unseen.
+    /// `limit` passes, or whose state can no longer be read, is asked to stop; when it cannot be
+    /// stopped the error says it may still be running. A job at an online service is looked at
+    /// once a second, one on this computer more often.
     ///
     /// # Errors
     /// As [`run`](Self::run).
@@ -198,19 +248,23 @@ impl AppTools {
         let job = self.client.start(plan, ledger).map_err(|e| e.message)?;
         let number = self.next_job.fetch_add(1, Ordering::Relaxed);
         lock(&self.running).push((number, job.clone()));
-        // `Job::wait` cancels the job itself when `limit` passes, so none is left running unseen.
-        let done = job.wait(STEP, limit);
+        let step = match plan.disclosure().locality {
+            Locality::Remote => REMOTE_STEP,
+            Locality::Local => STEP,
+        };
+        let done = job.wait(step, limit);
         lock(&self.running).retain(|(n, _)| *n != number);
-        let done = done.map_err(|e| e.message)?;
+        // `Job::wait` asks the job to stop at a timeout, but not after a poll that cannot pass, and
+        // it does not say whether the stop worked. Ask again and report a job that will not stop.
+        let done = done.map_err(|e| {
+            if stop(&job) {
+                e.message
+            } else {
+                format!("{} {NOT_STOPPED}", e.message)
+            }
+        })?;
         match done.state {
-            JobState::Succeeded => Ok(done
-                .events
-                .into_iter()
-                .filter_map(|event| match event {
-                    Event::Output(output) => Some(output),
-                    _ => None,
-                })
-                .collect()),
+            JobState::Succeeded => Ok(outputs(done.events)),
             JobState::Failed { error } => Err(error.message),
             JobState::Cancelled => Err("Cancelled.".to_owned()),
             _ => Err("The job did not finish.".to_owned()),
@@ -226,4 +280,25 @@ impl AppTools {
     pub fn client(&self) -> &AiClient {
         &self.client
     }
+}
+
+/// What a finished job produced: its outputs, then any streamed text as one text output, so a text
+/// tool's reply is not lost.
+fn outputs(events: Vec<Event>) -> Vec<Output> {
+    let mut text = String::new();
+    let mut outputs = Vec::new();
+    for event in events {
+        match event {
+            Event::Output(output) => outputs.push(output),
+            Event::TextDelta { text: part } => text.push_str(&part),
+            _ => {}
+        }
+    }
+    if !text.is_empty() {
+        outputs.push(Output {
+            payload: Payload::text(text),
+            label: None,
+        });
+    }
+    outputs
 }

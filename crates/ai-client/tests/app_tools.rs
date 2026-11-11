@@ -260,6 +260,19 @@ fn picture_request(tools: &AppTools) -> Request {
     )
 }
 
+/// Waits, up to five seconds, until `count` jobs are being waited for, so a single cancel cannot
+/// miss a job that has not started yet.
+fn wait_until_waiting(tools: &AppTools, count: usize) {
+    let canceller = tools.canceller();
+    for _ in 0..500 {
+        if canceller.waiting() >= count {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("{count} jobs never started waiting");
+}
+
 /// Plan, then run: the outputs of the chosen model come back, and the same call works for every app id.
 #[test]
 fn plan_then_run_returns_what_the_chosen_model_produced() -> TestResult {
@@ -309,11 +322,15 @@ fn planning_without_a_choice_or_an_unknown_tool_is_a_sentence() -> TestResult {
 fn cancel_reaches_the_running_job_and_is_harmless_otherwise() -> TestResult {
     let (tools, _dir) = bound_tools("effectcraft", Some(fake(true)))?;
     let canceller = tools.canceller();
-    canceller.cancel();
+    assert_eq!(
+        canceller.cancel(),
+        Ok(()),
+        "nothing running is not an error"
+    );
     let plan = tools.plan("select-subject", picture_request(&tools))?;
     let stopper = std::thread::spawn(move || {
         for _ in 0..200 {
-            canceller.cancel();
+            let _ = canceller.cancel();
             std::thread::sleep(Duration::from_millis(10));
         }
     });
@@ -322,7 +339,7 @@ fn cancel_reaches_the_running_job_and_is_harmless_otherwise() -> TestResult {
         .unwrap_err();
     stopper.join().unwrap();
     assert!(error.to_lowercase().contains("cancel"), "{error}");
-    tools.canceller().cancel();
+    assert_eq!(tools.canceller().cancel(), Ok(()));
     Ok(())
 }
 
@@ -339,9 +356,9 @@ fn one_cancel_reaches_every_job_being_waited_for() -> TestResult {
             tools.run(&plan, &ConsentLedger::default())
         }));
     }
-    std::thread::sleep(Duration::from_millis(100));
+    wait_until_waiting(&tools, 2);
     // One cancel only: asking again would reach a second job after the first has gone.
-    tools.canceller().cancel();
+    tools.canceller().cancel()?;
     for _ in 0..300 {
         if waiting.iter().all(|w| w.is_finished()) {
             break;
@@ -365,10 +382,27 @@ fn a_job_that_outlasts_the_wait_is_cancelled() -> TestResult {
     let engine = fake(true);
     let stopped = engine.stopped.clone();
     let (tools, _dir) = bound_tools("soundcraft", Some(engine))?;
+    let tools = Arc::new(tools);
     let plan = tools.plan("select-subject", picture_request(&tools))?;
-    let error = tools
-        .run_for(&plan, &ConsentLedger::default(), Duration::from_millis(100))
-        .unwrap_err();
+    let waiting = {
+        let tools = tools.clone();
+        std::thread::spawn(move || {
+            tools.run_for(&plan, &ConsentLedger::default(), Duration::from_millis(100))
+        })
+    };
+    // The wait must end on its own limit, well before the three-minute default.
+    for _ in 0..500 {
+        if waiting.is_finished() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let ended = waiting.is_finished();
+    if !ended {
+        let _ = tools.canceller().cancel();
+    }
+    let error = waiting.join().unwrap().unwrap_err();
+    assert!(ended, "the wait outlasted its own limit");
     assert!(!error.is_empty());
     for _ in 0..200 {
         if stopped.load(Ordering::SeqCst) {
@@ -390,11 +424,11 @@ fn a_finished_job_removes_only_itself() -> TestResult {
         let plan = tools.plan("select-subject", picture_request(&tools))?;
         std::thread::spawn(move || tools.run(&plan, &ConsentLedger::default()))
     };
-    std::thread::sleep(Duration::from_millis(100));
+    wait_until_waiting(&tools, 1);
     let plan = tools.plan("select-subject", picture_request(&tools))?;
     let _ = tools.run_for(&plan, &ConsentLedger::default(), Duration::from_millis(100));
     for _ in 0..200 {
-        tools.canceller().cancel();
+        let _ = tools.canceller().cancel();
         if long.is_finished() {
             break;
         }

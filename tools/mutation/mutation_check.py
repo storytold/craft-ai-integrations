@@ -667,8 +667,7 @@ EQUIVALENT.update(CE_EQUIVALENT)
 # Both reasons above are about Windows; on Linux and macOS both cases are caught. Observed on
 # ubuntu-latest and macos-latest through the Deliberate-bug checks workflow.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
-# A case whose mutated code waits out a long limit instead of failing fast.
-TIMEOUTS = {'own-limit-ignored': 60}
+TIMEOUTS = {}
 # Printed by a test that skips itself because the machine cannot do what it needs.
 SKIP_MARK = 'skipped: this machine does not allow directory links'
 
