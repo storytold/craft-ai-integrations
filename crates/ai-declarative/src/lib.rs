@@ -278,21 +278,31 @@ impl Provider for DeclarativeProvider {
             })
             .filter(|t| !t.trim().is_empty())
             .ok_or_else(|| AiError::invalid("a prompt with some text is needed"))?;
-        {
-            // Make room before anything billable is sent.
-            let mut jobs = self.lock()?;
-            self.make_room(&mut jobs)?;
-        }
         let model = model.as_str().to_owned();
         match &self.spec.flow {
-            Flow::RequestResponse { .. } => self.insert(None, Some(Direct { prompt, model })),
+            Flow::RequestResponse { .. } => {
+                {
+                    // Make room before anything billable is sent.
+                    let mut jobs = self.lock()?;
+                    self.make_room(&mut jobs)?;
+                }
+                self.insert(None, Some(Direct { prompt, model }))
+            }
             Flow::Queue { submit, .. } => {
                 let values = Values {
                     prompt: Some(&prompt),
                     model: Some(&model),
                     job_id: None,
                 };
-                let reply = self.send(&flow::fill(&submit.call, &values)?)?;
+                // Fill the whole call before a finished job is evicted: filling may refuse an
+                // oversized prompt, and that must not cost someone a stored result. Nothing is
+                // sent by filling, so room is still made before any billable request.
+                let filled = flow::fill(&submit.call, &values)?;
+                {
+                    let mut jobs = self.lock()?;
+                    self.make_room(&mut jobs)?;
+                }
+                let reply = self.send(&filled)?;
                 let remote = flow::job_id(&reply, &submit.job_id_at, &self.spec.label)?;
                 self.insert(Some(remote), None)
             }
