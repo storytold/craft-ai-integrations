@@ -9,8 +9,8 @@ Engines that run models on this computer (Candle, Burn and others) each needed j
 
 ## Decision
 
-`craft-ai-engine` defines `ModelRunner` and `LoadedModel`, and `EngineProvider` is the one `Provider` that runs any registered model. It loads weights once, makes jobs for one model take turns, ends a cancelled job at once and turns a panicking runner into a failed job. `ProviderFactory::register_engines` is the whole of enabling an engine in an app.
+`craft-ai-engine` defines `ModelRunner` and `LoadedModel`, and `EngineProvider` is the one `Provider` that runs any registered model. It loads weights once, makes jobs for one model take turns, reports a cancelled job as cancelled at once and turns a panicking runner into a failed job. `ProviderFactory::register_engines` is the whole of enabling an engine in an app.
 
 ## Consequences
 
-A new model or engine never touches an app. Engine authors get the same conformance checks as every adapter through `testing::check_runner`.
+A new model or engine never touches an app. Engine authors get the same conformance checks as every adapter through `testing::check_runner`. Cancelling does not stop the runner's work: that ends only when the runner next checks for cancellation, and later jobs for the same model wait until it returns. A runner should check for cancellation often.

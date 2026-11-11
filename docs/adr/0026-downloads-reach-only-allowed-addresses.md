@@ -13,4 +13,4 @@ A link's DNS answers were checked, then the hostname was resolved again for the 
 
 ## Consequences
 
-A new downloader must build its agent with the guarded resolver. The early plain-language refusal stays as a first check.
+A new downloader must build its agent with the guarded resolver. The early plain-language refusal stays as a first check. When a hosted link goes through a configured proxy, the resolver checks the proxy's address and the proxy resolves the destination, so on that path protection against a changing DNS answer depends on the proxy.

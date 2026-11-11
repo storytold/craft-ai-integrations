@@ -13,4 +13,4 @@ The standard secret chain is environment, then the OS keychain, then an encrypte
 
 ## Consequences
 
-A key is never reported absent while it may still be on disk. Hosts ask for the passphrase when `passphrase_need()` says so.
+A key is never reported absent while it may still be on disk. `passphrase_need()` tells a host when to ask for the passphrase (to create or to unlock). Each host builds that prompt itself, and the shared widgets do not offer one yet.

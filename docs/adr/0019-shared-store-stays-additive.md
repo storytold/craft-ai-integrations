@@ -13,4 +13,4 @@ Every app pins its own revision but shares one store file, so an older build oft
 
 ## Consequences
 
-A schema bump shuts every older app out of the person's connections until it updates, so it is used only when an additive change cannot work. STORE-SCHEMA.md says which changes need one.
+Unknown fields inside a list item are kept only when the item has an identity that appears once. An item with no identity field, or whose identity appears twice, is left as written and its unknown fields are not carried. A schema bump shuts every older app out of the person's connections until it updates, so it is used only when an additive change cannot work. STORE-SCHEMA.md says which changes need one.

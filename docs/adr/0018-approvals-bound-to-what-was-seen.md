@@ -9,7 +9,7 @@ A yes given in a consent prompt could be applied to a different destination if s
 
 ## Decision
 
-Sample approval carries the disclosure the person reviewed, so a changed destination or payload asks again. `AiClient::start` refuses a plan from another app before checking consent, reading a key or building a provider. Clients with the same app id can still share plans.
+Sample approval carries the disclosure the person reviewed, so a changed destination or payload asks again, unless an agreement already saved in the consent ledger covers the new plan. `AiClient::start` refuses a plan from another app before checking consent, reading a key or building a provider. Clients with the same app id can still share plans.
 
 ## Consequences
 

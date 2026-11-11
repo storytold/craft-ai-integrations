@@ -13,4 +13,4 @@ The workspace denies `clippy::cognitive_complexity` (threshold 30 in `clippy.tom
 
 ## Consequences
 
-A function that trips a limit is split rather than allowed. Generated code must satisfy the same rules.
+A function that trips a limit is split rather than allowed. The one exception is the generated Burn model module in `crates/ai-engine-burn/src/lib.rs`, which carries `allow(clippy::all)` because its lints belong to the generator. Do not hand-edit generated files to satisfy these rules.

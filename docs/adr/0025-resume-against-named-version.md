@@ -9,7 +9,7 @@ Large hosted results are sometimes cut part way, and signed links stop working a
 
 ## Decision
 
-A cut copy resumes with `Range` only when the host named the file's version: a strong `ETag`, else `Last-Modified`, sent back as `If-Range`. A weak `ETag` is never used. A `206` counts only when its `Content-Range` starts exactly at the kept copy's end. A link clearly past its signed expiry (more than `CLOCK_GRACE_SECS` late) is refused before any request.
+A cut copy resumes with `Range` only when the host named the file's version, sent back as `If-Range`: a strong `ETag`, or, only when the answer carries no `ETag` at all, a `Last-Modified` at least 60 seconds before the response's own `Date`. A weak or malformed `ETag` means no version, with no fall back to `Last-Modified`. A `206` counts only when its `Content-Range` starts exactly at the kept copy's end. A link clearly past its signed expiry (more than `CLOCK_GRACE_SECS` late) is refused before any request.
 
 ## Consequences
 

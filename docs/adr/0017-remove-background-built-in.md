@@ -13,4 +13,4 @@ Remove background had no local model, and every local recipe was also a ComfyUI 
 
 ## Consequences
 
-Any app with the tool gets a background remover with no extra setup. A built-in route no longer has to be a ComfyUI recipe.
+An app offers it by building with `craft-ai-client`'s `burn` feature, which is off by default, and the person downloads the pinned model file once (`crates/ai-features/src/catalogue/inspyrenet.rs`). No ComfyUI, node pack or Python is needed. A built-in route no longer has to be a ComfyUI recipe.
