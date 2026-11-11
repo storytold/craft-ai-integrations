@@ -26,12 +26,75 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// `text` with Rust comments replaced by a space, as the compiler reads them. Strings and
+/// character literals are kept whole, so `"//"` inside one does not start a comment.
+fn without_comments(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let next = chars.get(i + 1).copied();
+        match (chars[i], next) {
+            ('/', Some('/')) => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                out.push(' ');
+            }
+            ('/', Some('*')) => {
+                // Block comments nest in Rust.
+                let mut depth = 0;
+                while i < chars.len() {
+                    match (chars[i], chars.get(i + 1).copied()) {
+                        ('/', Some('*')) => {
+                            depth += 1;
+                            i += 2;
+                        }
+                        ('*', Some('/')) => {
+                            depth -= 1;
+                            i += 2;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => i += 1,
+                    }
+                }
+                out.push(' ');
+            }
+            ('"', _) => {
+                out.push('"');
+                i += 1;
+                while i < chars.len() && chars[i] != '"' {
+                    if chars[i] == '\\' {
+                        out.push(chars[i]);
+                        i += 1;
+                    }
+                    if let Some(&c) = chars.get(i) {
+                        out.push(c);
+                    }
+                    i += 1;
+                }
+                if i < chars.len() {
+                    out.push('"');
+                    i += 1;
+                }
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 /// Whether `text` loosens the `unsafe_code` lint anywhere: `allow`, `warn` or `expect`, with the
 /// lint in any position of the list, inside `cfg_attr` too.
 fn loosens_unsafe(text: &str) -> bool {
     // Built from parts so this file does not match itself.
     let lint = ["unsafe", "_code"].concat();
-    let compact: String = text.split_whitespace().collect();
+    let compact: String = without_comments(text).split_whitespace().collect();
     ["allow(", "warn(", "expect("].iter().any(|level| {
         compact.match_indices(level).any(|(at, _)| {
             let args = &compact[at + level.len()..];
@@ -49,6 +112,9 @@ fn the_check_sees_every_way_of_writing_the_attribute() {
         format!("#[allow(dead_code, {lint})]"),
         format!("#[allow(\n    dead_code,\n    {lint},\n)]"),
         format!("#[cfg_attr(windows, allow({lint}))]"),
+        format!("#![allow(/* reason */ {lint})]"),
+        format!("#![allow(/* a /* nested */ note */ dead_code, {lint})]"),
+        format!("#![allow(dead_code, // reason\n    {lint})]"),
         format!("#[warn({lint})]"),
         format!("#[expect({lint}, reason = \"x\")]"),
     ] {
@@ -59,6 +125,8 @@ fn the_check_sees_every_way_of_writing_the_attribute() {
         format!("#![deny({lint})]"),
         format!("#[allow({lint}s_elsewhere)]"),
         "#[allow(dead_code)]".to_owned(),
+        format!("// #![allow({lint})] is not allowed here"),
+        format!("/* #![allow({lint})] */"),
     ] {
         assert!(!loosens_unsafe(&strict), "false alarm: {strict}");
     }

@@ -12,6 +12,11 @@
 //! SID, and `SYSTEM`. The user SID is named rather than `OWNER RIGHTS`, because an elevated
 //! process may make `Administrators` the owner, and the same person running unelevated later
 //! must still open the file. A folder's entries pass to what is created inside it (`OICI`).
+//!
+//! Limit: a volume that keeps no access lists (FAT, exFAT, some network shares) stores the file
+//! without one, as a Unix mount without modes ignores `0600`. The save still goes ahead, as it
+//! does on Unix: refusing would leave a portable install on such a drive unable to save at all,
+//! and the secret file there is encrypted in any case.
 #![allow(unsafe_code)]
 
 use std::ffi::OsStr;
@@ -31,14 +36,15 @@ use windows_sys::Win32::Security::{
     TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_GENERIC_WRITE,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 /// Creates a new file that only this user and SYSTEM can open, opened for writing with no
 /// sharing. Fails with `AlreadyExists` if `path` exists: an existing file is never taken over.
 pub(super) fn create_file(path: &Path) -> io::Result<File> {
-    let name = wide(path.as_os_str())?;
+    let name = wide_path(path)?;
     let sd = descriptor(&file_sddl(&user_sid()?))?;
     let attributes = sd.attributes();
     // SAFETY: `name` is NUL-terminated and outlives the call; `attributes` points at `sd`'s
@@ -50,7 +56,9 @@ pub(super) fn create_file(path: &Path) -> io::Result<File> {
             0,
             &attributes,
             CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
+            // A link planted at the name counts as the name, so CREATE_NEW fails on it instead
+            // of creating the file the link points at.
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
             ptr::null_mut(),
         )
     };
@@ -64,7 +72,7 @@ pub(super) fn create_file(path: &Path) -> io::Result<File> {
 /// Creates one folder (its parent must exist) that only this user and SYSTEM can open, and
 /// whose entries pass to everything created inside it. Fails with `AlreadyExists` if it exists.
 pub(super) fn create_dir(path: &Path) -> io::Result<()> {
-    let name = wide(path.as_os_str())?;
+    let name = wide_path(path)?;
     let sd = descriptor(&dir_sddl(&user_sid()?))?;
     let attributes = sd.attributes();
     // SAFETY: `name` is NUL-terminated and outlives the call; `attributes` points at `sd`'s
@@ -186,9 +194,36 @@ pub(super) fn user_sid() -> io::Result<String> {
     Ok(out)
 }
 
+/// `path` as a NUL-terminated wide string the creation calls accept past the old 260-character
+/// limit: made absolute, then, when long, given the `\\?\` prefix (`\\?\UNC\` for a share). Std
+/// does the same for its own file calls, which these two replace.
+fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
+    // MAX_PATH less room for an 8.3 name, the limit for folders.
+    const LIMIT: usize = 247;
+    let full = std::path::absolute(path)?;
+    let name: Vec<u16> = full.as_os_str().encode_wide().collect();
+    let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let share: Vec<u16> = r"\\".encode_utf16().collect();
+    let prefixed = if name.len() <= LIMIT || name.starts_with(&verbatim) {
+        name
+    } else if let Some(rest) = name.strip_prefix(share.as_slice()) {
+        // \\server\share\x becomes \\?\UNC\server\share\x
+        r"\\?\UNC\"
+            .encode_utf16()
+            .chain(rest.iter().copied())
+            .collect()
+    } else {
+        verbatim.into_iter().chain(name).collect()
+    };
+    terminate(prefixed)
+}
+
 /// `s` as a NUL-terminated wide string. An interior NUL would silently name another path.
 fn wide(s: &OsStr) -> io::Result<Vec<u16>> {
-    let mut out: Vec<u16> = s.encode_wide().collect();
+    terminate(s.encode_wide().collect())
+}
+
+fn terminate(mut out: Vec<u16>) -> io::Result<Vec<u16>> {
     if out.contains(&0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

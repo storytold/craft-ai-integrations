@@ -180,3 +180,35 @@ fn no_other_handle_can_open_the_file_while_it_is_being_written() {
     assert_owner_only(&p);
     assert!(fs::File::open(&p).is_ok());
 }
+
+#[test]
+fn a_path_past_the_old_length_limit_still_saves() {
+    let dir = inheriting_dir();
+    let mut deep = dir.path().to_path_buf();
+    while deep.as_os_str().len() < 300 {
+        deep.push("a-long-folder-name-to-pass-the-limit");
+    }
+    let p = deep.join("connections.json");
+    fsutil::atomic_write(&p, b"{}").unwrap();
+    assert_eq!(fs::read(&p).unwrap(), b"{}");
+}
+
+#[test]
+fn a_link_planted_at_the_temp_name_is_not_followed() {
+    let dir = inheriting_dir();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("written-through-the-link");
+    let p = dir.path().join("connections.json");
+    let tmp = dir
+        .path()
+        .join(format!(".connections.json.tmp-{}", std::process::id()));
+    // A dangling link: CREATE_NEW without the reparse flag would create its target.
+    if std::os::windows::fs::symlink_file(&target, &tmp).is_err() {
+        eprintln!("skipped: this account cannot create symbolic links");
+        return;
+    }
+    fsutil::atomic_write(&p, b"{}").unwrap();
+    assert!(!target.exists(), "the save went through the planted link");
+    assert_eq!(fs::read(&p).unwrap(), b"{}");
+    assert!(!fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
+}
