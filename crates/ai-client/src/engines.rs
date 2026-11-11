@@ -169,15 +169,14 @@ impl Kept {
         );
         drop(built);
         if let Some(old) = replaced {
-            // A job may still hold the old provider. Its models go as that job finishes; until
-            // then they stay listed, so the memory they hold is never out of sight.
-            old.provider.unload(None);
-            if !old.provider.loaded_models().is_empty() {
-                self.retiring
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push((id, old.label, old.provider));
-            }
+            // Jobs already submitted to the old provider still run. Retired, it lets go of every
+            // model as its job finishes, and it stays listed until it holds nothing and has no
+            // job left that could load one, so the memory is never out of sight.
+            old.provider.retire();
+            self.retiring
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((id, old.label, old.provider));
         }
         Ok(provider)
     }
@@ -192,7 +191,7 @@ impl Kept {
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         let mut retiring = self.retiring.lock().unwrap_or_else(PoisonError::into_inner);
-        retiring.retain(|(_, _, p)| !p.loaded_models().is_empty());
+        retiring.retain(|(_, _, p)| p.is_busy() || !p.loaded_models().is_empty());
         out.extend(retiring.iter().cloned());
         out
     }

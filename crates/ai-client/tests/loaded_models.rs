@@ -247,7 +247,7 @@ fn replacing_an_engine_forgets_the_models_its_old_adapter_loaded() {
 /// stays listed while that job runs, and goes as it finishes.
 #[test]
 fn a_model_whose_connection_changed_mid_job_stays_listed_until_the_job_ends() {
-    let w = World::new(3);
+    let w = World::new(4);
     let mut r = runner();
     let hold = Arc::new(AtomicBool::new(true));
     r.hold = Some(hold.clone());
@@ -286,7 +286,7 @@ fn a_model_whose_connection_changed_mid_job_stays_listed_until_the_job_ends() {
     assert_eq!(
         app.loaded_models()[0].model.bytes,
         3,
-        "the new file's model remains"
+        "the new file's model remains, not the old 4-byte one"
     );
 }
 

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -53,12 +53,15 @@ impl Entry {
         request: &Request,
         job: &Job,
         free: Option<&FreeMemory>,
+        retired: &AtomicBool,
     ) -> Result<Vec<Output>, AiError> {
         let mut slot = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         self.residency.enter();
         let result = self.turn(&mut slot, request, job, free);
-        // Whatever state a model that failed inside was left in, do not reuse it.
-        let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal);
+        // Whatever state a model that failed inside was left in, do not reuse it. A retired
+        // provider keeps nothing once a job is done with it.
+        let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal)
+            || retired.load(Ordering::Acquire);
         // Dropped here, once the slot and the residency are both released.
         drop(self.residency.leave(slot, discard));
         result
@@ -136,6 +139,8 @@ pub struct EngineProvider {
     next: AtomicU64,
     pending: Arc<AtomicUsize>,
     free: Option<FreeMemory>,
+    /// Set by `retire`: every job lets go of its model when it finishes.
+    retired: Arc<AtomicBool>,
 }
 
 impl EngineProvider {
@@ -166,6 +171,7 @@ impl EngineProvider {
             next: AtomicU64::new(0),
             pending: Arc::default(),
             free: None,
+            retired: Arc::default(),
         }
     }
 
@@ -174,6 +180,19 @@ impl EngineProvider {
     pub fn with_free_memory(mut self, read: FreeMemory) -> Self {
         self.free = Some(read);
         self
+    }
+
+    /// Marks this provider as replaced: jobs already submitted still run, and each lets go of
+    /// its model as it finishes, so nothing loaded after the replacement stays behind. Models
+    /// loaded now are unloaded as with [`unload`](Self::unload).
+    pub fn retire(&self) -> Unloaded {
+        self.retired.store(true, Ordering::Release);
+        self.unload(None)
+    }
+
+    /// Whether a job is waiting or running, so may still load a model.
+    pub fn is_busy(&self) -> bool {
+        self.pending.load(Ordering::Acquire) > 0
     }
 
     /// The models held in memory now, in registration order.
@@ -311,11 +330,12 @@ impl Provider for EngineProvider {
             .map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))?;
         let job = Job::new();
         let (work, request, free) = (job.clone(), request.clone(), self.free.clone());
+        let retired = self.retired.clone();
         std::thread::Builder::new()
             .name(format!("{}-{n}", self.engine))
             .spawn(move || {
                 let _pending = pending;
-                let result = entry.run(&request, &work, free.as_ref());
+                let result = entry.run(&request, &work, free.as_ref(), &retired);
                 work.finish(result);
             })
             .map_err(|e| {
@@ -373,7 +393,7 @@ mod tests {
 
         let cancelled = Job::new();
         cancelled.cancel();
-        let result = entry.run(&request, &cancelled, None);
+        let result = entry.run(&request, &cancelled, None, &AtomicBool::new(false));
         assert_eq!(
             result.as_ref().err().map(|e| e.kind),
             Some(ErrorKind::Cancelled)
@@ -395,7 +415,7 @@ mod tests {
         // removed, the cancelled job above would load (and, without the cancel check, run), so
         // these counters would no longer be 0.
         let control = Job::new();
-        let result = entry.run(&request, &control, None);
+        let result = entry.run(&request, &control, None, &AtomicBool::new(false));
         assert!(matches!(&result, Ok(outputs) if outputs.len() == 1));
         control.finish(result);
         assert_eq!(control.snapshot().state, JobState::Succeeded);

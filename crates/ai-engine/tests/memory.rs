@@ -286,3 +286,37 @@ fn a_free_memory_reader_that_panics_fails_the_job_not_the_provider() {
     assert!(p.loaded_models().is_empty());
     assert_eq!(run(&p, &r), JobState::Succeeded, "the next job still runs");
 }
+
+/// A job queued before the provider was retired still runs, loads the model, and lets go of it
+/// as it finishes. The provider is busy until then.
+#[test]
+fn a_retired_provider_keeps_nothing_its_queued_jobs_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r = FakeRunner::new("candle", "sam3", "image.segment");
+    let hold = held(&mut r);
+    let (loads, runs) = (r.loads.clone(), r.runs.clone());
+    let p = provider(vec![(r.clone(), weights(&dir, "m.bin", 3))]);
+    let first = p.submit(&id("sam3"), &r.good_request().unwrap()).unwrap();
+    until("the first job is running", || {
+        runs.load(Ordering::SeqCst) == 1
+    });
+    let queued = p.submit(&id("sam3"), &r.good_request().unwrap()).unwrap();
+
+    let done = p.retire();
+    assert_eq!(done.after_run, vec![id("sam3")]);
+    assert!(p.is_busy());
+    hold.store(false, Ordering::SeqCst);
+    assert_eq!(finish(&p, &first), JobState::Succeeded);
+    assert_eq!(
+        finish(&p, &queued),
+        JobState::Succeeded,
+        "a queued job still runs"
+    );
+    until("both workers are done", || !p.is_busy());
+    assert!(p.loaded_models().is_empty(), "nothing stays behind");
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        2,
+        "the queued job loaded it again"
+    );
+}
