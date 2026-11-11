@@ -253,7 +253,8 @@ pub(crate) fn prepare(
         tempfile::Builder::new()
             .prefix(&format!("{key}.{role}."))
             .tempdir_in(cache)
-            .map_err(file_error)
+            // The error text of a failed create can name the scratch path; only its kind is kept.
+            .map_err(|error| file_error(error.kind()))
     };
     let [work_role, conversion_role, output_role] = SCRATCH_ROLES;
     let work = scratch(work_role)?;
