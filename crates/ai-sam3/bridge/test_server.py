@@ -99,6 +99,41 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(json.load(resp), {"model": "sam3", "ready": True})
         self.assertLess(time.monotonic() - started, 1, "health waited for a busy slot")
 
+    def test_a_slow_health_probe_is_dropped_at_the_total_deadline(self):
+        port = self.server.server_port
+        for _ in range(server.MAX_CONNECTIONS):
+            busy = socket.create_connection(("127.0.0.1", port))
+            self.addCleanup(busy.close)
+            busy.sendall(b"POST /v1/detect HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{")
+        time.sleep(0.2)
+        probe = socket.create_connection(("127.0.0.1", port))
+        self.addCleanup(probe.close)
+        probe.settimeout(0.2)
+        started = time.monotonic()
+        # One byte every 0.5 s never trips the per-read timeout; the total deadline must.
+        for byte in b"GET /v1/health HTTP/1.1\r\nX: " + b"a" * 100:
+            try:
+                probe.sendall(bytes([byte]))
+                if probe.recv(1) == b"":
+                    break
+            except socket.timeout:
+                pass
+            except OSError:
+                break
+            time.sleep(0.5)
+        self.assertLess(time.monotonic() - started, 6)
+
+    def test_a_thread_that_cannot_start_gives_its_slot_back(self):
+        from unittest import mock
+        httpd = BridgeServer(("127.0.0.1", 0), handler_for(lambda raw, prompt: {}))
+        self.addCleanup(httpd.server_close)
+        with mock.patch("socketserver.ThreadingMixIn.process_request", side_effect=RuntimeError("no thread")):
+            for _ in range(server.MAX_CONNECTIONS + 2):
+                with self.assertRaises(RuntimeError):
+                    httpd.process_request(None, ("127.0.0.1", 0))
+        for _ in range(server.MAX_CONNECTIONS):
+            self.assertTrue(httpd.slots.acquire(blocking=False))
+
     def test_only_one_prediction_runs_at_a_time(self):
         active, peak = 0, 0
         guard = threading.Lock()

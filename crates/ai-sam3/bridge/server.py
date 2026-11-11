@@ -82,13 +82,18 @@ class BridgeServer(ThreadingHTTPServer):
             else:
                 self.shutdown_request(request)
             return
-        super().process_request(request, client_address)
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            # The slot is otherwise released only by the thread that never started.
+            self.slots.release()
+            raise
 
     def answer_probe(self, request):
         """Answers `GET /v1/health` on a connection taken while every inference slot is busy."""
         try:
             request.settimeout(IDLE_SECONDS)
-            with request.makefile("rb") as reader:
+            with io.BufferedReader(HeadReader(request)) as reader:
                 line = reader.readline(1024)
             parts = line.rstrip(b"\r\n").split(b" ")
             if len(parts) == 3 and parts[0] == b"GET" and parts[1] == b"/v1/health":
