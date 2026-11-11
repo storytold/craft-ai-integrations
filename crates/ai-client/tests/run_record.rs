@@ -268,6 +268,31 @@ fn a_failed_run_keeps_the_reason_without_the_key_the_prompt_or_a_link() {
     assert!(line.contains("\"outcome\":\"failed\""), "{line}");
 }
 
+/// A key that sits inside the request text is removed with the whole of that text, in an error and
+/// in a notice, rather than leaving the words around it behind.
+#[test]
+fn a_key_inside_the_request_text_takes_the_whole_text_with_it() {
+    let world = mock_world(Script::default());
+    let plan = world.client.plan(&role(), request()).unwrap();
+    let inner = "sentence";
+    assert!(PROMPT.contains(inner));
+    let said = format!("could not use: {PROMPT}.");
+    let done = Finished {
+        state: JobState::Failed {
+            error: AiError::new(ErrorKind::Provider, said.clone()),
+        },
+        events: vec![Event::Notice {
+            message: said.clone(),
+        }],
+        usage: None,
+    };
+    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[inner]);
+    let want = "could not use: [key removed].";
+    assert_eq!(rec.error.unwrap().message, want);
+    assert_eq!(rec.notices, vec![want.to_owned()]);
+}
+
 /// The second guard: a line that still holds a secret, plainly or as JSON escapes it, is refused
 /// without repeating it, and an empty secret does not refuse every line.
 #[test]

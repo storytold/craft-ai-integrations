@@ -8,9 +8,10 @@
 //! adapters word it for people, but it is cleaned when the record is built: the given secrets, the
 //! request's own text inputs and anything shaped like a link are replaced.
 //!
-//! Invariants: a record holds none of the secrets given to [`RunRecord::new`], so serialising it by
-//! any route is safe; and [`RunRecord::to_json_line`] still refuses a line that contains a secret,
-//! in plain or JSON-escaped form, as a second guard.
+//! Invariants: the error and notice text a record holds contains none of the secrets given to
+//! [`RunRecord::new`]. The other fields are copied from the plan and are not checked there, and the
+//! fields are public, so write records with [`RunRecord::to_json_line`]: it refuses a line that
+//! contains a secret, in plain or JSON-escaped form.
 
 use std::time::Duration;
 
@@ -224,16 +225,45 @@ impl RunRecord {
     }
 }
 
-/// `text` with each secret, each request text and each link replaced by a placeholder. Secrets go
-/// first, so a key inside a link or a prompt is gone whatever else matches.
+/// `text` with each secret, each request text and each link replaced by a placeholder. Secrets and
+/// request texts are all found in the original text and overlapping matches are removed together,
+/// so a key inside a prompt cannot break the prompt's match and leave the rest of it behind. A
+/// removed stretch that held a key reads "[key removed]". Links are removed from what remains.
 fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
-    let mut out = text.to_owned();
-    for secret in secrets.iter().filter(|s| !s.is_empty()) {
-        out = out.replace(secret, "[key removed]");
+    // (start, end, held a key), byte offsets into `text` on character boundaries.
+    let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+    let needles = secrets
+        .iter()
+        .map(|s| (*s, true))
+        .chain(prompts.iter().map(|p| (*p, false)));
+    for (needle, is_key) in needles.filter(|(n, _)| !n.is_empty()) {
+        for (at, _) in text.match_indices(needle) {
+            spans.push((at, at + needle.len(), is_key));
+        }
     }
-    for prompt in prompts.iter().filter(|p| !p.is_empty()) {
-        out = out.replace(prompt, "[request text removed]");
+    spans.sort_unstable();
+    let mut merged: Vec<(usize, usize, bool)> = Vec::new();
+    for (start, end, is_key) in spans {
+        match merged.last_mut() {
+            Some(last) if start < last.1 => {
+                last.1 = last.1.max(end);
+                last.2 |= is_key;
+            }
+            _ => merged.push((start, end, is_key)),
+        }
     }
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for (start, end, is_key) in merged {
+        out.push_str(text.get(from..start).unwrap_or_default());
+        out.push_str(if is_key {
+            "[key removed]"
+        } else {
+            "[request text removed]"
+        });
+        from = end;
+    }
+    out.push_str(text.get(from..).unwrap_or_default());
     without_links(&out)
 }
 
