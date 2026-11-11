@@ -721,3 +721,65 @@ fn endless_range_refusals_stop_at_the_resume_budget() {
     assert_eq!(err.kind, ErrorKind::Cancelled);
     assert_eq!(server.count(), before);
 }
+
+/// A link planted at the part-file name is replaced, never written through: the file it points at
+/// is left as it was and the download still lands correctly.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_part_name_is_not_followed() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    for victim_len in [6, 100] {
+        std::fs::write(&victim, vec![b'v'; victim_len]).unwrap();
+        let part = dir.path().join("m.safetensors.part");
+        let _ = std::fs::remove_file(&part);
+        std::os::unix::fs::symlink(&victim, &part).unwrap();
+        let _ = std::fs::remove_file(dir.path().join("m.safetensors"));
+        let file = model(&data, &format!("{}/m", origin(&server)));
+        let path = run(
+            &downloader(),
+            &file,
+            dir.path(),
+            None,
+            &AtomicBool::new(false),
+        )
+        .0
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), data);
+        assert_eq!(std::fs::read(&victim).unwrap(), vec![b'v'; victim_len]);
+    }
+}
+
+/// A part file a hard link joins to another file cannot be resumed: the response would be
+/// appended to that file. It is cleared instead, so the download finishes rather than failing on
+/// every retry.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_part_file_is_cleared_instead_of_resumed() {
+    let data = body();
+    let server = range_server(data.clone(), true);
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    std::fs::write(&victim, &data[..100]).unwrap();
+    std::fs::hard_link(&victim, dir.path().join("m.safetensors.part")).unwrap();
+    let file = model(&data, &format!("{}/m", origin(&server)));
+    let path = run(
+        &downloader(),
+        &file,
+        dir.path(),
+        None,
+        &AtomicBool::new(false),
+    )
+    .0
+    .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), data);
+    assert_eq!(std::fs::read(&victim).unwrap(), &data[..100]);
+    assert!(
+        server.recorded()[0].header("range").is_none(),
+        "no resume through a hard link"
+    );
+}
