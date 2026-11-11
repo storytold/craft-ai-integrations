@@ -50,3 +50,21 @@ MM = [
     ('size-not-read-again-after-a-run', P, AFTER_RUN, '', E, 'memory', 'grows_between_runs'),
     ('bad-model-kept-after-a-crash', P, 'let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal);', 'let discard = false;', E, 'provider', 'panicking_runner_fails_the_job_and_is_loaded_afresh'),
 ]
+
+# Group `cm`: the same, through the app's client (`ai-client/src/engines.rs`, `factory.rs`,
+# `client.rs`). Unloading one model needs its connection, a replaced engine's models are not
+# listed, and a free-memory reader applies whichever order the client and factory are built in.
+CE = 'crates/ai-client/src/engines.rs'
+CF = 'crates/ai-client/src/factory.rs'
+CC = 'crates/ai-client/src/client.rs'
+C = 'craft-ai-client'
+T = 'loaded_models'
+
+CM = [
+    ('unload-one-ignores-connection', CE, '(Some((connection, model)), None) if connection.as_str() == id => {', '(Some((_, model)), None) => {', C, T, 'needs_its_connection'),
+    ('label-not-listed', CE, 'connection_label: label.clone(),', 'connection_label: String::new(),', C, T, 'listed_with_its_engine_and_connection'),
+    ('unregister-keeps-old-cache', CF, '        self.support.remove(&name);\n        self.engines.remove(&name);\n    }', '        self.support.remove(&name);\n    }', C, T, 'replacing_an_engine_forgets'),
+    ('reader-lost-with-a-new-factory', CC, 'if free.is_some() {', 'if false {', C, T, 'whichever_order'),
+    ('reader-not-given-to-existing-engines', CE, '            kept.set_free_memory(read.clone());\n', '', C, T, 'after_a_model_loaded'),
+    ('reader-not-given-to-later-engines', CE, '            kept.set_free_memory(self.free_memory.clone());\n', '', C, T, 'before_its_engines'),
+]

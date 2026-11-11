@@ -69,6 +69,11 @@ pub struct ProviderFactory {
     /// family), which [`set_send_retry`](Self::set_send_retry) may rebuild. Registering or
     /// unregistering a name takes it off the list, so an app's own builder is never replaced.
     standard_senders: HashSet<String>,
+    /// The provider cache of each registered built-in engine, by lowercase name, so loaded
+    /// models can be listed and freed. Registering or unregistering a name drops its entry.
+    pub(crate) engines: HashMap<String, Arc<crate::engines::Kept>>,
+    /// How built-in engines read free memory before a load (see `set_free_memory`).
+    pub(crate) free_memory: Option<craft_ai_engine::FreeMemory>,
 }
 
 impl ProviderFactory {
@@ -109,6 +114,8 @@ impl ProviderFactory {
             media: None,
             timeouts,
             standard_senders: HashSet::new(),
+            engines: HashMap::new(),
+            free_memory: None,
         };
         for name in OPENAI_FAMILY {
             f.register(name, move |c, s| {
@@ -234,6 +241,7 @@ impl ProviderFactory {
         self.accelerators.remove(&name);
         self.support.remove(&name);
         self.standard_senders.remove(&name);
+        self.engines.remove(&name);
         self.builders.insert(name, Arc::new(build));
     }
 
@@ -246,6 +254,7 @@ impl ProviderFactory {
         self.builders.remove(&name);
         self.accelerators.remove(&name);
         self.support.remove(&name);
+        self.engines.remove(&name);
     }
 
     /// Points data-described services at a specific folder of settings files (one file per

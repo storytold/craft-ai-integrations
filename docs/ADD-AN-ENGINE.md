@@ -142,8 +142,10 @@ track of what each model holds, so an app can show it and let a person free it.
 - `ModelRunner::memory_needed` says roughly how much a load will take. The default is the weights
   file's size. Override it when the model needs much more than its file.
 
-On the app side, `EngineProvider::loaded_models` lists what is loaded, `unload` frees one model or
-all of them, and `unload_idle` frees models unused for a given time. A model in use finishes its
-job first. Nothing runs on a timer: the app decides when to call these. Give the provider
+On the app side, `AiClient::loaded_models` lists what is loaded, with the engine and the
+connection each model was set up through. `unload_model` frees one, `unload_all_models` frees
+them all, and `unload_idle_models` frees models unused for a given time. A model in use finishes
+its job first. Nothing runs on a timer: the app decides when to call these. Give the client
 `with_free_memory` and a load that will not fit fails in plain words before anything is loaded.
-The model files on disk are never touched.
+The model files on disk are never touched. (`EngineProvider` has the same calls for a provider
+used on its own.)

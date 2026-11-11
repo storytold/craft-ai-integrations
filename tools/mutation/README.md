@@ -28,6 +28,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
 | `mutation_check.py kf` | Standard secret chain (`secrets/standard.rs`): a locked secret file is reported, not read as empty; an empty passphrase counts as none; when to ask for a passphrase. Cases in `mutation_keys.py`. |
 | `mutation_check.py mm` | Models kept in memory (`ai-engine/src/memory.rs`, `provider.rs`): an unload never interrupts a run and is never lost, idle and single-model unloads, the free-memory check before a load. Cases in `mutation_engine_memory.py`. |
+| `mutation_check.py cm` | The same through the app's client (`ai-client/src/engines.rs`, `factory.rs`, `client.rs`): unloading one model needs its connection, a replaced engine's models are not listed, a free-memory reader applies in any build order. Cases in `mutation_engine_memory.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh
