@@ -85,10 +85,6 @@ impl MediaStore {
         if config.max_bytes == 0 {
             return Err(AiError::invalid("the media size limit must be above zero"));
         }
-        let config = MediaStoreConfig {
-            max_attempts: config.max_attempts.clamp(1, 5),
-            ..config
-        };
         let agent = ureq::Agent::with_parts(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
