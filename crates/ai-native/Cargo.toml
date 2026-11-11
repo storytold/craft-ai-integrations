@@ -20,7 +20,7 @@ keyring = "4"
 
 [target.'cfg(windows)'.dependencies]
 # Owner-only access lists for private files: the named `unsafe` exception in `src/owner_only/win_acl.rs`.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile = "3"

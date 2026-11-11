@@ -1,44 +1,66 @@
-//! Windows access-list checks, read back as SDDL (locale-neutral, unlike `icacls` names).
+//! Windows access-list checks, read back as SDDL (locale-neutral, unlike account names).
 
 use super::*;
 use crate::fsutil;
 use std::fs;
-use std::path::PathBuf;
 
-/// The system's `icacls.exe`, used here only to read access lists back.
-fn icacls() -> PathBuf {
-    let root =
-        std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-    root.join("System32").join("icacls.exe")
-}
-
-/// The DACL part of `path`'s security descriptor, such as `D:P(A;;FA;;;OW)(A;;FA;;;SY)`.
-fn dacl(path: &Path) -> String {
-    let dir = tempfile::tempdir().unwrap();
-    let out = dir.path().join("acl.txt");
-    let status = std::process::Command::new(icacls())
-        .arg(path)
-        .arg("/save")
-        .arg(&out)
+/// `path`'s whole security descriptor as SDDL, which is locale-neutral, read with PowerShell.
+fn sddl(path: &Path) -> String {
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-Acl -LiteralPath $env:CRAFT_ACL_PATH).Sddl",
+        ])
+        .env("CRAFT_ACL_PATH", path)
         .output()
         .unwrap();
     assert!(
-        status.status.success(),
-        "icacls /save failed for {}",
+        out.status.success(),
+        "Get-Acl failed for {}",
         path.display()
     );
-    let raw = fs::read(&out).unwrap();
-    let wide: Vec<u16> = raw
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|c| u16::from_le_bytes(*c))
-        .collect();
-    let text = String::from_utf16_lossy(&wide);
-    let sddl = text.lines().nth(1).unwrap_or_default().trim().to_owned();
-    let start = sddl.find("D:").expect("no DACL in SDDL");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// The DACL part of `path`'s security descriptor, such as `D:P(A;;FA;;;S-1-5-21-...)(A;;FA;;;SY)`.
+fn dacl(path: &Path) -> String {
+    let sddl = sddl(path);
+    let start = sddl.find("D:").unwrap();
     let end = sddl[start..].find("S:").map_or(sddl.len(), |i| start + i);
     sddl[start..end].to_owned()
+}
+
+/// The SID of the user running the tests.
+fn me() -> String {
+    super::win_acl::user_sid().unwrap()
+}
+
+/// The two names a private object grants, sorted like [`trustees`].
+fn expected() -> Vec<String> {
+    let mut t = vec![me(), "SY".to_owned()];
+    t.sort();
+    t
+}
+
+/// The owner SID from `path`'s security descriptor.
+fn owner(path: &Path) -> String {
+    let sddl = sddl(path);
+    let start = sddl.find("O:").map_or(0, |i| i + 2);
+    let end = sddl[start..].find("G:").map_or(sddl.len(), |i| start + i);
+    sddl[start..end].to_owned()
+}
+
+#[test]
+fn the_user_sid_matches_whoami() {
+    let out = std::process::Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let sid = text.trim().rsplit(',').next().unwrap().trim_matches('"');
+    assert_eq!(me(), sid);
 }
 
 /// `(flags, trustee)` of every ACE in a DACL string.
@@ -66,7 +88,8 @@ fn assert_owner_only(path: &Path) {
         "{} still inherits: {d}",
         path.display()
     );
-    assert_eq!(trustees(&d), ["OW", "SY"], "{}: {d}", path.display());
+    assert_eq!(trustees(&d), expected(), "{}: {d}", path.display());
+    assert_eq!(owner(path), me(), "{}", path.display());
     assert!(
         aces(&d).iter().all(|(flags, _)| !flags.contains("ID")),
         "{}: {d}",
@@ -117,12 +140,13 @@ fn new_folders_are_owner_only_and_pass_it_on() {
     for d in [&outer, &inner] {
         let list = dacl(d);
         assert!(list.starts_with("D:P"), "{}: {list}", d.display());
-        assert_eq!(trustees(&list), ["OW", "SY"], "{}: {list}", d.display());
+        assert_eq!(trustees(&list), expected(), "{}: {list}", d.display());
+        assert_eq!(owner(d), me(), "{}", d.display());
     }
     // A file made any other way inside (history, a backup copy, a lock) inherits only those two.
     let log = inner.join("jobs.jsonl");
     fs::write(&log, b"{}\n").unwrap();
-    assert_eq!(trustees(&dacl(&log)), ["OW", "SY"]);
+    assert_eq!(trustees(&dacl(&log)), expected());
     // The folder that already existed is left alone.
     assert!(!dacl(dir.path()).starts_with("D:P"));
 }

@@ -1,45 +1,103 @@
 //! The workspace's one `unsafe` exception, named in `AGENTS.md` and `CONTRIBUTING.md`: the Win32
-//! calls that give a file or folder an owner-only access list. Std has no safe way to set one.
+//! calls that create a file or folder with an owner-only access list. Std cannot pass a security
+//! descriptor when it creates a file.
 //!
-//! Only safe functions leave this module. Each `unsafe` block is a single foreign call whose
-//! pointers come from values that outlive it, and `tests/unsafe_exception.rs` fails if `unsafe`
-//! is allowed anywhere else.
+//! Only safe functions leave this module. Each `unsafe` block is one foreign call whose pointers
+//! come from values that outlive it, and `tests/unsafe_exception.rs` fails if `unsafe` is allowed
+//! anywhere else.
 //!
-//! The lists, as SDDL: protected (`P`, nothing inherited from the parent), full control (`FA`)
-//! for `OWNER RIGHTS` (`OW`, whoever owns the object) and `SYSTEM` (`SY`). A folder's entries
-//! are inherited by the files and folders created inside it (`OICI`).
+//! The list is set as the object is created, never afterwards: a list applied later cannot revoke
+//! a handle another account opened in between. It is protected (`P`, nothing inherited from the
+//! parent) and grants full control (`FA`) to two names only: the user this process runs as, by
+//! SID, and `SYSTEM`. The user SID is named rather than `OWNER RIGHTS`, because an elevated
+//! process may make `Administrators` the owner, and the same person running unelevated later
+//! must still open the file. A folder's entries pass to what is created inside it (`OICI`).
 #![allow(unsafe_code)]
 
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::path::Path;
 use std::ptr;
 
-use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree, WIN32_ERROR};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
-    SetNamedSecurityInfoW, SetSecurityInfo,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, OBJECT_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    TokenUser,
 };
-pub(super) use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_WRITE, WRITE_DAC};
+use windows_sys::Win32::Storage::FileSystem::{
+    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE,
+};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-/// Owner-only list for one file.
-pub(super) const FILE_SDDL: &str = "D:P(A;;FA;;;OW)(A;;FA;;;SY)";
+/// Creates a new file that only this user and SYSTEM can open, opened for writing with no
+/// sharing. Fails with `AlreadyExists` if `path` exists: an existing file is never taken over.
+pub(super) fn create_file(path: &Path) -> io::Result<File> {
+    let name = wide(path.as_os_str())?;
+    let sd = descriptor(&file_sddl(&user_sid()?))?;
+    let attributes = sd.attributes();
+    // SAFETY: `name` is NUL-terminated and outlives the call; `attributes` points at `sd`'s
+    // descriptor, alive until the end of this function; the template handle may be null.
+    let handle = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            FILE_GENERIC_WRITE,
+            0,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `handle` is a valid file handle that nothing else owns; `File` closes it once.
+    Ok(unsafe { File::from_raw_handle(handle as RawHandle) })
+}
+
+/// Creates one folder (its parent must exist) that only this user and SYSTEM can open, and
+/// whose entries pass to everything created inside it. Fails with `AlreadyExists` if it exists.
+pub(super) fn create_dir(path: &Path) -> io::Result<()> {
+    let name = wide(path.as_os_str())?;
+    let sd = descriptor(&dir_sddl(&user_sid()?))?;
+    let attributes = sd.attributes();
+    // SAFETY: `name` is NUL-terminated and outlives the call; `attributes` points at `sd`'s
+    // descriptor, alive until the end of this function.
+    let ok = unsafe { CreateDirectoryW(name.as_ptr(), &attributes) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Owner-only list for one file, owned by `sid`.
+pub(super) fn file_sddl(sid: &str) -> String {
+    format!("O:{sid}D:P(A;;FA;;;{sid})(A;;FA;;;SY)")
+}
+
 /// Owner-only list for a folder, passed on to everything created inside it.
-pub(super) const DIR_SDDL: &str = "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)";
-
-/// Replace the access list, and stop inheriting from the parent.
-const INFO: OBJECT_SECURITY_INFORMATION =
-    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+pub(super) fn dir_sddl(sid: &str) -> String {
+    format!("O:{sid}D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)")
+}
 
 /// A security descriptor the system allocated; freed exactly once, on drop.
 struct Descriptor(PSECURITY_DESCRIPTOR);
+
+impl Descriptor {
+    fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
 
 impl Drop for Descriptor {
     fn drop(&mut self) {
@@ -49,54 +107,10 @@ impl Drop for Descriptor {
     }
 }
 
-/// Applies `sddl`'s access list to an open file through its handle, which needs `WRITE_DAC`.
-/// Using the handle rather than the path means the list lands on the file this process created,
-/// even if the name was swapped since.
-pub(super) fn protect_file(file: &File, sddl: &str) -> io::Result<()> {
-    let sd = descriptor(sddl)?;
-    let acl = dacl(&sd)?;
-    // SAFETY: the handle is borrowed from `file`, which is open for the whole call; `acl` points
-    // into `sd`, which is alive until the end of this function. Owner, group and SACL are null,
-    // which INFO says not to change.
-    let code = unsafe {
-        SetSecurityInfo(
-            file.as_raw_handle(),
-            SE_FILE_OBJECT,
-            INFO,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            acl,
-            ptr::null(),
-        )
-    };
-    check(code)
-}
-
-/// Applies `sddl`'s access list to the file or folder at `path`.
-pub(super) fn protect_path(path: &Path, sddl: &str) -> io::Result<()> {
-    let name = wide(path.as_os_str())?;
-    let sd = descriptor(sddl)?;
-    let acl = dacl(&sd)?;
-    // SAFETY: `name` is NUL-terminated with no interior NUL and lives past the call; `acl` points
-    // into `sd`, alive until the end of this function; null owner, group and SACL are unchanged.
-    let code = unsafe {
-        SetNamedSecurityInfoW(
-            name.as_ptr(),
-            SE_FILE_OBJECT,
-            INFO,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            acl,
-            ptr::null(),
-        )
-    };
-    check(code)
-}
-
 fn descriptor(sddl: &str) -> io::Result<Descriptor> {
     let text = wide(OsStr::new(sddl))?;
     let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
-    // SAFETY: `text` is NUL-terminated and lives past the call; `sd` is a valid out pointer and
+    // SAFETY: `text` is NUL-terminated and outlives the call; `sd` is a valid out pointer and
     // the size out pointer may be null.
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -112,31 +126,64 @@ fn descriptor(sddl: &str) -> io::Result<Descriptor> {
     Ok(Descriptor(sd))
 }
 
-/// The access list inside `sd`. Only valid while `sd` lives.
-fn dacl(sd: &Descriptor) -> io::Result<*const ACL> {
-    let mut present = 0;
-    let mut defaulted = 0;
-    let mut acl: *mut ACL = ptr::null_mut();
-    // SAFETY: `sd.0` is a valid descriptor owned by `sd`; the three out pointers are valid locals.
-    let ok = unsafe { GetSecurityDescriptorDacl(sd.0, &mut present, &mut acl, &mut defaulted) };
+/// A token handle, closed exactly once on drop.
+struct Token(HANDLE);
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` came from OpenProcessToken and is closed only here.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// The SID of the user this process runs as, such as `S-1-5-21-…-1001`.
+pub(super) fn user_sid() -> io::Result<String> {
+    let mut raw: HANDLE = ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo handle that needs no closing; `raw` is a valid
+    // out pointer.
+    let ok = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    // A missing or null list means "everyone may do anything": never apply that.
-    if present == 0 || acl.is_null() {
-        return Err(io::Error::other(
-            "the private access list could not be built",
-        ));
+    let token = Token(raw);
+    // TOKEN_USER holds a pointer into the same buffer, so the buffer is u64-aligned and sized
+    // well past the largest SID (68 bytes) plus the header.
+    let mut buffer = [0u64; 64];
+    let mut needed = 0u32;
+    let size = u32::try_from(size_of_val(&buffer)).unwrap_or(u32::MAX);
+    // SAFETY: `buffer` is writable for `size` bytes and outlives every use of its contents;
+    // `needed` is a valid out pointer.
+    let ok = unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            size,
+            &mut needed,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
     }
-    Ok(acl)
-}
-
-fn check(code: WIN32_ERROR) -> io::Result<()> {
-    if code == ERROR_SUCCESS {
-        Ok(())
-    } else {
-        Err(io::Error::from_raw_os_error(code.cast_signed()))
+    // SAFETY: on success the buffer starts with a TOKEN_USER, and it is suitably aligned.
+    let sid = unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    let mut text: windows_sys::core::PWSTR = ptr::null_mut();
+    // SAFETY: `sid` points into `buffer`, still alive; `text` is a valid out pointer.
+    let ok = unsafe { ConvertSidToStringSidW(sid, &mut text) };
+    if ok == 0 || text.is_null() {
+        return Err(io::Error::last_os_error());
     }
+    let mut len = 0;
+    // SAFETY: `text` is a NUL-terminated string the system allocated; reading up to its NUL
+    // stays in bounds.
+    while unsafe { *text.add(len) } != 0 {
+        len += 1;
+    }
+    // SAFETY: `text` is valid for `len` elements, as just counted.
+    let out = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
+    // SAFETY: ConvertSidToStringSidW allocates with LocalAlloc; freed once here.
+    unsafe { LocalFree(text.cast()) };
+    Ok(out)
 }
 
 /// `s` as a NUL-terminated wide string. An interior NUL would silently name another path.

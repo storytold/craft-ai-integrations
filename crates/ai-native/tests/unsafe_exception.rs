@@ -26,6 +26,44 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether `text` loosens the `unsafe_code` lint anywhere: `allow`, `warn` or `expect`, with the
+/// lint in any position of the list, inside `cfg_attr` too.
+fn loosens_unsafe(text: &str) -> bool {
+    // Built from parts so this file does not match itself.
+    let lint = ["unsafe", "_code"].concat();
+    let compact: String = text.split_whitespace().collect();
+    ["allow(", "warn(", "expect("].iter().any(|level| {
+        compact.match_indices(level).any(|(at, _)| {
+            let args = &compact[at + level.len()..];
+            let list = &args[..args.find(')').unwrap_or(args.len())];
+            list.split(',').any(|name| name == lint)
+        })
+    })
+}
+
+#[test]
+fn the_check_sees_every_way_of_writing_the_attribute() {
+    let lint = ["unsafe", "_code"].concat();
+    for loose in [
+        format!("#![allow({lint})]"),
+        format!("#[allow(dead_code, {lint})]"),
+        format!("#[allow(\n    dead_code,\n    {lint},\n)]"),
+        format!("#[cfg_attr(windows, allow({lint}))]"),
+        format!("#[warn({lint})]"),
+        format!("#[expect({lint}, reason = \"x\")]"),
+    ] {
+        assert!(loosens_unsafe(&loose), "missed: {loose}");
+    }
+    for strict in [
+        format!("#![forbid({lint})]"),
+        format!("#![deny({lint})]"),
+        format!("#[allow({lint}s_elsewhere)]"),
+        "#[allow(dead_code)]".to_owned(),
+    ] {
+        assert!(!loosens_unsafe(&strict), "false alarm: {strict}");
+    }
+}
+
 #[test]
 fn only_the_named_module_allows_unsafe_code() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -33,19 +71,11 @@ fn only_the_named_module_allows_unsafe_code() {
     rust_files(&root.join("crates"), &mut files);
     assert!(files.len() > 100, "found only {} source files", files.len());
 
-    // Built from parts so this file does not match itself.
-    let lint = ["unsafe", "_code"].concat();
-    let loosening: Vec<String> = ["allow", "warn", "expect"]
-        .iter()
-        .map(|level| format!("{level}({lint}"))
-        .collect();
-
     let mut offenders = Vec::new();
     let mut exception_found = false;
     for file in &files {
         let text = fs::read_to_string(file).unwrap_or_default();
-        let compact: String = text.split_whitespace().collect();
-        if !loosening.iter().any(|l| compact.contains(l.as_str())) {
+        if !loosens_unsafe(&text) {
             continue;
         }
         let relative = file
