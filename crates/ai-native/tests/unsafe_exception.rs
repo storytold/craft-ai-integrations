@@ -80,6 +80,20 @@ fn without_comments(text: &str) -> String {
                     i += 1;
                 }
             }
+            // A character literal ('"', '\'', '\u{2f}') is copied whole, so a quote inside it does
+            // not open a string. A lifetime ('a) has no closing quote and falls through.
+            ('\'', Some('\\')) => {
+                let end = chars[i + 2..]
+                    .iter()
+                    .position(|&c| c == '\'')
+                    .map_or(chars.len(), |p| i + 2 + p + 1);
+                out.extend(&chars[i..end]);
+                i = end;
+            }
+            ('\'', Some(_)) if chars.get(i + 2) == Some(&'\'') => {
+                out.extend(&chars[i..i + 3]);
+                i += 3;
+            }
             (c, _) => {
                 out.push(c);
                 i += 1;
@@ -115,6 +129,9 @@ fn the_check_sees_every_way_of_writing_the_attribute() {
         format!("#![allow(/* reason */ {lint})]"),
         format!("#![allow(/* a /* nested */ note */ dead_code, {lint})]"),
         format!("#![allow(dead_code, // reason\n    {lint})]"),
+        format!("const Q: char = '\"';\n#[allow(/* reason */ {lint})]\nfn f() {{}}"),
+        format!("const Q: char = '\\'';\n#[allow(/* reason */ {lint})]\nfn f() {{}}"),
+        format!("fn f<'a>(x: &'a str) {{}}\n#[allow(/* reason */ {lint})]\nfn g() {{}}"),
         format!("#[warn({lint})]"),
         format!("#[expect({lint}, reason = \"x\")]"),
     ] {
