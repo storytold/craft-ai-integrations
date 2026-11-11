@@ -9,11 +9,13 @@
 )]
 
 mod job;
+mod memory;
 mod provider;
 mod registry;
 mod runner;
 pub mod testing;
 
+pub use memory::{FreeMemory, LoadedModelInfo, Unloaded};
 pub use provider::EngineProvider;
 pub use registry::EngineRegistry;
 pub use runner::{LoadedModel, ModelRunner, RunContext};

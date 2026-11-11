@@ -5,7 +5,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use craft_ai_core::conformance::{
@@ -47,6 +47,9 @@ pub struct FakeRunner {
     pub vendors: Vec<GpuVendor>,
     /// Never looks at Cancel, like a runner that forgot to.
     pub deaf: bool,
+    /// What the loaded model says it holds, read each time it is asked, so a test can change
+    /// it between runs. `None` leaves the provider to estimate.
+    pub memory: Option<Arc<AtomicU64>>,
 }
 
 impl FakeRunner {
@@ -62,6 +65,7 @@ impl FakeRunner {
             runs: Arc::default(),
             vendors: Vec::new(),
             deaf: false,
+            memory: None,
         }
     }
 
@@ -134,6 +138,10 @@ impl LoadedModel for FakeRunner {
             payload: Payload::text("done"),
             label: None,
         }])
+    }
+
+    fn memory_bytes(&self) -> Option<u64> {
+        self.memory.as_ref().map(|m| m.load(Ordering::SeqCst))
     }
 }
 

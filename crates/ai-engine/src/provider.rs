@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use craft_ai_core::{
     AiError, Connection, ErrorKind, JobId, JobSnapshot, Limits, ModelId, ModelInfo, Output,
@@ -15,6 +16,7 @@ use craft_ai_core::{
 };
 
 use crate::job::Job;
+use crate::memory::{self, FreeMemory, LoadedModelInfo, Outcome, Residency, Slot, Unloaded};
 use crate::registry::EngineRegistry;
 use crate::runner::{LoadedModel, ModelRunner};
 
@@ -40,12 +42,37 @@ struct Entry {
     model: ModelInfo,
     /// The loaded model. Held for the length of a run, which is what makes jobs for one model
     /// take turns.
-    loaded: Mutex<Option<Box<dyn LoadedModel>>>,
+    loaded: Slot,
+    /// What the loaded model holds, readable while a run has the slot.
+    residency: Residency,
 }
 
 impl Entry {
-    fn run(&self, request: &Request, job: &Job) -> Result<Vec<Output>, AiError> {
+    fn run(
+        &self,
+        request: &Request,
+        job: &Job,
+        free: Option<&FreeMemory>,
+    ) -> Result<Vec<Output>, AiError> {
         let mut slot = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        self.residency.enter();
+        let result = self.turn(&mut slot, request, job, free);
+        // Whatever state a model that failed inside was left in, do not reuse it.
+        let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal);
+        let let_go = self.residency.leave(&mut slot, discard);
+        drop(slot);
+        drop(let_go);
+        result
+    }
+
+    /// One job's turn with the model, with the slot held.
+    fn turn(
+        &self,
+        slot: &mut Option<Box<dyn LoadedModel>>,
+        request: &Request,
+        job: &Job,
+        free: Option<&FreeMemory>,
+    ) -> Result<Vec<Output>, AiError> {
         // Only now is the job really running: until this point it was waiting its turn behind
         // another job for the same model. A job cancelled while it waited never loads or runs.
         if !job.begin() {
@@ -53,8 +80,15 @@ impl Entry {
         }
         let ctx = job.context();
         if slot.is_none() {
+            let needed = guarded(|| Ok(self.runner.memory_needed(&self.weights)))?;
+            memory::check_fits(&self.model.label, needed, free)?;
             let weights = self.weights.clone();
-            *slot = Some(guarded(|| self.runner.load(&weights))?);
+            let model = guarded(|| self.runner.load(&weights))?;
+            match reported(model.as_ref()) {
+                Some(bytes) => self.residency.loaded(bytes, false),
+                None => self.residency.loaded(needed.unwrap_or_default(), true),
+            }
+            *slot = Some(model);
         }
         // Cancel pressed during a slow load stops here, before any work on the request.
         ctx.check_cancelled()?;
@@ -62,12 +96,19 @@ impl Entry {
             return Err(AiError::new(ErrorKind::Internal, "the model did not load"));
         };
         let result = guarded(|| model.run(request, &ctx));
-        if matches!(&result, Err(e) if e.kind == ErrorKind::Internal) {
-            // Whatever state it was left in, do not reuse it.
-            *slot = None;
+        // A model may keep work between runs (SAM keeps the picture), so read its size again.
+        if let Some(bytes) = reported(model.as_ref()) {
+            self.residency.loaded(bytes, false);
         }
         result
     }
+}
+
+/// What a loaded model says it holds; a model that panics saying so is treated as silent.
+fn reported(model: &dyn LoadedModel) -> Option<u64> {
+    catch_unwind(AssertUnwindSafe(|| model.memory_bytes()))
+        .ok()
+        .flatten()
 }
 
 /// Runs `f`, turning a panic into an error a person can read.
@@ -94,6 +135,7 @@ pub struct EngineProvider {
     table: Mutex<Table>,
     next: AtomicU64,
     pending: Arc<AtomicUsize>,
+    free: Option<FreeMemory>,
 }
 
 impl EngineProvider {
@@ -112,6 +154,7 @@ impl EngineProvider {
                     weights,
                     model,
                     loaded: Mutex::new(None),
+                    residency: Residency::default(),
                 })
             })
             .collect();
@@ -122,7 +165,52 @@ impl EngineProvider {
             table: Mutex::new(Table::default()),
             next: AtomicU64::new(0),
             pending: Arc::default(),
+            free: None,
         }
+    }
+
+    /// Checks free memory before each load, refusing in words a load that will not fit rather
+    /// than starting one that cannot finish. `read` returns `None` when it cannot tell.
+    pub fn with_free_memory(mut self, read: FreeMemory) -> Self {
+        self.free = Some(read);
+        self
+    }
+
+    /// The models held in memory now, in registration order.
+    pub fn loaded_models(&self) -> Vec<LoadedModelInfo> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.residency.info(&e.model.id, &e.model.label))
+            .collect()
+    }
+
+    /// Unloads `model`, or every model when `None`. A model in use is let go of as its job
+    /// finishes. The next job loads it again. The files on disk are untouched.
+    pub fn unload(&self, model: Option<&ModelId>) -> Unloaded {
+        self.unload_where(|e| model.is_none_or(|m| &e.model.id == m), None)
+    }
+
+    /// Unloads every model no job has used for at least `older_than`. Models in use, or used
+    /// more recently, are left alone. The app decides when to call this; nothing here runs on a
+    /// timer.
+    pub fn unload_idle(&self, older_than: Duration) -> Unloaded {
+        self.unload_where(|_| true, Some(older_than))
+    }
+
+    fn unload_where(&self, pick: impl Fn(&Entry) -> bool, idle: Option<Duration>) -> Unloaded {
+        let mut done = Unloaded::default();
+        for entry in self.entries.iter().filter(|e| pick(e)) {
+            match entry.residency.unload(&entry.loaded, idle) {
+                // Dropped here, outside every lock.
+                Outcome::Freed(model) => {
+                    drop(model);
+                    done.freed.push(entry.model.id.clone());
+                }
+                Outcome::AfterRun => done.after_run.push(entry.model.id.clone()),
+                Outcome::Untouched => {}
+            }
+        }
+        done
     }
 
     /// Builds the provider for a saved connection: one runner per model on it, each reading the
@@ -222,12 +310,12 @@ impl Provider for EngineProvider {
         let id = JobId::new(format!("{}-{n}", self.engine))
             .map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))?;
         let job = Job::new();
-        let (work, request) = (job.clone(), request.clone());
+        let (work, request, free) = (job.clone(), request.clone(), self.free.clone());
         std::thread::Builder::new()
             .name(format!("{}-{n}", self.engine))
             .spawn(move || {
                 let _pending = pending;
-                let result = entry.run(&request, &work);
+                let result = entry.run(&request, &work, free.as_ref());
                 work.finish(result);
             })
             .map_err(|e| {
@@ -285,7 +373,7 @@ mod tests {
 
         let cancelled = Job::new();
         cancelled.cancel();
-        let result = entry.run(&request, &cancelled);
+        let result = entry.run(&request, &cancelled, None);
         assert_eq!(
             result.as_ref().err().map(|e| e.kind),
             Some(ErrorKind::Cancelled)
@@ -307,7 +395,7 @@ mod tests {
         // removed, the cancelled job above would load (and, without the cancel check, run), so
         // these counters would no longer be 0.
         let control = Job::new();
-        let result = entry.run(&request, &control);
+        let result = entry.run(&request, &control, None);
         assert!(matches!(&result, Ok(outputs) if outputs.len() == 1));
         control.finish(result);
         assert_eq!(control.snapshot().state, JobState::Succeeded);
