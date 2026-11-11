@@ -17,8 +17,8 @@ mod polling;
 use craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES;
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
-    Payload, Provider, Request, SecretString, capability::CapabilityId, endpoint::Endpoint,
-    model::CapabilitySpec, payload::Limits,
+    Payload, Pricing, Provider, Request, SecretString, capability::CapabilityId,
+    endpoint::Endpoint, model::CapabilitySpec, payload::Limits,
 };
 use http::{Http, encode_query};
 use serde_json::{Value, json};
@@ -150,17 +150,24 @@ impl BflProvider {
             ModelId::new(fill::MODEL),
             CapabilityId::parse("image.inpaint"),
         ) {
-            models.push(
-                ModelInfo::new(id, "FLUX.1 Fill [pro]").with(
-                    CapabilitySpec::new(cap)
-                        .accepting(InputRole::Source, 1)
-                        .requiring(InputRole::Source)
-                        .accepting(InputRole::Mask, 1)
-                        .requiring(InputRole::Mask)
-                        .accepting(InputRole::Prompt, 1)
-                        .requiring(InputRole::Prompt),
-                ),
+            let mut fill = ModelInfo::new(id, "FLUX.1 Fill [pro]").with(
+                CapabilitySpec::new(cap)
+                    .accepting(InputRole::Source, 1)
+                    .requiring(InputRole::Source)
+                    .accepting(InputRole::Mask, 1)
+                    .requiring(InputRole::Mask)
+                    .accepting(InputRole::Prompt, 1)
+                    .requiring(InputRole::Prompt),
             );
+            // Source: https://docs.bfl.ai/quick_start/pricing, read 08/11/2026: "FLUX.1 Fill [pro]
+            // 5 credits $0.05" in the "Price per Image" column, one flat price with no size tiers.
+            // FLUX 3 image and video are left unpriced: that page prices them by resolution tier
+            // (and video by the second), which the request does not fix in advance.
+            fill.pricing = Some(Pricing {
+                per_image_micros: Some(50_000),
+                ..Pricing::default()
+            });
+            models.push(fill);
         }
         models
     }

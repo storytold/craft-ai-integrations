@@ -24,6 +24,7 @@ fn pause() {
     std::thread::sleep(std::time::Duration::from_millis(5));
 }
 
+/// Runs the shared lifecycle check with a short pause between polls.
 fn lifecycle(
     p: &dyn Provider,
     m: &ModelId,
@@ -32,20 +33,37 @@ fn lifecycle(
     run_lifecycle_paced(p, m, r, &pause)
 }
 
+/// Runs the shared cancel check with a short pause between polls.
 fn cancel(p: &dyn Provider, m: &ModelId, r: &Request) -> Result<(), String> {
     run_cancel_paced(p, m, r, &pause)
 }
 
+/// A capability id from a test string.
 fn cap(s: &str) -> CapabilityId {
     CapabilityId::parse(s).unwrap()
 }
 
+/// A model id from a test string.
 fn model(s: &str) -> ModelId {
     ModelId::new(s).unwrap()
 }
 
+/// A provider whose workers never retry, so a scripted 429 is answered at once.
 fn provider(url: &str) -> OpenAiProvider {
-    OpenAiProvider::new(OpenAiConfig::new(url).with_key(SecretString::new(KEY))).unwrap()
+    let mut config = OpenAiConfig::new(url).with_key(SecretString::new(KEY));
+    config.send_retry = craft_ai_core::Backoff::NEVER;
+    OpenAiProvider::new(config).unwrap()
+}
+
+/// A provider whose workers retry a refused send with no pause.
+fn retrying(url: &str) -> OpenAiProvider {
+    let mut config = OpenAiConfig::new(url).with_key(SecretString::new(KEY));
+    config.send_retry = craft_ai_core::Backoff {
+        max_attempts: 3,
+        first_delay: std::time::Duration::ZERO,
+        budget: std::time::Duration::from_secs(5),
+    };
+    OpenAiProvider::new(config).unwrap()
 }
 
 fn text_req() -> Request {
@@ -537,6 +555,7 @@ fn usage_of(server_url: &str) -> Option<craft_ai_core::Usage> {
     panic!("the job never finished");
 }
 
+/// A `cost` from a server not known to bill in money is dropped; the token counts stay.
 #[test]
 fn a_cost_field_from_an_unknown_server_is_not_shown_as_money() {
     let reply = json!({"choices":[{"message":{"content":"hi"}}],
@@ -549,6 +568,7 @@ fn a_cost_field_from_an_unknown_server_is_not_shown_as_money() {
     assert_eq!(usage.currency, None);
 }
 
+/// Prices in a plain server's model list are not trusted, so none reach the model info.
 #[test]
 fn prices_in_a_model_list_are_ignored_unless_the_server_is_openrouter() {
     let list = r#"{"object":"list","data":[{"id":"gpt-4o","created":1700000000,
@@ -560,4 +580,109 @@ fn prices_in_a_model_list_are_ignored_unless_the_server_is_openrouter() {
         (models[0].pricing.clone(), models[0].released),
         (None, None)
     );
+}
+
+/// The worker sends again after a 429 refusal, and the job then succeeds.
+#[test]
+fn a_rate_limited_send_is_sent_again_by_the_worker() {
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = seen.clone();
+    let server = Server::start(move |_| {
+        if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            Reply::Json(
+                429,
+                json!({"error":{"message":"slow down","code":"rate_limit_exceeded"}}).to_string(),
+            )
+        } else {
+            Reply::Json(200, completion("ok"))
+        }
+    });
+    let done = lifecycle(&retrying(&server.url), &model("gpt-4o"), &text_req()).unwrap();
+    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+/// Out of credit shares the 429 status but is Quota, and is never sent again.
+#[test]
+fn an_out_of_credit_send_is_not_sent_again() {
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = seen.clone();
+    let server = Server::start(move |_| {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Reply::Json(
+            429,
+            json!({"error":{"message":"pay","code":"insufficient_quota"}}).to_string(),
+        )
+    });
+    let done = lifecycle(&retrying(&server.url), &model("gpt-4o"), &text_req()).unwrap();
+    assert_eq!(failed(&done.state).kind, ErrorKind::Quota);
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// The scripted server itself refuses an endless request head instead of rescanning it, and still
+/// reads a delimiter that arrives split across two writes.
+#[test]
+fn the_test_server_bounds_a_request_head() {
+    use std::io::{Read, Write};
+    let server = Server::start(|_| Reply::Json(200, "{}".into()));
+    let addr = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+    let mut hostile = std::net::TcpStream::connect(&addr).unwrap();
+    let line = format!("X-Pad: {}\r\n", "a".repeat(1000));
+    let mut sent = hostile.write_all(b"GET /v1/models HTTP/1.1\r\n").is_ok();
+    for _ in 0..200 {
+        sent &= hostile.write_all(line.as_bytes()).is_ok();
+    }
+    let _ = sent; // the server may close before the last write
+    let mut rest = Vec::new();
+    // macOS answers `EINVAL` here once the server has closed the socket, which is expected: the
+    // point is only that no reply arrives.
+    let _ = hostile.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = hostile.read_to_end(&mut rest);
+    assert!(rest.is_empty(), "an oversized head got a reply");
+    assert_eq!(server.count(), 0);
+
+    let mut split = std::net::TcpStream::connect(&addr).unwrap();
+    split
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n\r")
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    split.write_all(b"\n").unwrap();
+    let mut reply = Vec::new();
+    split.read_to_end(&mut reply).unwrap();
+    assert!(
+        reply.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert_eq!(server.count(), 1);
+}
+
+/// A head that is only oversized in the read that carries its delimiter is still refused: the
+/// limit is where the head ends, not whether a delimiter happened to arrive with it. Without that
+/// check the oversized head was parsed and answered.
+#[test]
+fn the_test_server_refuses_a_delimiter_past_the_limit() {
+    use std::io::{Read, Write};
+    let server = Server::start(|_| Reply::Json(200, "{}".into()));
+    let addr = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+    let mut client = std::net::TcpStream::connect(&addr).unwrap();
+    // One write: a complete 70 KiB head whose delimiter starts past the server's 64 KiB limit, so
+    // it arrives in the read that crosses the limit.
+    let mut head = b"GET /v1/models HTTP/1.1\r\nX-Pad: ".to_vec();
+    head.extend(std::iter::repeat_n(b'a', 70 * 1024));
+    head.extend_from_slice(b"\r\n\r\n");
+    let _ = client.write_all(&head); // the server may close before the last byte
+    let _ = client.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut rest = Vec::new();
+    let _ = client.read_to_end(&mut rest);
+    assert!(rest.is_empty(), "an oversized head got a reply");
+    assert_eq!(server.count(), 0);
 }

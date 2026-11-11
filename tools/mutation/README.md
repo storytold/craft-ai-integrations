@@ -26,6 +26,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py vx` | Vertex express adapter (`ai-vertex/src/lib.rs`): the API key travels in the `x-goog-api-key` header, never in the request URL. |
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |
 | `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
+| `mutation_check.py kf` | Standard secret chain (`secrets/standard.rs`): a locked secret file is reported, not read as empty; an empty passphrase counts as none; when to ask for a passphrase. Cases in `mutation_keys.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh

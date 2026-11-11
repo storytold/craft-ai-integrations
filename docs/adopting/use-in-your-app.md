@@ -200,6 +200,9 @@ The rules for your prompt:
 
 - Show `plan.disclosure()`: the destination, and what is sent (the kind of each input and its
   size). Nothing else about the request needs to be shown.
+- Show `plan.estimate()` beside it when it is `Some` (`craft_ai_egui::text::cost_text` words it).
+  It comes from the saved model's price, needs no key and contacts nothing. `None` means no price
+  is known, not that the job is free, so say nothing about cost then.
 - Offer the four terms in `ConsentTerm::ALL`: this time, one hour, one day, until turned off. The
   words are yours, so you can translate them. `ConsentTerm::id()` is the stable name.
 - Start the job with the ledger that `agree` returns. Save your ledger only when
