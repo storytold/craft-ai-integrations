@@ -293,6 +293,32 @@ fn a_key_inside_the_request_text_takes_the_whole_text_with_it() {
     assert_eq!(rec.notices, vec![want.to_owned()]);
 }
 
+/// Request text that overlaps itself in a message ("private private" inside "private private
+/// private") is removed in full, in an error and in a notice.
+#[test]
+fn request_text_repeated_with_overlap_is_removed_in_full() {
+    let world = mock_world(Script::default());
+    let text = "private private";
+    let request =
+        Request::new(role().capability).with_input(InputRole::Prompt, Payload::text(text));
+    let plan = world.client.plan(&role(), request).unwrap();
+    let said = "saw: private private private.".to_owned();
+    let done = Finished {
+        state: JobState::Failed {
+            error: AiError::new(ErrorKind::Provider, said.clone()),
+        },
+        events: vec![Event::Notice {
+            message: said.clone(),
+        }],
+        usage: None,
+    };
+    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY]);
+    let want = "saw: [request text removed].";
+    assert_eq!(rec.error.unwrap().message, want);
+    assert_eq!(rec.notices, vec![want.to_owned()]);
+}
+
 /// The second guard: a line that still holds a secret, plainly or as JSON escapes it, is refused
 /// without repeating it, and an empty secret does not refuse every line.
 #[test]

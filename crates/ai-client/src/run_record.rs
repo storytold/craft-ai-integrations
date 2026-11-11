@@ -237,8 +237,14 @@ fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
         .map(|s| (*s, true))
         .chain(prompts.iter().map(|p| (*p, false)));
     for (needle, is_key) in needles.filter(|(n, _)| !n.is_empty()) {
-        for (at, _) in text.match_indices(needle) {
+        // Every occurrence, overlapping ones included (`match_indices` skips those): the next
+        // search starts one character after the last match began.
+        let step = needle.chars().next().map_or(1, char::len_utf8);
+        let mut from = 0;
+        while let Some(found) = text.get(from..).and_then(|rest| rest.find(needle)) {
+            let at = from + found;
             spans.push((at, at + needle.len(), is_key));
+            from = at + step;
         }
     }
     spans.sort_unstable();

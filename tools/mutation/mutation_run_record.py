@@ -27,5 +27,6 @@ RR = [
     ('notice-not-cleaned', R, 'Event::Notice { message } => notices.push(clean(message)),', 'Event::Notice { message } => notices.push(message.clone()),', CL, T, 'a_job_not_yet_ended'),
     ('error-not-cleaned', R, 'message: clean(&error.message),', 'message: error.message.clone(),', CL, T, 'without_the_key_the_prompt_or_a_link'),
     ('spacing-lost', R, 'out.push_str(&piece[word.len()..]);', "out.push(' ');", CL, T, 'without_the_key_the_prompt_or_a_link'),
+    ('overlapping-repeats-skipped', R, 'from = at + step;', 'from = at + needle.len();', CL, T, 'repeated_with_overlap'),
     ('usage-dropped', R, 'usage: finished.usage.clone(),', 'usage: None,', CL, T, 'a_job_not_yet_ended'),
 ]
