@@ -21,6 +21,8 @@ MAX_IMAGE = 16 * 1024 * 1024
 # that a health check is read on one of MAX_PROBES extra slots so a busy bridge still answers it.
 IDLE_SECONDS = 15
 BODY_SECONDS = 60
+# The request line and headers together must arrive within HEADER_SECONDS (a byte at a time does not help).
+HEADER_SECONDS = 30
 MAX_CONNECTIONS = 8
 MAX_PROBES = 4
 HEALTH_BODY = b'{"model":"sam3","ready":true}'
@@ -104,6 +106,25 @@ class BridgeServer(ThreadingHTTPServer):
             self.slots.release()
 
 
+class HeadReader(io.RawIOBase):
+    """Socket reader that stops once the request line and headers have taken too long overall."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.deadline = time.monotonic() + HEADER_SECONDS
+
+    def readable(self):
+        return True
+
+    def readinto(self, buf):
+        if self.deadline is not None:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("request head too slow")
+            self.sock.settimeout(min(IDLE_SECONDS, remaining))
+        return self.sock.recv_into(buf)
+
+
 def read_body(rfile, size, deadline, sock):
     """Exactly `size` bytes, or None if the client stops sending or runs past `deadline`."""
     chunks, have = [], 0
@@ -131,6 +152,15 @@ def handler_for(predict):
 
     class Handler(BaseHTTPRequestHandler):
         timeout = IDLE_SECONDS
+
+        def setup(self):
+            super().setup()
+            self.rfile = io.BufferedReader(HeadReader(self.connection))
+
+        def parse_request(self):
+            ok = super().parse_request()
+            self.rfile.raw.deadline = None  # the body has its own deadline (read_body)
+            return ok
 
         def log_message(self, *_args):
             # Do not log prompts, image contents, or arbitrary request paths.

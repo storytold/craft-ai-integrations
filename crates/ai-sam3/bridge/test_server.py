@@ -19,7 +19,7 @@ class BridgeTests(unittest.TestCase):
             cls.seen.append((raw, prompt))
             return {"width": 12, "height": 8, "boxes": [[1, 2, 3, 4]], "scores": [0.7]}
 
-        server.IDLE_SECONDS, server.BODY_SECONDS = 1, 2
+        server.IDLE_SECONDS, server.BODY_SECONDS, server.HEADER_SECONDS = 1, 2, 2
         cls.server = BridgeServer(("127.0.0.1", 0), handler_for(fake))
         cls.url = "http://127.0.0.1:%s/v1" % cls.server.server_port
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -66,6 +66,24 @@ class BridgeTests(unittest.TestCase):
         stalled.settimeout(10)
         self.assertEqual(stalled.recv(1024), b"")  # closed by the server, not left open
         self.assertLess(time.monotonic() - started, 5)
+
+    def test_slow_headers_are_dropped_at_a_total_deadline(self):
+        stalled = socket.create_connection(("127.0.0.1", self.server.server_port))
+        self.addCleanup(stalled.close)
+        started = time.monotonic()
+        stalled.settimeout(0.2)
+        # One byte every 0.5 s never trips the 1 s per-read timeout; only the total deadline stops it.
+        for byte in b"GET /v1/health HTTP/1.1\r\nX: " + b"a" * 100:
+            try:
+                stalled.sendall(bytes([byte]))
+                if stalled.recv(1) == b"":
+                    break
+            except socket.timeout:
+                pass
+            except OSError:
+                break
+            time.sleep(0.5)
+        self.assertLess(time.monotonic() - started, 6)
 
     def test_health_is_answered_while_every_inference_slot_is_busy(self):
         port = self.server.server_port
