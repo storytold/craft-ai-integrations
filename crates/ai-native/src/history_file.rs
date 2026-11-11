@@ -91,7 +91,11 @@ impl HistoryFile {
             // file left readable by an older version is tightened before it is rotated or
             // written to, so neither the live file nor the copy it becomes stays readable.
             #[cfg(unix)]
-            tighten(&self.path)?;
+            {
+                tighten(&self.path)?;
+                // `read` includes the rotated copy, so an old readable one is tightened too.
+                tighten(&self.rotated_path())?;
+            }
             let len = fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
             if len > 0 && len + line.len() as u64 > self.max_bytes {
                 fs::rename(&self.path, self.rotated_path())?;
