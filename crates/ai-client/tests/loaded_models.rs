@@ -1,7 +1,7 @@
 //! Models the built-in engines keep in memory, through the app's client: listing them with their
 //! connection, freeing one, all or the idle ones, and refusing a load that will not fit.
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use craft_ai_client::{AiClient, EngineRegistry, FreeMemory, ProviderFactory, ToolDesk};
@@ -70,17 +70,27 @@ impl World {
     }
 }
 
-fn run(app: &AiClient) -> JobState {
+fn start(app: &AiClient) -> craft_ai_client::Job {
     let role = select_subject().role().unwrap();
     let request = Request::new(select_subject().capability.clone())
         .with_input(InputRole::Source, Payload::text("the picture"));
-    let ledger = ConsentLedger::default();
     let plan = app.plan(&role, request).unwrap();
-    app.start(&plan, &ledger)
-        .unwrap()
+    app.start(&plan, &ConsentLedger::default()).unwrap()
+}
+
+fn run(app: &AiClient) -> JobState {
+    start(app)
         .wait(Duration::from_millis(2), Duration::from_secs(10))
         .unwrap()
         .state
+}
+
+fn until(what: &str, check: impl Fn() -> bool) {
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    while !check() {
+        assert!(std::time::Instant::now() < end, "timed out waiting: {what}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn runner() -> FakeRunner {
@@ -231,4 +241,73 @@ fn replacing_an_engine_forgets_the_models_its_old_adapter_loaded() {
     f.unregister("candle");
     let app = w.bare("lightcraft").with_factory(f);
     assert!(app.loaded_models().is_empty());
+}
+
+/// The tool is set up again with a new file while a job still runs on the old one. The old model
+/// stays listed while that job runs, and goes as it finishes.
+#[test]
+fn a_model_whose_connection_changed_mid_job_stays_listed_until_the_job_ends() {
+    let w = World::new(3);
+    let mut r = runner();
+    let hold = Arc::new(AtomicBool::new(true));
+    r.hold = Some(hold.clone());
+    let runs = r.runs.clone();
+    let app = w.client(&r);
+    let first = start(&app);
+    until("the first job is running", || {
+        runs.load(Ordering::SeqCst) == 1
+    });
+
+    let file = w.dir.path().join("sam3-new.safetensors");
+    std::fs::write(&file, b"new").unwrap();
+    let desk = ToolDesk::new(w.bare("launcher"), w.shared.clone(), None);
+    desk.enable_native_with(&select_subject(), "candle", &file)
+        .unwrap();
+    let second = start(&app);
+    until("the second job is running", || {
+        runs.load(Ordering::SeqCst) == 2
+    });
+    assert_eq!(
+        app.loaded_models().len(),
+        2,
+        "the old model is still in sight"
+    );
+
+    hold.store(false, Ordering::SeqCst);
+    for job in [first, second] {
+        let done = job
+            .wait(Duration::from_millis(2), Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(done.state, JobState::Succeeded);
+    }
+    until("the old model is let go of", || {
+        app.loaded_models().len() == 1
+    });
+    assert_eq!(
+        app.loaded_models()[0].model.bytes,
+        3,
+        "the new file's model remains"
+    );
+}
+
+/// Clients built from one factory share one loaded copy of a model, not two.
+#[test]
+fn clients_from_one_factory_share_one_loaded_copy() {
+    let w = World::new(3);
+    let r = runner();
+    let loads = r.loads.clone();
+    let f = factory(registry(&r));
+    let one = w.bare("lightcraft").with_factory(f.clone());
+    let two = w.bare("photocraft").with_factory(f);
+    run(&one);
+    run(&two);
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    let ids = |c: &AiClient| -> Vec<_> {
+        c.loaded_models()
+            .into_iter()
+            .map(|m| (m.connection, m.model.model))
+            .collect()
+    };
+    assert_eq!(ids(&one).len(), 1);
+    assert_eq!(ids(&one), ids(&two));
 }

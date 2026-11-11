@@ -66,5 +66,7 @@ CM = [
     ('unregister-keeps-old-cache', CF, '        self.support.remove(&name);\n        self.engines.remove(&name);\n    }', '        self.support.remove(&name);\n    }', C, T, 'replacing_an_engine_forgets'),
     ('reader-lost-with-a-new-factory', CC, 'if free.is_some() {', 'if false {', C, T, 'whichever_order'),
     ('reader-not-given-to-existing-engines', CE, '            kept.set_free_memory(read.clone());\n', '', C, T, 'after_a_model_loaded'),
+    ('replaced-provider-not-unloaded', CE, '            old.provider.unload(None);\n', '', C, T, 'changed_mid_job'),
+    ('replaced-provider-hidden', CE, '        out.extend(retiring.iter().cloned());\n', '', C, T, 'changed_mid_job'),
     ('reader-not-given-to-later-engines', CE, '            kept.set_free_memory(self.free_memory.clone());\n', '', C, T, 'before_its_engines'),
 ]

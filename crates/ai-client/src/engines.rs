@@ -2,8 +2,12 @@
 //! the providers built for each connection so their loaded models can be listed and freed.
 //!
 //! Invariants: one provider per connection per engine, replaced only when the connection names
-//! different models or weight files. Listing and unloading never hold a cache lock while calling
-//! into a provider, and never block on a running job.
+//! different models or weight files. A replaced provider is asked to unload at once (a running
+//! job finishes first) and stays listed until its models are gone, so nothing it holds is hidden.
+//! Listing and unloading never block on a running job.
+//!
+//! The cache belongs to the factory and is shared by its clones, so clients built from one
+//! factory share one loaded copy of each model rather than loading the weights twice.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -110,6 +114,9 @@ struct Built {
 #[derive(Default)]
 pub(crate) struct Kept {
     built: Mutex<HashMap<String, Built>>,
+    /// Providers replaced while a job still held one of their models: listed and freeable until
+    /// those models are gone.
+    retiring: Mutex<Vec<(String, String, Arc<EngineProvider>)>>,
     /// Read by every provider at load time, so a reader set later still applies.
     free: Arc<Mutex<Option<FreeMemory>>>,
 }
@@ -152,18 +159,31 @@ impl Kept {
         });
         let provider =
             Arc::new(EngineProvider::from_connection(registry, connection)?.with_free_memory(read));
-        built.insert(
-            id,
+        let replaced = built.insert(
+            id.clone(),
             Built {
                 shape,
                 label: connection.label.clone(),
                 provider: provider.clone(),
             },
         );
+        drop(built);
+        if let Some(old) = replaced {
+            // A job may still hold the old provider. Its models go as that job finishes; until
+            // then they stay listed, so the memory they hold is never out of sight.
+            old.provider.unload(None);
+            if !old.provider.loaded_models().is_empty() {
+                self.retiring
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((id, old.label, old.provider));
+            }
+        }
         Ok(provider)
     }
 
-    /// The providers, copied out so no lock is held while they are asked anything.
+    /// The providers, current ones first, then retiring ones that still hold a model, copied
+    /// out so no cache lock is held while they are asked anything.
     fn providers(&self) -> Vec<(String, String, Arc<EngineProvider>)> {
         let mut out: Vec<_> = self
             .built()
@@ -171,6 +191,9 @@ impl Kept {
             .map(|(id, b)| (id.clone(), b.label.clone(), b.provider.clone()))
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut retiring = self.retiring.lock().unwrap_or_else(PoisonError::into_inner);
+        retiring.retain(|(_, _, p)| !p.loaded_models().is_empty());
+        out.extend(retiring.iter().cloned());
         out
     }
 

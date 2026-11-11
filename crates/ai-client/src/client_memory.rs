@@ -12,7 +12,9 @@ use crate::engines::LoadedEngineModel;
 
 impl AiClient {
     /// Every model the built-in engines hold in memory now, with roughly how much each holds.
-    /// Only models this client's jobs loaded are listed; another app's are its own.
+    /// The list covers models loaded through this client's factory, which clients built from
+    /// clones of one factory share (one loaded copy, not two). Another program's models are its
+    /// own and never listed here.
     pub fn loaded_models(&self) -> Vec<LoadedEngineModel> {
         self.factory.loaded_models()
     }
