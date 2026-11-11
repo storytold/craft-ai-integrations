@@ -189,8 +189,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let job = client.start(&plan, &ledger)?;
     let done = job.wait(Duration::from_millis(500), Duration::from_secs(180))?;
     if let Some(path) = &record_to {
-        let line =
-            RunRecord::new(&plan, &done, started, clock.elapsed()).to_json_line(&[&say.key])?;
+        let line = RunRecord::new(&plan, &done, started, clock.elapsed(), &[&say.key])
+            .to_json_line(&[&say.key])?;
         append_line(path, &line)?;
         say.line(format!("run recorded in {}", path.display()));
     }

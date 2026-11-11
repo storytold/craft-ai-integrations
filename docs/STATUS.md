@@ -34,7 +34,8 @@ live-tested.
 
 A real run can now leave evidence: `craft_ai_client::RunRecord` turns a finished job into one JSON line
 (where it went, the kinds and sizes sent, the outcome, and each result's type, size and SHA-256, with no
-prompt, result bytes or link), and refuses a line that contains the key. The `live_openai` example writes
+prompt, result bytes or link; error and notice text is cleaned of the key, the request text and links), and
+refuses a line that still contains the key. The `live_openai` example writes
 one with `--record <file>`. Tested against a scripted server and the mock provider only; no recorded live
 run yet.
 

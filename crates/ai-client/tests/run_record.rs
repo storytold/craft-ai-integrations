@@ -120,7 +120,7 @@ fn mock_world(script: Script) -> World {
 /// The record of `done`, with a fixed start time and duration so the fields can be compared.
 fn record(plan: &Plan, done: &Finished) -> RunRecord {
     let started = Utc.with_ymd_and_hms(2026, 11, 10, 22, 30, 5).unwrap();
-    RunRecord::new(plan, done, started, Duration::from_millis(1234))
+    RunRecord::new(plan, done, started, Duration::from_millis(1234), &[KEY])
 }
 
 /// SHA-256 of `data` as lowercase hex, worked out here rather than by the code under test.
@@ -236,16 +236,18 @@ fn results_keep_their_type_size_and_hash_but_never_a_link() {
     assert_eq!(back["outputs"][1]["kind"], "link");
 }
 
-/// A failure keeps its kind and wording, a line that would carry the key is refused without
-/// repeating it, and an empty secret does not refuse every line.
+/// A failure keeps its kind and wording, cleaned of the key, the request's text and any link
+/// before the record holds it, so serialising the record any way is safe.
 #[test]
-fn a_failed_run_keeps_the_reason_and_a_key_in_it_stops_the_line() {
+fn a_failed_run_keeps_the_reason_without_the_key_the_prompt_or_a_link() {
     let world = mock_world(Script {
         running_polls: 0,
         text_chunks: Vec::new(),
         outcome: Outcome::Fail(AiError::new(
             ErrorKind::Quota,
-            format!("out of credit for {KEY}"),
+            format!(
+                "out of credit for {KEY}, see https://billing.example.com/a?sig=tok and retry {PROMPT}"
+            ),
         )),
     });
     let (plan, done) = world.run();
@@ -254,15 +256,43 @@ fn a_failed_run_keeps_the_reason_and_a_key_in_it_stops_the_line() {
     assert_eq!(rec.outcome, RunOutcome::Failed);
     let error = rec.error.clone().unwrap();
     assert_eq!(error.kind, ErrorKind::Quota);
-    assert!(error.message.starts_with("out of credit"));
+    assert_eq!(
+        error.message,
+        "out of credit for [key removed], see [link removed] and retry [request text removed]"
+    );
+    let direct = serde_json::to_string(&rec).unwrap();
+    for gone in [KEY, PROMPT, "billing.example.com", "sig=tok"] {
+        assert!(!direct.contains(gone), "{gone} in {direct}");
+    }
+    let line = rec.to_json_line(&[KEY]).unwrap();
+    assert!(line.contains("\"outcome\":\"failed\""), "{line}");
+}
 
-    let refused = rec.to_json_line(&[KEY]).unwrap_err();
+/// The second guard: a line that still holds a secret, plainly or as JSON escapes it, is refused
+/// without repeating it, and an empty secret does not refuse every line.
+#[test]
+fn a_line_holding_a_secret_is_refused_even_when_escaped() {
+    let world = mock_world(Script::default());
+    let (plan, done) = world.run();
+    let rec = record(&plan, &done);
+
+    let plain = RunRecord {
+        model: format!("model-{KEY}"),
+        ..rec.clone()
+    };
+    let refused = plain.to_json_line(&[KEY]).unwrap_err();
     assert_eq!(refused.kind, ErrorKind::InvalidRequest);
     assert!(!refused.message.contains(KEY));
-    // An empty secret would match every line; it is ignored rather than refusing everything.
-    let clean = RunRecord { error: None, ..rec };
-    let line = clean.to_json_line(&["", KEY]).unwrap();
-    assert!(line.contains("\"outcome\":\"failed\""), "{line}");
+
+    let quoted = "sk-with\"quote\\and-slash";
+    let escaped = RunRecord {
+        model: quoted.to_owned(),
+        ..rec.clone()
+    };
+    assert!(escaped.to_json_line(&[quoted]).is_err());
+
+    let line = rec.to_json_line(&["", KEY]).unwrap();
+    assert!(line.contains("\"outcome\":\"succeeded\""), "{line}");
 }
 
 /// A result built by the caller from a job that has not ended is recorded as unfinished, with its
@@ -281,7 +311,7 @@ fn notices_usage_and_a_job_not_yet_ended_are_all_kept() {
         state: JobState::Running { percent: Some(40) },
         events: vec![
             Event::Notice {
-                message: "kept the original link".into(),
+                message: "kept the original link https://cdn.example.com/x.png?sig=1".into(),
             },
             Event::ToolCall {
                 name: "lookup".into(),
@@ -292,7 +322,10 @@ fn notices_usage_and_a_job_not_yet_ended_are_all_kept() {
     };
     let rec = record(&plan, &early);
     assert_eq!(rec.outcome, RunOutcome::Unfinished);
-    assert_eq!(rec.notices, vec!["kept the original link".to_owned()]);
+    assert_eq!(
+        rec.notices,
+        vec!["kept the original link [link removed]".to_owned()]
+    );
     assert_eq!(rec.usage, Some(usage));
     assert!(rec.outputs.is_empty());
     assert_eq!(rec.streamed_text, None);

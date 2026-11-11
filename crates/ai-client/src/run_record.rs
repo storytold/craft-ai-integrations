@@ -4,11 +4,13 @@
 //! A record says a run happened without carrying what the person sent or received. Inputs appear as
 //! the consent screen shows them (role, kind, size). Outputs appear as kind, media type, size and a
 //! SHA-256 of the bytes; returned text as its length and hash. A link is never kept, because a
-//! hosted result link can carry a signed token. Error and notice text is kept: the adapters word
-//! it for people, and the leak check below covers it.
+//! hosted result link can carry a signed token. Error and notice text is kept, because the
+//! adapters word it for people, but it is cleaned when the record is built: the given secrets, the
+//! request's own text inputs and anything shaped like a link are replaced.
 //!
-//! Invariant: [`RunRecord::to_json_line`] refuses to produce a line that contains any of the
-//! secrets it is given, so a key that slipped into an error message never reaches the file.
+//! Invariants: a record holds none of the secrets given to [`RunRecord::new`], so serialising it by
+//! any route is safe; and [`RunRecord::to_json_line`] still refuses a line that contains a secret,
+//! in plain or JSON-escaped form, as a second guard.
 
 use std::time::Duration;
 
@@ -135,21 +137,33 @@ impl RunOutput {
 
 impl RunRecord {
     /// Builds the record of `finished`, the result of running `plan`, which started at `started`
-    /// and took `elapsed`.
+    /// and took `elapsed`. Error and notice text is cleaned of `secrets`, of the request's text
+    /// inputs and of links before it is kept.
     pub fn new(
         plan: &Plan,
         finished: &Finished,
         started: DateTime<Utc>,
         elapsed: Duration,
+        secrets: &[&str],
     ) -> Self {
         let disclosure = plan.disclosure();
+        let prompts: Vec<&str> = plan
+            .request
+            .inputs
+            .iter()
+            .filter_map(|i| match &i.payload {
+                Payload::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        let clean = |text: &str| scrub(text, secrets, &prompts);
         let (outcome, error) = match &finished.state {
             JobState::Succeeded => (RunOutcome::Succeeded, None),
             JobState::Failed { error } => (
                 RunOutcome::Failed,
                 Some(RunError {
                     kind: error.kind,
-                    message: error.message.clone(),
+                    message: clean(&error.message),
                 }),
             ),
             JobState::Cancelled => (RunOutcome::Cancelled, None),
@@ -162,7 +176,7 @@ impl RunRecord {
             match event {
                 Event::TextDelta { text } => streamed.push_str(text),
                 Event::Output(o) => outputs.push(RunOutput::of(&o.payload)),
-                Event::Notice { message } => notices.push(message.clone()),
+                Event::Notice { message } => notices.push(clean(message)),
                 Event::ToolCall { .. } => {}
             }
         }
@@ -198,13 +212,56 @@ impl RunRecord {
                 format!("could not write the run record: {e}"),
             )
         })?;
-        if secrets.iter().any(|s| !s.is_empty() && line.contains(s)) {
+        if secrets
+            .iter()
+            .any(|s| !s.is_empty() && (line.contains(s) || line.contains(&json_escaped(s))))
+        {
             return Err(AiError::invalid(
                 "the run record contains a key, so it was not written",
             ));
         }
         Ok(line)
     }
+}
+
+/// `text` with each secret, each request text and each link replaced by a placeholder. Secrets go
+/// first, so a key inside a link or a prompt is gone whatever else matches.
+fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
+    let mut out = text.to_owned();
+    for secret in secrets.iter().filter(|s| !s.is_empty()) {
+        out = out.replace(secret, "[key removed]");
+    }
+    for prompt in prompts.iter().filter(|p| !p.is_empty()) {
+        out = out.replace(prompt, "[request text removed]");
+    }
+    without_links(&out)
+}
+
+/// `text` with every word that looks like an address (`scheme://...` or `file:...`) replaced, so a
+/// signed result link in an adapter's message is not kept. Spacing is left as it was.
+fn without_links(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for piece in text.split_inclusive(char::is_whitespace) {
+        let word = piece.trim_end_matches(char::is_whitespace);
+        if word.contains("://") || word.contains("file:") {
+            out.push_str("[link removed]");
+        } else {
+            out.push_str(word);
+        }
+        out.push_str(&piece[word.len()..]);
+    }
+    out
+}
+
+/// `secret` as JSON writes it inside a string, so a secret holding a quote, backslash or control
+/// character is still found in a serialised line.
+fn json_escaped(secret: &str) -> String {
+    let quoted = serde_json::to_string(secret).unwrap_or_default();
+    quoted
+        .strip_prefix('"')
+        .and_then(|q| q.strip_suffix('"'))
+        .unwrap_or(&quoted)
+        .to_owned()
 }
 
 /// Lowercase hex of `bytes`, two characters per byte.
