@@ -23,7 +23,7 @@ RR = [
     ('prompt-kept-in-messages', R, '.chain(prompts.iter().map(|p| (*p, Removed::RequestText)))', '.chain(prompts.iter().filter(|_| false).map(|p| (*p, Removed::RequestText)))', CL, T, 'without_the_key_the_prompt_or_a_link'),
     ('overlaps-not-merged', R, 'Some(last) if start < last.1 => {', 'Some(last) if false => {', CL, T, 'a_key_inside_the_request_text'),
     ('merged-key-reads-as-text', R, '                last.2 = last.2.max(kind);\n', '', CL, T, 'a_key_inside_the_request_text'),
-    ('links-kept-in-messages', R, 'if word.contains("://") || word.contains("file:") {', 'if false {', CL, T, 'without_the_key_the_prompt_or_a_link'),
+    ('links-kept-in-messages', R, r'if word.contains("://") || word.contains(r":\/\/") || word.contains("file:") {', 'if false {', CL, T, 'without_the_key_the_prompt_or_a_link'),
     ('notice-not-cleaned', R, 'Event::Notice { message } => notices.push(clean(message)),', 'Event::Notice { message } => notices.push(message.clone()),', CL, T, 'a_job_not_yet_ended'),
     ('error-not-cleaned', R, 'message: clean(&error.message),', 'message: error.message.clone(),', CL, T, 'without_the_key_the_prompt_or_a_link'),
     ('spacing-lost', R, 'spans.push((at, at + word.len(), Removed::Link));', 'spans.push((at, at + piece.len(), Removed::Link));', CL, T, 'without_the_key_the_prompt_or_a_link'),
@@ -33,4 +33,7 @@ RR = [
     ('nested-param-values-skipped', R, 'Value::Object(map) => pending.extend(map.values()),', 'Value::Object(_) => {}', CL, T, 'text_parameter_values'),
     ('nested-list-values-skipped', R, 'Value::Array(items) => pending.extend(items),', 'Value::Array(_) => {}', CL, T, 'text_parameter_values'),
     ('escaped-form-skipped', R, 'let differs = escaped != s;', 'let differs = false;', CL, T, 'json_escaped_form'),
+    ('result-text-kept', R, '.chain(results.iter().map(|r| (*r, Removed::ResultText)))', '.chain(results.iter().filter(|_| false).map(|r| (*r, Removed::ResultText)))', CL, T, 'returned_text_is_removed'),
+    ('streamed-result-kept', R, 'results.push(&streamed);', '', CL, T, 'returned_text_is_removed'),
+    ('escaped-link-kept', R, r' || word.contains(r":\/\/")', '', CL, T, 'a_json_escaped_link'),
 ]

@@ -461,3 +461,50 @@ fn a_link_holding_request_text_is_removed_whole() {
     assert_eq!(rec.error.unwrap().message, want);
     assert_eq!(rec.notices, vec![want.to_owned()]);
 }
+
+/// Text the run returned, whole or streamed, is removed from error and notice text that quotes it,
+/// so the record does not carry what the person received.
+#[test]
+fn returned_text_is_removed_from_messages() {
+    let world = mock_world(Script::default());
+    let plan = world.client.plan(&role(), request()).unwrap();
+    let said = "stopped after: a private reply. Streamed: part one, part two";
+    let done = Finished {
+        state: JobState::Failed {
+            error: AiError::new(ErrorKind::Provider, said.to_owned()),
+        },
+        events: vec![
+            Event::Output(Output {
+                label: None,
+                payload: Payload::text("a private reply"),
+            }),
+            Event::TextDelta {
+                text: "part one, ".into(),
+            },
+            Event::TextDelta {
+                text: "part two".into(),
+            },
+            Event::Notice {
+                message: said.to_owned(),
+            },
+        ],
+        usage: None,
+    };
+    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY]);
+    let want = "stopped after: [result text removed]. Streamed: [result text removed]";
+    assert_eq!(rec.error.unwrap().message, want);
+    assert_eq!(rec.notices, vec![want.to_owned()]);
+}
+
+/// A link written as JSON escapes it (each slash after a backslash) is still removed whole.
+#[test]
+fn a_json_escaped_link_is_removed() {
+    let rec = failed_with(
+        request(),
+        r"saved to https:\/\/cdn.example.com\/out.png?token=signed for you",
+    );
+    let want = "saved to [link removed] for you";
+    assert_eq!(rec.error.unwrap().message, want);
+    assert_eq!(rec.notices, vec![want.to_owned()]);
+}

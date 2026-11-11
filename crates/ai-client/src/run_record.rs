@@ -141,7 +141,7 @@ impl RunOutput {
 impl RunRecord {
     /// Builds the record of `finished`, the result of running `plan`, which started at `started`
     /// and took `elapsed`. Error and notice text is cleaned of `secrets`, of the request's text
-    /// inputs and of links before it is kept.
+    /// inputs, of the text the run returned and of links before it is kept.
     pub fn new(
         plan: &Plan,
         finished: &Finished,
@@ -160,7 +160,23 @@ impl RunRecord {
             })
             .collect();
         prompts.extend(text_values(plan.request.params.values()));
-        let clean = |text: &str| scrub(text, secrets, &prompts);
+        // What the run returned as text, gathered first so a message quoting it is cleaned too: the
+        // whole streamed text (single deltas can be a letter long) and each text result.
+        let mut streamed = String::new();
+        let mut results: Vec<&str> = Vec::new();
+        for event in &finished.events {
+            match event {
+                Event::TextDelta { text } => streamed.push_str(text),
+                Event::Output(o) => {
+                    if let Payload::Text { text } = &o.payload {
+                        results.push(text);
+                    }
+                }
+                Event::Notice { .. } | Event::ToolCall { .. } => {}
+            }
+        }
+        results.push(&streamed);
+        let clean = |text: &str| scrub(text, secrets, &prompts, &results);
         let (outcome, error) = match &finished.state {
             JobState::Succeeded => (RunOutcome::Succeeded, None),
             JobState::Failed { error } => (
@@ -173,15 +189,13 @@ impl RunRecord {
             JobState::Cancelled => (RunOutcome::Cancelled, None),
             JobState::Queued | JobState::Running { .. } => (RunOutcome::Unfinished, None),
         };
-        let mut streamed = String::new();
         let mut outputs = Vec::new();
         let mut notices = Vec::new();
         for event in &finished.events {
             match event {
-                Event::TextDelta { text } => streamed.push_str(text),
                 Event::Output(o) => outputs.push(RunOutput::of(&o.payload)),
                 Event::Notice { message } => notices.push(clean(message)),
-                Event::ToolCall { .. } => {}
+                Event::TextDelta { .. } | Event::ToolCall { .. } => {}
             }
         }
         Self {
@@ -229,10 +243,12 @@ impl RunRecord {
 }
 
 /// What a removed stretch held, in the order that names a merged stretch: a stretch that held a
-/// key reads "[key removed]" whatever else it covered, then a link, then request text.
+/// key reads "[key removed]" whatever else it covered, then a link, then returned text, then
+/// request text.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Removed {
     RequestText,
+    ResultText,
     Link,
     Key,
 }
@@ -242,17 +258,18 @@ impl Removed {
     fn placeholder(self) -> &'static str {
         match self {
             Self::RequestText => "[request text removed]",
+            Self::ResultText => "[result text removed]",
             Self::Link => "[link removed]",
             Self::Key => "[key removed]",
         }
     }
 }
 
-/// `text` with each secret, each request text and each link replaced by a placeholder. All three
-/// are found in the original text and overlapping matches are removed together, so a key inside a
+/// `text` with each secret, each request text, each returned text and each link replaced by a
+/// placeholder. All of them are found in the original text and overlapping matches are removed together, so a key inside a
 /// prompt cannot break the prompt's match, and request text inside a link cannot split the link
 /// and leave the rest of its address (and any signed token) behind.
-fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
+fn scrub(text: &str, secrets: &[&str], prompts: &[&str], results: &[&str]) -> String {
     // (start, end, what it held), byte offsets into `text` on character boundaries.
     let mut spans: Vec<(usize, usize, Removed)> = link_spans(text);
     // Each text as given and, when JSON would write it differently, as JSON escapes it: an adapter
@@ -261,6 +278,7 @@ fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
         .iter()
         .map(|s| (*s, Removed::Key))
         .chain(prompts.iter().map(|p| (*p, Removed::RequestText)))
+        .chain(results.iter().map(|r| (*r, Removed::ResultText)))
         .flat_map(|(s, kind)| {
             let escaped = json_escaped(s);
             let differs = escaped != s;
@@ -319,15 +337,16 @@ fn text_values<'a>(values: impl Iterator<Item = &'a Value>) -> Vec<&'a str> {
     found
 }
 
-/// Where each word that looks like an address (`scheme://...` or `file:...`) sits in `text`, so a
-/// signed result link in an adapter's message is not kept. Words are split on whitespace, and the
-/// whitespace itself is never part of a span, so spacing is left as it was.
+/// Where each word that looks like an address (`scheme://...`, the same written as JSON escapes it
+/// with each slash after a backslash, or `file:...`) sits in `text`, so a signed result link in an
+/// adapter's message is not kept. Words are split on whitespace, and the whitespace itself is never
+/// part of a span, so spacing is left as it was.
 fn link_spans(text: &str) -> Vec<(usize, usize, Removed)> {
     let mut spans = Vec::new();
     let mut at = 0;
     for piece in text.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
-        if word.contains("://") || word.contains("file:") {
+        if word.contains("://") || word.contains(r":\/\/") || word.contains("file:") {
             spans.push((at, at + word.len(), Removed::Link));
         }
         at += piece.len();

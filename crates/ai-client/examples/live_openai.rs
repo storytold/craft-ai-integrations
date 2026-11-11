@@ -16,8 +16,10 @@
 //! enabled one is used.
 //!
 //! `--record <file>` appends a [`RunRecord`] line for the run: what was sent (kinds and sizes, not
-//! the prompt), where, how long it took, and each result's type, size and SHA-256. That line is the
-//! evidence a real run leaves; it is refused if it would contain the key.
+//! the prompt), where, how long it took, and each result's type. Returned text and inline bytes are
+//! kept as their size and SHA-256; a returned link is not downloaded or hashed, so it keeps only its
+//! type and any size the service declared. That line is the evidence a real run leaves; it is
+//! refused if it would contain the key.
 //!
 //! It works on a copy of the shared store in a temporary folder, so the person's real connections,
 //! bindings and history are never written. The key is read through the same keychain code the apps
