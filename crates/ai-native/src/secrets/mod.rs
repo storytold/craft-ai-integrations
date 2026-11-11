@@ -12,6 +12,10 @@
 //! | [`MemoryStore`] | a map, for tests and for apps' own test suites | yes |
 //! | [`LayeredStore`] | an ordered chain of the above | yes |
 //!
+//! [`standard_store`] builds the chain the launcher and apps use: environment, keychain, then the
+//! encrypted file, locked until the host supplies a passphrase. [`passphrase_need`] says whether
+//! to ask for one (no keychain, or a secret file already on disk).
+//!
 //! Errors never contain a secret value or a passphrase.
 
 mod crypto;
@@ -20,6 +24,7 @@ mod file;
 mod keychain;
 mod layered;
 mod memory;
+mod standard;
 
 use craft_ai_core::{AiError, Auth, Connection, ErrorKind, SecretRef, SecretString};
 
@@ -29,6 +34,7 @@ pub use file::EncryptedFileStore;
 pub use keychain::KeychainStore;
 pub use layered::LayeredStore;
 pub use memory::MemoryStore;
+pub use standard::{PassphraseNeed, passphrase_need, standard_store};
 
 /// A place that can hold secrets by reference.
 pub trait SecretStore: Send + Sync {

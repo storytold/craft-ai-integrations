@@ -23,6 +23,7 @@
 //! | [`connection`] | [`Connection`], [`Auth`], [`Billing`], [`Locality`] |
 //! | [`role`] | [`Role`], [`Binding`], [`resolve`](role::resolve), [`eligible`](role::eligible) |
 //! | [`consent`] | [`Disclosure`], [`ConsentLedger`], [`ConsentTerm`] |
+//! | [`cost`] | [`estimate`](cost::estimate): a price worked out from a model's saved pricing |
 //! | [`store`] | [`StoreFile`], the launcher's versioned shared store |
 //! | [`picks`] | model presets: [`Pick`], the curated [`Catalog`], and [`picks::choose`] |
 //! | [`segment`] | the `image.segment` contract: clicks, a box, and what a selection found |
@@ -44,6 +45,7 @@ pub mod conformance;
 pub mod connection;
 pub mod consent;
 mod consent_term;
+pub mod cost;
 pub mod draft;
 pub mod endpoint;
 pub mod error;
@@ -57,6 +59,7 @@ pub mod payload;
 pub mod picks;
 pub mod provider;
 pub mod request;
+pub mod retry;
 pub mod role;
 pub mod secret;
 pub mod segment;
@@ -79,6 +82,7 @@ pub use payload::{Limits, MediaType, Payload, PayloadHandle, PayloadKind};
 pub use picks::{Catalog, Pick, PickedBy};
 pub use provider::Provider;
 pub use request::Request;
+pub use retry::Backoff;
 pub use role::{Binding, Role};
 pub use secret::SecretString;
 pub use store::StoreFile;

@@ -17,18 +17,17 @@
 //! never in a [`Plan`], a [`Job`], a status or an error.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use craft_ai_core::job::Event;
 use craft_ai_core::model::InputRole;
 use craft_ai_core::picks::{Candidate, choose};
 use craft_ai_core::role::eligible;
 use craft_ai_core::{
-    AiError, AppId, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger, Disclosure,
-    ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality, ModelId, Outcome, Pick,
-    PickedBy, Provider, Request, Role, RoleId, Usage,
+    AiError, AppId, Backoff, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger,
+    CostEstimate, Disclosure, ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality,
+    ModelId, Outcome, Pick, PickedBy, Provider, Request, Role, RoleId, SecretString, Usage,
 };
-use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
+use craft_ai_native::secrets::{SecretStore, secret_for, standard_store};
 use craft_ai_native::shared::SharedStore;
 use craft_ai_native::{CatalogFile, HistoryFile};
 
@@ -36,8 +35,12 @@ use crate::factory::ProviderFactory;
 use crate::history::Recorder;
 use crate::route_support::{RouteFacts, RouteQuery, RouteSupport};
 
+#[path = "plan_cost.rs"]
+mod plan_cost;
 #[path = "client_run.rs"]
 mod run;
+#[path = "client_wait.rs"]
+mod wait;
 
 /// What a person is told when the app has no adapter for the model they chose. One sentence, so
 /// status, plan and start agree and the plain-language test can pin it.
@@ -91,6 +94,8 @@ pub struct Plan {
     pub(crate) disclosure: Disclosure,
     pub(crate) role_id: RoleId,
     pub(crate) role_label: String,
+    /// Worked out at plan time from the saved model's pricing; see [`Plan::estimate`].
+    pub(crate) estimate: Option<CostEstimate>,
 }
 
 /// Unix seconds now; 0 if the clock is before 1970, which makes timed agreements read as valid
@@ -130,6 +135,7 @@ impl Plan {
         &self.connection.provider
     }
 
+    /// The model the plan will run, as resolved from the binding.
     pub fn model(&self) -> &ModelId {
         &self.model
     }
@@ -141,9 +147,11 @@ pub struct Job {
     provider: Arc<dyn Provider>,
     id: JobId,
     recorder: Option<Arc<Recorder>>,
+    poll_retry: Backoff,
 }
 
 impl std::fmt::Debug for Job {
+    /// Shows the job id only: the provider and its key stay out of logs.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Job({})", self.id)
     }
@@ -158,10 +166,14 @@ pub struct Finished {
 }
 
 impl Job {
+    /// The provider's id for this job.
     pub fn id(&self) -> &JobId {
         &self.id
     }
 
+    /// The job's state now. An error that [`AiError::is_retryable`] (a dropped connection, a
+    /// rate limit) says nothing about the job itself: poll again after a pause, honouring
+    /// `retry_after_secs`, as [`wait`](Self::wait) does.
     pub fn poll(&self) -> Result<JobSnapshot, AiError> {
         let snap = self.provider.poll(&self.id)?;
         if let Some(recorder) = &self.recorder {
@@ -170,34 +182,9 @@ impl Job {
         Ok(snap)
     }
 
+    /// Asks the provider to stop the job. A job that has already ended is the provider's to report.
     pub fn cancel(&self) -> Result<(), AiError> {
         self.provider.cancel(&self.id)
-    }
-
-    /// Polls every `interval` until the job ends or `timeout` passes, collecting events. For
-    /// scripts and tests; an app with its own job system polls instead.
-    pub fn wait(&self, interval: Duration, timeout: Duration) -> Result<Finished, AiError> {
-        let deadline = Instant::now() + timeout;
-        let mut events = Vec::new();
-        loop {
-            let snap = self.poll()?;
-            events.extend(snap.events);
-            if snap.state.is_terminal() {
-                return Ok(Finished {
-                    state: snap.state,
-                    events,
-                    usage: snap.usage,
-                });
-            }
-            if Instant::now() >= deadline {
-                let _ = self.cancel();
-                if let Some(recorder) = &self.recorder {
-                    recorder.gave_up();
-                }
-                return Err(AiError::new(ErrorKind::Network, "the job took too long"));
-            }
-            std::thread::sleep(interval);
-        }
     }
 }
 
@@ -210,9 +197,15 @@ pub struct AiClient {
     history: Option<Arc<HistoryFile>>,
     keep_prompts: bool,
     catalog: Catalog,
+    submit_retry: Backoff,
+    poll_retry: Backoff,
+    /// Set by `with_retries`, so `with_factory` hands the send rule to a later factory.
+    send_rule_chosen: bool,
 }
 
 impl AiClient {
+    /// A client for `app` over the given shared store and secret store, with the standard
+    /// adapters, no history file, the built-in catalog and the default retry rules.
     pub fn new(app: AppId, shared: SharedStore, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
             app,
@@ -222,18 +215,31 @@ impl AiClient {
             history: None,
             keep_prompts: false,
             catalog: Catalog::builtin(),
+            submit_retry: Backoff::STANDARD,
+            poll_retry: wait::POLL_RETRY,
+            send_rule_chosen: false,
         }
     }
 
-    /// The usual setup: the standard shared store location, and keys from the environment then the
-    /// OS keychain. (The passphrase-encrypted file is not included, because only the caller can
-    /// supply its passphrase; build a [`LayeredStore`] and use [`new`](Self::new) to add it.)
+    /// The usual setup: the standard shared store location, and keys from the environment, then
+    /// the OS keychain, then the encrypted secret file (locked, so a key kept only there is
+    /// reported as locked rather than missing). Use
+    /// [`standard_with_passphrase`](Self::standard_with_passphrase) when
+    /// [`passphrase_need`](craft_ai_native::secrets::passphrase_need) says to ask for one.
     pub fn standard(app: AppId) -> Result<Self, AiError> {
+        Self::standard_from(app, None)
+    }
+
+    /// As [`standard`](Self::standard), with the secret file unlocked by `passphrase`: the
+    /// fallback for a machine with no OS keychain. The passphrase is held only in memory.
+    pub fn standard_with_passphrase(app: AppId, passphrase: SecretString) -> Result<Self, AiError> {
+        Self::standard_from(app, Some(passphrase))
+    }
+
+    /// Shared body of the two standard constructors.
+    fn standard_from(app: AppId, passphrase: Option<SecretString>) -> Result<Self, AiError> {
         let shared = SharedStore::at_default_location()?;
-        let secrets = LayeredStore::new(vec![
-            Box::new(EnvStore::new()),
-            Box::new(KeychainStore::new()),
-        ]);
+        let secrets = standard_store(passphrase);
         let mut client = Self::new(app, shared, Arc::new(secrets));
         client.history = HistoryFile::at_default_location().map(Arc::new);
         Ok(client)
@@ -289,15 +295,21 @@ impl AiClient {
             .map_err(|e| AiError::new(ErrorKind::Internal, format!("history unavailable: {e}")))
     }
 
+    /// The history file, or `Unsupported` when this client keeps no history.
     fn history_file(&self) -> Result<&Arc<HistoryFile>, AiError> {
         self.history.as_ref().ok_or_else(|| {
             AiError::new(ErrorKind::Unsupported, "request history is turned off here")
         })
     }
 
-    /// Replaces the provider factory, to add adapters.
+    /// Replaces the provider factory, to add adapters. A send rule already chosen with
+    /// [`with_retries`](Self::with_retries) is applied to it, so the order of the two calls does
+    /// not matter.
     pub fn with_factory(mut self, factory: ProviderFactory) -> Self {
         self.factory = factory;
+        if self.send_rule_chosen() {
+            self.factory.set_send_retry(self.submit_retry());
+        }
         self
     }
 

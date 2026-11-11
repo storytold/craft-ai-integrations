@@ -109,8 +109,10 @@ CA = [
     ('replaced-adapter-keeps-the-old-limits', 'crates/ai-client/src/factory.rs',
      '''self.accelerators.remove(&name);
         self.support.remove(&name);
+        self.standard_senders.remove(&name);
         self.builders.insert''',
      '''self.accelerators.remove(&name);
+        self.standard_senders.remove(&name);
         self.builders.insert''',
      CL, 'route_support', 'a_custom_adapter_replacing'),
     ('no-answer-counts-as-supported', 'crates/ai-client/src/factory.rs',

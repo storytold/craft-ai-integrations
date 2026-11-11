@@ -30,6 +30,16 @@ pub trait Provider: Send + Sync {
 
     /// Validates the request against the model's spec and starts the job. Must return
     /// `Unsupported` for an input or feature the model lacks, before sending anything.
+    ///
+    /// `RateLimited` from `submit` must mean no job was created: the provider (or this adapter's
+    /// own limit) refused, so nothing will be billed for the work. It must also be a refusal that
+    /// can pass while the caller waits (the server's limit, or jobs that end on their own). A
+    /// limit that only the caller can clear, by polling or collecting a result, is `Quota`. The client sends again after a
+    /// rate limit on that promise. An adapter that sends more than one call here must not return
+    /// `RateLimited` once a job exists. Files it uploaded on the way may stay on the account (the
+    /// ArtCraft adapter's input pictures, which its API cannot delete), and a retry may upload them
+    /// again. An adapter that sends from a worker after `submit` returns retries its own refused
+    /// send (see `Backoff`).
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError>;
 
     /// The job's state and the events since the last poll. Terminal states are stable.
