@@ -69,15 +69,18 @@ pub(crate) fn is_recipe_connection(connection: &Connection, feature: &str) -> bo
 }
 
 impl ToolDesk {
-    /// Registers the first local model of `feature` that can run, served by the ComfyUI at
-    /// `endpoint` (a loopback address), and binds the tool to it if nothing is chosen yet.
+    /// Registers the first local model of `feature` that ComfyUI can run, served by the ComfyUI
+    /// at `endpoint` (a loopback address), and binds the tool to it if nothing is chosen yet.
     pub fn enable_local(&self, feature: &Feature, endpoint: &str) -> Result<LocalEnabled, AiError> {
-        let recipe = feature.locals.iter().find(|r| r.usable).ok_or_else(|| {
-            AiError::unsupported(format!(
-                "{} has no local model that can run yet",
-                feature.title
-            ))
-        })?;
+        let recipe = feature
+            .comfyui_recipes()
+            .find(|r| r.usable)
+            .ok_or_else(|| {
+                AiError::unsupported(format!(
+                    "{} has no local model that can run yet",
+                    feature.title
+                ))
+            })?;
         self.enable_recipe(feature, recipe, endpoint)
     }
 
@@ -92,8 +95,7 @@ impl ToolDesk {
         endpoint: &str,
     ) -> Result<LocalEnabled, AiError> {
         let recipe = feature
-            .locals
-            .iter()
+            .comfyui_recipes()
             .find(|r| r.workflow == workflow && r.usable)
             .ok_or_else(|| {
                 AiError::unsupported(format!(
@@ -129,8 +131,8 @@ impl ToolDesk {
                     && held.models.iter().any(|m| m.id.as_str() == recipe.workflow)
             }
             None => feature
-                .locals
-                .first()
+                .comfyui_recipes()
+                .next()
                 .is_some_and(|first| first.workflow == recipe.workflow),
         };
         let id = if primary {
@@ -164,13 +166,13 @@ impl ToolDesk {
             model: model.clone(),
         };
         let mut bound = false;
-        let clash = self.shared.update(|store| {
+        let written = self.shared.try_update(|store| {
             match store.connections.iter_mut().find(|c| c.id == id) {
                 // The same id with another adapter is another route that happens to share the
                 // name (a custom runtime called `recipe-x` against a recipe called `x`).
                 // Replacing it would swap the route under a binding that still names its model.
                 Some(existing) if existing.provider != connection.provider => {
-                    return Some(existing.provider.clone());
+                    return Err(existing.provider.clone());
                 }
                 Some(existing) => *existing = connection,
                 None => store.connections.push(connection),
@@ -179,9 +181,9 @@ impl ToolDesk {
                 store.defaults.push(binding);
                 bound = true;
             }
-            None
+            Ok(())
         })?;
-        if let Some(provider) = clash {
+        if let Err(provider) = written {
             return Err(AiError::invalid(format!(
                 "the connection {id} already belongs to a {provider} route and was left as it is"
             )));

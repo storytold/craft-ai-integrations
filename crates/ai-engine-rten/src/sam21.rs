@@ -23,6 +23,8 @@ use crate::resample::{MASK_SIDE, SIDE};
 /// The two files, side by side in one folder. The first is the weights file the connection records.
 pub const ENCODER_FILE: &str = "encoder.onnx";
 pub const DECODER_FILE: &str = "decoder.onnx";
+/// Largest model file read. The published encoder is about 110 MB and the decoder about 21 MB.
+const MAX_MODEL_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The decoder's mask proposals: one from a single prediction, three from the multi-mask head.
 const PROPOSALS: usize = 4;
@@ -62,6 +64,37 @@ fn failed(what: &str, e: impl std::fmt::Display) -> AiError {
     AiError::new(ErrorKind::Provider, format!("SAM 2.1 {what}: {e}"))
 }
 
+/// A model file's bytes, from a plain file of at most [`MAX_MODEL_FILE_BYTES`]. The model is
+/// loaded from these bytes alone: the published export keeps its weights inside the file, so no
+/// external-data file is ever opened, and a model that names one (with whatever length it likes)
+/// is refused instead of having that length reserved.
+pub(crate) fn read_model_file(path: &Path) -> Result<Vec<u8>, AiError> {
+    read_bounded(path, MAX_MODEL_FILE_BYTES).map_err(|e| match e {
+        Some(e) => failed("could not be read", e),
+        None => not_this_model(),
+    })
+}
+
+/// A plain file's bytes, at most `max` of them. `Err(None)` when it is not a plain file or is
+/// larger; `Err(Some(_))` with the reason when it cannot be read.
+pub(crate) fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, Option<std::io::Error>> {
+    use std::io::Read;
+    let unreadable = Some;
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    let meta = file.metadata().map_err(unreadable)?;
+    if !meta.is_file() || meta.len() > max {
+        return Err(None);
+    }
+    let mut bytes = Vec::new();
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > max {
+        return Err(None);
+    }
+    Ok(bytes)
+}
+
 /// Said when the files load but are not the export this runner knows.
 fn not_this_model() -> AiError {
     AiError::unsupported(
@@ -90,7 +123,8 @@ impl Rten {
     /// Loads `encoder.onnx` and `decoder.onnx` from `dir` and checks they have the interface above.
     pub(crate) fn load(dir: &Path) -> Result<Self, AiError> {
         let read = |file: &str| {
-            Model::load_file(dir.join(file)).map_err(|e| failed("could not be loaded", e))
+            Model::load(read_model_file(&dir.join(file))?)
+                .map_err(|e| failed("could not be loaded", e))
         };
         let encoder = read(ENCODER_FILE)?;
         let decoder = read(DECODER_FILE)?;

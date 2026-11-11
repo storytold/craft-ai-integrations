@@ -1,5 +1,6 @@
-//! SAM 2.1 on the rten engine for Craft AI: the built-in runner behind the `image.segment`
-//! capability, reading the published ONNX files as they are, for every app that asks for it.
+//! Built-in runners on the rten engine for Craft AI, reading the published ONNX files as they
+//! are, for every app that asks for them: SAM 2.1 behind `image.segment`, and BEN2 + ViTMatte
+//! behind `image.matte` (Remove background, see [`matte`]).
 //!
 //! An app does not use this crate directly. It puts [`runners`] in an
 //! [`EngineRegistry`](craft_ai_engine::EngineRegistry), or turns on the `rten` feature of
@@ -27,6 +28,7 @@
     clippy::unreachable
 )]
 
+pub mod matte;
 pub mod picture;
 pub mod resample;
 mod runner;

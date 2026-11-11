@@ -97,15 +97,30 @@ impl Server {
     }
 }
 
+/// Largest request head the test server reads.
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+
 fn read_request(stream: &mut TcpStream) -> Option<Recorded> {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .ok()?;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
+    // Only bytes not yet searched are scanned (with three back, for a delimiter split across
+    // reads), and headers stop at a fixed size, so a client cannot make this quadratic.
+    let mut searched = 0;
     let header_end = loop {
-        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break i;
+        if let Some(i) = buf[searched..].windows(4).position(|w| w == b"\r\n\r\n") {
+            let end = searched + i;
+            // A delimiter that starts past the limit does not make an oversized head acceptable.
+            if end > MAX_HEADER_BYTES {
+                return None;
+            }
+            break end;
+        }
+        searched = buf.len().saturating_sub(3);
+        if buf.len() > MAX_HEADER_BYTES {
+            return None;
         }
         let n = stream.read(&mut chunk).ok()?;
         if n == 0 {

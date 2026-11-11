@@ -1,5 +1,7 @@
 # Craft AI integrations
 
+<a href="https://sonarcloud.io/project/overview?id=storytold_craft-ai-integrations"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+
 One AI connection for every Craft app. A person sets up a tool and its model once, in the launcher or
 natively in any app, and every app that has that tool uses it with no further setup. The shared crates
 own connections, models, the tool to model binding, the model picker, consent and jobs. Each app keeps
@@ -28,10 +30,10 @@ Layout and rules mirror craft-libs: edition 2024, `MIT OR Apache-2.0`, no `unsaf
 | `craft-ai-http` | The one TLS setting every hosted call and download uses: the platform's certificate check. |
 | `craft-ai-media` | Durable local copies of hosted media links, with the checks that needs. |
 | `craft-ai-openai` | OpenAI-compatible text (streaming, tools, structured output) and images (generate, edit, inpaint). |
-| `craft-ai-bfl`, `craft-ai-vertex`, `craft-ai-seedance`, `craft-ai-artcraft` | Black Forest Labs FLUX, Vertex express-mode Gemini images, BytePlus ModelArk Seedance video, and the ArtCraft Omni API-key route. |
+| `craft-ai-bfl`, `craft-ai-gemini`, `craft-ai-vertex`, `craft-ai-seedance`, `craft-ai-artcraft` | Black Forest Labs FLUX (image, video and FLUX.1 Fill inpainting), Gemini API (AI Studio key) prompt-guided Generative fill, Vertex express-mode Gemini images, BytePlus ModelArk Seedance video, and the ArtCraft Omni API-key route. |
 | `craft-ai-declarative` | A provider described by a small data file instead of Rust. Design: `docs/design/declarative-adapter.md`. |
 | `craft-ai-comfyui`, `craft-ai-sam3` | Local ComfyUI workflows, including imported subject-selection graphs (`image.segment`) whose masks are checked before an app sees them; the SAM 3 point and session clients; the older direct SAM 3 detector bridge. |
-| `craft-ai-engine`, `craft-ai-engine-candle`, `craft-ai-engine-rten`, `craft-ai-engine-burn` | Built-in model engines: the runner contract and the one provider that runs any registered model on this computer; SAM 3 on Candle (Apache-2.0 only; see its NOTICE); SAM 2.1 on rten, a pure Rust engine that reads the publisher's `.onnx` files as they are, on the processor (the default); and SAM 2.1 on Burn, an optional graphics-card engine that reads weights prepared once on this computer (`craft-ai-burn-setup`). Guides: `docs/ADD-AN-ENGINE.md`, `docs/BURN-ENGINE.md`. |
+| `craft-ai-engine`, `craft-ai-engine-candle`, `craft-ai-engine-rten`, `craft-ai-engine-burn` | Built-in model engines: the runner contract and the one provider that runs any registered model on this computer; SAM 3 on Candle (Apache-2.0 only; see its NOTICE); SAM 2.1 and BEN2 + ViTMatte (Remove background) on rten, a pure Rust engine that reads the publishers' `.onnx` files as they are, on the processor (the default); and SAM 2.1 on Burn, an optional graphics-card engine that reads weights prepared once on this computer (`craft-ai-burn-setup`). Guides: `docs/ADD-AN-ENGINE.md`, `docs/BURN-ENGINE.md`. |
 | `craft-ai-comfy-env` | Finds an existing ComfyUI Desktop install, inventories its model files and node packs, downloads missing model files into it. |
 | `craft-ai-egui` | Theme-neutral egui widgets: status, model picker, consent prompt, job progress, connection panel, history. Needs Rust 1.95. |
 
@@ -79,8 +81,9 @@ Read [docs/STATUS.md](docs/STATUS.md) before relying on a provider or tool. In s
   all-target clippy for those two packages, five committed kittest snapshots, one draw test and one
   `craft-ai-core` identity on Linux. The earlier 108-test mutation checkpoint is historical. The
   rendererless smoke does not use winit.
-- **Not verified:** any real hosted service, TLS behind an intercepting proxy, macOS and Linux
-  keychains, macOS builds of the test suite, and any app running a tool through the shared binding.
+- **Limited hosted check:** a local PhotoCraft build completed one Nano Banana 2 fill through the Omni adapter. The tester reported poor blending; this is not output-quality acceptance. See [Omni Generative Fill](docs/OMNI-GENERATIVE-FILL.md).
+- **Not verified:** other real hosted services, TLS behind an intercepting proxy, macOS and Linux
+  keychains, macOS builds of the test suite, and app adoption beyond that limited Omni check.
   Native widget behavior on Linux X11/Wayland and Windows (focus, keyboard, clipboard, IME and
   rendering), physical-GPU qualification, performance, and app adoption of the widgets also remain
   unverified.

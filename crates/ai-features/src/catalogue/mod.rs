@@ -8,11 +8,15 @@
 use crate::feature::{AppStatus, AppUse, Feature};
 use crate::recipe::CloudOption;
 
+mod ben2_vitmatte;
 mod florence2;
+mod inspyrenet;
 mod sam21;
 mod sam3;
+use ben2_vitmatte::ben2_vitmatte;
 use craft_ai_core::{CapabilityId, InputRole};
 pub use florence2::FLORENCE2_LARGE_DIR;
+use inspyrenet::inspyrenet;
 use sam3::sam3;
 use sam21::sam21;
 
@@ -81,8 +85,9 @@ fn try_builtin() -> Option<Vec<Feature>> {
     )?;
     background.inputs = vec![InputRole::Source];
     background.uses = uses(&[("PhotoCraft", "Remove Background")]);
-    // No local recipe and no hosted route yet: no adapter here matts an image, and no model file
-    // has been checked against its real source. The screen says so instead of offering a guess.
+    // Built in only: InSPyReNet (Burn, any graphics card) and BEN2 + ViTMatte (rten, on the
+    // processor); no hosted route yet.
+    background.locals = vec![inspyrenet(), ben2_vitmatte()];
 
     let mut remove = feature(
         "remove-object",
@@ -104,11 +109,28 @@ fn try_builtin() -> Option<Vec<Feature>> {
     )?;
     fill.inputs = vec![InputRole::Source, InputRole::Mask, InputRole::Prompt];
     fill.uses = uses(&[("PhotoCraft", "Generative Fill")]);
-    fill.cloud = vec![cloud(
-        "openai",
-        "OpenAI image editing",
-        "Your own OpenAI key, billed by OpenAI. Built and tested offline only.",
-    )];
+    fill.cloud = vec![
+        cloud(
+            "openai",
+            "OpenAI image editing",
+            "Your own OpenAI key, billed by OpenAI. Used live from PhotoCraft.",
+        ),
+        cloud(
+            "bfl",
+            "Black Forest Labs FLUX.1 Fill",
+            "Your own BFL key, billed by Black Forest Labs. Used live from PhotoCraft.",
+        ),
+        cloud(
+            "gemini",
+            "Google Gemini (Nano Banana)",
+            "Your own Google AI Studio key, billed by Google. Prompt-guided editing: Gemini takes no mask, so it is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Built and tested offline only.",
+        ),
+        cloud(
+            "artcraft-omni",
+            "ArtCraft",
+            "Staff-enabled API key. Whether a subscription covers it is unverified. Nano Banana is shown the selection as a second picture and may change the picture outside it (keep only the selected part). Nano Banana 2 was run once from PhotoCraft and its result did not blend well; Nano Banana and Nano Banana Pro were not run live.",
+        ),
+    ];
 
     let mut expand = feature(
         "generative-expand",

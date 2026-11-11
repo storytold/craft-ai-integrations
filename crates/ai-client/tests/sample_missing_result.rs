@@ -61,7 +61,7 @@ fn a_mask_with_no_result_beside_it_fails_the_selection_test() {
         .find(|f| f.id == "select-subject")
         .unwrap();
     desk.enable_native_with(&feature, "rten", &weights).unwrap();
-    let TestStart::Started(job) = desk.start_sample(&feature, false).unwrap() else {
+    let TestStart::Started(job) = desk.start_sample(&feature, None).unwrap() else {
         panic!("a local sample needs no agreement");
     };
     match ToolDesk::finish(&feature.role().unwrap(), &job, Duration::from_secs(5)) {

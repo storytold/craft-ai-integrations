@@ -142,9 +142,14 @@ impl StoreFile {
                 supported: SCHEMA_VERSION,
             });
         }
-        let store: Self =
+        let mut store: Self =
             serde_json::from_str(text).map_err(|e| StoreError::Syntax(e.to_string()))?;
         store.validate()?;
+        // An Omni connection saved before Generative fill existed gains it here, so it does not
+        // have to be set up again. Only missing capabilities are added; models and bindings stay.
+        for connection in &mut store.connections {
+            crate::draft::omni_models::refresh(connection);
+        }
         Ok(store)
     }
 

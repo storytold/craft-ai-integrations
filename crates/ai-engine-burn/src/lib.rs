@@ -1,6 +1,10 @@
-//! SAM 2.1 on the Burn engine for Craft AI: an optional runner for the `image.segment` capability
-//! that uses a graphics card when one answers and the processor when none does. The default
-//! engine for this model stays rten (`craft-ai-engine-rten`); this one is a choice.
+//! The Burn engine for Craft AI: optional runners that use a graphics card when one answers and
+//! the processor when none does.
+//!
+//! - **SAM 2.1** for `image.segment`. The default engine for this model stays rten
+//!   (`craft-ai-engine-rten`); this one is a choice. The rest of this page is about it.
+//! - **InSPyReNet** for `image.matte` (Remove background): the subject's soft alpha from the
+//!   picture alone, at any picture size. See the `inspyrenet` module and `docs/BURN-ENGINE.md`.
 //!
 //! An app does not use this crate directly. It puts [`runners`] in an
 //! [`EngineRegistry`](craft_ai_engine::EngineRegistry), or turns on the `burn` feature of
@@ -31,6 +35,7 @@
 extern crate alloc;
 
 mod backend;
+mod inspyrenet;
 // Generated code: its lints are the generator's business, and its forward passes can panic on a
 // shape they were not generated for, so the runner calls them only through `backend::guarded`.
 #[allow(
@@ -47,5 +52,6 @@ mod model;
 mod runner;
 
 pub use backend::{DECODER_FILE, ENCODER_FILE, graphics_card_answers};
+pub use inspyrenet::{InspyrenetRunner, MODEL as INSPYRENET_MODEL};
 pub use model::ARCHITECTURE_REVISION;
 pub use runner::{ENGINE, MODEL, Sam21Runner, runners};

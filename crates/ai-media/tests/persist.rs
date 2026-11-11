@@ -23,6 +23,7 @@ struct Fake {
 }
 
 impl Fake {
+    /// A provider whose job succeeds with `outputs`.
     fn scripted(outputs: Vec<Payload>) -> Arc<dyn Provider> {
         Arc::new(Self {
             outputs: Mutex::new(outputs),
@@ -31,12 +32,15 @@ impl Fake {
 }
 
 impl Provider for Fake {
+    /// No models: the tests only poll.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         Ok(Vec::new())
     }
+    /// Starts the one scripted job.
     fn submit(&self, _: &ModelId, _: &Request) -> Result<JobId, AiError> {
         JobId::new("job-1").map_err(|e| AiError::invalid(e.to_string()))
     }
+    /// A finished job carrying the scripted outputs once, plus a provider notice.
     fn poll(&self, _: &JobId) -> Result<JobSnapshot, AiError> {
         let mut snap = JobSnapshot::new(JobState::Succeeded);
         snap.events.push(Event::Notice {
@@ -50,33 +54,38 @@ impl Provider for Fake {
         }
         Ok(snap)
     }
+    /// Nothing to stop.
     fn cancel(&self, _: &JobId) -> Result<(), AiError> {
         Ok(())
     }
 }
 
+/// The scripted server's address without its `/v1` path.
 fn origin(server: &Server) -> String {
     server.url.trim_end_matches("/v1").to_owned()
 }
 
+/// A store config for `dir` that allows loopback links and never retries.
 fn config(dir: &Path) -> MediaStoreConfig {
     let mut cfg = MediaStoreConfig::new(dir);
     cfg.allow_loopback = true;
-    cfg.retry_delay = std::time::Duration::ZERO;
-    cfg.max_attempts = 1;
+    cfg.retry = craft_ai_core::Backoff::NEVER;
     cfg
 }
 
+/// Polls a scripted job with `outputs` through a persisting provider over `cfg`.
 fn run(cfg: MediaStoreConfig, outputs: Vec<Payload>) -> JobSnapshot {
     let store = Arc::new(MediaStore::new(cfg).unwrap());
     let provider = PersistingProvider::new(Fake::scripted(outputs), store);
     provider.poll(&JobId::new("job-1").unwrap()).unwrap()
 }
 
+/// A hosted output link of media type `media`.
 fn handle(uri: &str, media: &str) -> Payload {
     Payload::handle(uri, media, None).unwrap()
 }
 
+/// The files saved in `dir`.
 fn files(dir: &Path) -> Vec<std::path::PathBuf> {
     std::fs::read_dir(dir)
         .unwrap()
@@ -84,6 +93,7 @@ fn files(dir: &Path) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+/// The notice texts in a snapshot.
 fn notices(snap: &JobSnapshot) -> Vec<&str> {
     snap.events
         .iter()
@@ -94,6 +104,7 @@ fn notices(snap: &JobSnapshot) -> Vec<&str> {
         .collect()
 }
 
+/// The local path of the snapshot's one saved output.
 fn saved_path(snap: &JobSnapshot) -> std::path::PathBuf {
     match &snap.outputs().next().unwrap().payload {
         Payload::Handle(h) => {
@@ -104,6 +115,7 @@ fn saved_path(snap: &JobSnapshot) -> std::path::PathBuf {
     }
 }
 
+/// A hosted image is copied and the link replaced.
 #[test]
 fn a_hosted_image_is_copied_and_the_link_replaced() {
     let server = Server::start(|_| http_bytes(200, &[("Content-Type", "image/png")], PNG));
@@ -125,6 +137,7 @@ fn a_hosted_image_is_copied_and_the_link_replaced() {
     assert_eq!(snap.state, JobState::Succeeded);
 }
 
+/// The transfer carries no credentials.
 #[test]
 fn the_transfer_carries_no_credentials() {
     let server = Server::start(|_| http_bytes(200, &[], MP4));
@@ -141,6 +154,7 @@ fn the_transfer_carries_no_credentials() {
     }
 }
 
+/// The file type comes from the bytes not the declaration.
 #[test]
 fn the_file_type_comes_from_the_bytes_not_the_declaration() {
     let server = Server::start(|_| http_bytes(200, &[("Content-Type", "image/png")], JPEG));
@@ -157,6 +171,7 @@ fn the_file_type_comes_from_the_bytes_not_the_declaration() {
     assert_eq!(h.media_type.as_str(), "image/jpeg");
 }
 
+/// A different kind of media is refused and leaves no file.
 #[test]
 fn a_different_kind_of_media_is_refused_and_leaves_no_file() {
     let server = Server::start(|_| http_bytes(200, &[], PNG));
@@ -169,6 +184,7 @@ fn a_different_kind_of_media_is_refused_and_leaves_no_file() {
     assert!(matches!(&snap.outputs().next().unwrap().payload, Payload::Handle(h) if h.uri == uri));
 }
 
+/// Error pages and expired links are refused.
 #[test]
 fn error_pages_and_expired_links_are_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -192,6 +208,7 @@ fn error_pages_and_expired_links_are_refused() {
     assert!(files(dir.path()).is_empty());
 }
 
+/// The size limit holds with and without a content length.
 #[test]
 fn the_size_limit_holds_with_and_without_a_content_length() {
     let dir = tempfile::tempdir().unwrap();
@@ -227,6 +244,7 @@ fn the_size_limit_holds_with_and_without_a_content_length() {
     assert!(files(dir.path()).is_empty(), "{:?}", files(dir.path()));
 }
 
+/// Redirects are followed a few times with no credentials.
 #[test]
 fn redirects_are_followed_a_few_times_with_no_credentials() {
     let server = Server::start(|r| match r.path.as_str() {
@@ -245,6 +263,7 @@ fn redirects_are_followed_a_few_times_with_no_credentials() {
     assert!(requests.iter().all(|r| r.header("authorization").is_none()));
 }
 
+/// Redirect loops and unsafe targets stop.
 #[test]
 fn redirect_loops_and_unsafe_targets_stop() {
     let dir = tempfile::tempdir().unwrap();
@@ -281,6 +300,7 @@ fn redirect_loops_and_unsafe_targets_stop() {
     assert!(files(dir.path()).is_empty());
 }
 
+/// Loopback links are refused unless allowed and no request is made.
 #[test]
 fn loopback_links_are_refused_unless_allowed_and_no_request_is_made() {
     let server = Server::start(|_| http_bytes(200, &[], PNG));
@@ -298,6 +318,7 @@ fn loopback_links_are_refused_unless_allowed_and_no_request_is_made() {
     assert!(notices(&snap).iter().any(|n| n.contains("this computer")));
 }
 
+/// A failed copy never prints the link.
 #[test]
 fn a_failed_copy_never_prints_the_link() {
     let server = Server::start(|_| http_bytes(404, &[], b""));
@@ -315,6 +336,7 @@ fn a_failed_copy_never_prints_the_link() {
     }
 }
 
+/// Local and inline outputs are left alone.
 #[test]
 fn local_and_inline_outputs_are_left_alone() {
     let dir = tempfile::tempdir().unwrap();
@@ -330,8 +352,9 @@ fn local_and_inline_outputs_are_left_alone() {
     assert!(files(dir.path()).is_empty());
 }
 
+/// Several outputs each get a file and a repeated link shares one.
 #[test]
-fn several_outputs_each_get_their_own_file() {
+fn several_outputs_each_get_a_file_and_a_repeated_link_shares_one() {
     let server = Server::start(|r| {
         if r.path == "/v" {
             http_bytes(200, &[], MP4)
@@ -350,9 +373,11 @@ fn several_outputs_each_get_their_own_file() {
         ],
     );
     assert_eq!(snap.outputs().count(), 3);
-    assert_eq!(files(dir.path()).len(), 3);
+    // The image link appears twice: it is fetched once and both outputs point at the one copy.
+    assert_eq!(files(dir.path()).len(), 2);
 }
 
+/// The directory must exist and be absolute.
 #[test]
 fn the_directory_must_exist_and_be_absolute() {
     assert!(MediaStore::new(MediaStoreConfig::new("relative/dir")).is_err());
@@ -366,6 +391,7 @@ fn the_directory_must_exist_and_be_absolute() {
     );
 }
 
+/// An unreachable host is a notice not a failed job.
 #[test]
 fn an_unreachable_host_is_a_notice_not_a_failed_job() {
     let dead = Server::dead_url();
@@ -385,6 +411,7 @@ fn an_unreachable_host_is_a_notice_not_a_failed_job() {
     );
 }
 
+/// A huge declared length is refused before any body is read.
 #[test]
 fn a_huge_declared_length_is_refused_before_any_body_is_read() {
     // The header promises 10 MiB but only a PNG header follows. Refusing on the header gives
@@ -404,4 +431,29 @@ fn a_huge_declared_length_is_refused_before_any_body_is_read() {
     );
     assert!(notices(&snap).iter().any(|n| n.contains("larger than")));
     assert!(files(dir.path()).is_empty());
+}
+
+/// One link returned many times is fetched once and a flood is capped.
+#[test]
+fn one_link_returned_many_times_is_fetched_once_and_a_flood_is_capped() {
+    let server = Server::start(|_| http_bytes(200, &[("Content-Type", "image/png")], PNG));
+    let dir = tempfile::tempdir().unwrap();
+    let uri = format!("{}/same.png", origin(&server));
+    let snap = run(config(dir.path()), vec![handle(&uri, "image/png"); 8]);
+    assert_eq!(server.count(), 1);
+    assert_eq!(files(dir.path()).len(), 1);
+    assert!(
+        snap.outputs()
+            .all(|o| matches!(&o.payload, Payload::Handle(h) if h.uri.starts_with("file:")))
+    );
+
+    let many = (0..craft_ai_media::MAX_SAVES_PER_POLL + 4)
+        .map(|i| handle(&format!("{}/{i}.png", origin(&server)), "image/png"))
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let before = server.count();
+    let snap = run(config(dir.path()), many);
+    assert_eq!(server.count() - before, craft_ai_media::MAX_SAVES_PER_POLL);
+    assert_eq!(files(dir.path()).len(), craft_ai_media::MAX_SAVES_PER_POLL);
+    assert!(notices(&snap).iter().any(|n| n.contains("past the first")));
 }

@@ -204,7 +204,7 @@ impl Demo {
                 self.note = "Cleared in this window only. The file on disk was not touched.".into();
             }
             HistoryAction::Export(csv) => {
-                self.note = match std::fs::write("history-export.csv", csv) {
+                self.note = match export(csv.as_bytes()) {
                     Ok(()) => "Wrote history-export.csv in the current folder.".into(),
                     Err(e) => format!("Could not write the file: {e}"),
                 };
@@ -263,4 +263,18 @@ fn main() -> eframe::Result {
             }))
         }),
     )
+}
+
+/// Replaces `history-export.csv` once the whole new export is on disk. The temporary file is
+/// created exclusively in the same folder (and owner-only on Unix, as it holds retained
+/// history), so a link planted at the export name is replaced by the rename rather than
+/// followed, and an export that fails part way leaves the previous file in place.
+fn export(csv: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    const NAME: &str = "history-export.csv";
+    let mut temporary = tempfile::NamedTempFile::new_in(".")?;
+    temporary.write_all(csv)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(NAME).map_err(|error| error.error)?;
+    Ok(())
 }

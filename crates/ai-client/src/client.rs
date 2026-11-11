@@ -17,23 +17,30 @@
 //! never in a [`Plan`], a [`Job`], a status or an error.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use craft_ai_core::job::Event;
-use craft_ai_core::payload::Limits;
+use craft_ai_core::model::InputRole;
 use craft_ai_core::picks::{Candidate, choose};
 use craft_ai_core::role::eligible;
 use craft_ai_core::{
-    AiError, AppId, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger, Disclosure,
-    ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality, ModelId, Pick, PickedBy,
-    Provider, Request, Role, RoleId, Usage,
+    AiError, AppId, Backoff, Billing, Binding, Catalog, Connection, ConnectionId, ConsentLedger,
+    CostEstimate, Disclosure, ErrorKind, HistoryLog, JobId, JobSnapshot, JobState, Locality,
+    ModelId, Outcome, Pick, PickedBy, Provider, Request, Role, RoleId, SecretString, Usage,
 };
-use craft_ai_native::secrets::{EnvStore, KeychainStore, LayeredStore, SecretStore, secret_for};
+use craft_ai_native::secrets::{SecretStore, secret_for, standard_store};
 use craft_ai_native::shared::SharedStore;
 use craft_ai_native::{CatalogFile, HistoryFile};
 
 use crate::factory::ProviderFactory;
-use crate::history::{self, Recorder};
+use crate::history::Recorder;
+use crate::route_support::{RouteFacts, RouteQuery, RouteSupport};
+
+#[path = "plan_cost.rs"]
+mod plan_cost;
+#[path = "client_run.rs"]
+mod run;
+#[path = "client_wait.rs"]
+mod wait;
 
 /// What a person is told when the app has no adapter for the model they chose. One sentence, so
 /// status, plan and start agree and the plain-language test can pin it.
@@ -87,6 +94,8 @@ pub struct Plan {
     pub(crate) disclosure: Disclosure,
     pub(crate) role_id: RoleId,
     pub(crate) role_label: String,
+    /// Worked out at plan time from the saved model's pricing; see [`Plan::estimate`].
+    pub(crate) estimate: Option<CostEstimate>,
 }
 
 /// Unix seconds now; 0 if the clock is before 1970, which makes timed agreements read as valid
@@ -118,6 +127,15 @@ impl Plan {
         &self.connection.label
     }
 
+    /// The adapter name as stored on the connection, for adapter-specific params.
+    ///
+    /// The factory matches names case-insensitively. This accessor preserves the original
+    /// spelling, so compare with `eq_ignore_ascii_case` (for example against `"bfl"`).
+    pub fn provider(&self) -> &str {
+        &self.connection.provider
+    }
+
+    /// The model the plan will run, as resolved from the binding.
     pub fn model(&self) -> &ModelId {
         &self.model
     }
@@ -129,9 +147,11 @@ pub struct Job {
     provider: Arc<dyn Provider>,
     id: JobId,
     recorder: Option<Arc<Recorder>>,
+    poll_retry: Backoff,
 }
 
 impl std::fmt::Debug for Job {
+    /// Shows the job id only: the provider and its key stay out of logs.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Job({})", self.id)
     }
@@ -146,10 +166,14 @@ pub struct Finished {
 }
 
 impl Job {
+    /// The provider's id for this job.
     pub fn id(&self) -> &JobId {
         &self.id
     }
 
+    /// The job's state now. An error that [`AiError::is_retryable`] (a dropped connection, a
+    /// rate limit) says nothing about the job itself: poll again after a pause, honouring
+    /// `retry_after_secs`, as [`wait`](Self::wait) does.
     pub fn poll(&self) -> Result<JobSnapshot, AiError> {
         let snap = self.provider.poll(&self.id)?;
         if let Some(recorder) = &self.recorder {
@@ -158,34 +182,9 @@ impl Job {
         Ok(snap)
     }
 
+    /// Asks the provider to stop the job. A job that has already ended is the provider's to report.
     pub fn cancel(&self) -> Result<(), AiError> {
         self.provider.cancel(&self.id)
-    }
-
-    /// Polls every `interval` until the job ends or `timeout` passes, collecting events. For
-    /// scripts and tests; an app with its own job system polls instead.
-    pub fn wait(&self, interval: Duration, timeout: Duration) -> Result<Finished, AiError> {
-        let deadline = Instant::now() + timeout;
-        let mut events = Vec::new();
-        loop {
-            let snap = self.poll()?;
-            events.extend(snap.events);
-            if snap.state.is_terminal() {
-                return Ok(Finished {
-                    state: snap.state,
-                    events,
-                    usage: snap.usage,
-                });
-            }
-            if Instant::now() >= deadline {
-                let _ = self.cancel();
-                if let Some(recorder) = &self.recorder {
-                    recorder.gave_up();
-                }
-                return Err(AiError::new(ErrorKind::Network, "the job took too long"));
-            }
-            std::thread::sleep(interval);
-        }
     }
 }
 
@@ -198,9 +197,15 @@ pub struct AiClient {
     history: Option<Arc<HistoryFile>>,
     keep_prompts: bool,
     catalog: Catalog,
+    submit_retry: Backoff,
+    poll_retry: Backoff,
+    /// Set by `with_retries`, so `with_factory` hands the send rule to a later factory.
+    send_rule_chosen: bool,
 }
 
 impl AiClient {
+    /// A client for `app` over the given shared store and secret store, with the standard
+    /// adapters, no history file, the built-in catalog and the default retry rules.
     pub fn new(app: AppId, shared: SharedStore, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
             app,
@@ -210,18 +215,31 @@ impl AiClient {
             history: None,
             keep_prompts: false,
             catalog: Catalog::builtin(),
+            submit_retry: Backoff::STANDARD,
+            poll_retry: wait::POLL_RETRY,
+            send_rule_chosen: false,
         }
     }
 
-    /// The usual setup: the standard shared store location, and keys from the environment then the
-    /// OS keychain. (The passphrase-encrypted file is not included, because only the caller can
-    /// supply its passphrase; build a [`LayeredStore`] and use [`new`](Self::new) to add it.)
+    /// The usual setup: the standard shared store location, and keys from the environment, then
+    /// the OS keychain, then the encrypted secret file (locked, so a key kept only there is
+    /// reported as locked rather than missing). Use
+    /// [`standard_with_passphrase`](Self::standard_with_passphrase) when
+    /// [`passphrase_need`](craft_ai_native::secrets::passphrase_need) says to ask for one.
     pub fn standard(app: AppId) -> Result<Self, AiError> {
+        Self::standard_from(app, None)
+    }
+
+    /// As [`standard`](Self::standard), with the secret file unlocked by `passphrase`: the
+    /// fallback for a machine with no OS keychain. The passphrase is held only in memory.
+    pub fn standard_with_passphrase(app: AppId, passphrase: SecretString) -> Result<Self, AiError> {
+        Self::standard_from(app, Some(passphrase))
+    }
+
+    /// Shared body of the two standard constructors.
+    fn standard_from(app: AppId, passphrase: Option<SecretString>) -> Result<Self, AiError> {
         let shared = SharedStore::at_default_location()?;
-        let secrets = LayeredStore::new(vec![
-            Box::new(EnvStore::new()),
-            Box::new(KeychainStore::new()),
-        ]);
+        let secrets = standard_store(passphrase);
         let mut client = Self::new(app, shared, Arc::new(secrets));
         client.history = HistoryFile::at_default_location().map(Arc::new);
         Ok(client)
@@ -277,15 +295,21 @@ impl AiClient {
             .map_err(|e| AiError::new(ErrorKind::Internal, format!("history unavailable: {e}")))
     }
 
+    /// The history file, or `Unsupported` when this client keeps no history.
     fn history_file(&self) -> Result<&Arc<HistoryFile>, AiError> {
         self.history.as_ref().ok_or_else(|| {
             AiError::new(ErrorKind::Unsupported, "request history is turned off here")
         })
     }
 
-    /// Replaces the provider factory, to add adapters.
+    /// Replaces the provider factory, to add adapters. A send rule already chosen with
+    /// [`with_retries`](Self::with_retries) is applied to it, so the order of the two calls does
+    /// not matter.
     pub fn with_factory(mut self, factory: ProviderFactory) -> Self {
         self.factory = factory;
+        if self.send_rule_chosen() {
+            self.factory.set_send_retry(self.submit_retry());
+        }
         self
     }
 
@@ -323,6 +347,15 @@ impl AiClient {
         if !self.factory.knows(&resolved.connection.provider) {
             return unavailable(NO_ADAPTER.to_owned());
         }
+        // Before the key: a model this build would refuse is not ready, whatever is saved.
+        if let RouteSupport::Unsupported { reason } = self.route_support(
+            resolved.connection,
+            &resolved.model.id,
+            &role.capability,
+            &role.inputs,
+        ) {
+            return unavailable(reason);
+        }
         if let Err(e) = secret_for(&*self.secrets, resolved.connection) {
             return unavailable(e.message);
         }
@@ -345,7 +378,90 @@ impl AiClient {
         })
     }
 
-    /// Every model that could fill `role`, for a picker.
+    /// What this build's adapter says about a tool's path, asked as status and the picker ask it:
+    /// one output, no streaming and no options. Reads no key and contacts nothing.
+    pub(crate) fn route_support(
+        &self,
+        connection: &Connection,
+        model: &ModelId,
+        capability: &craft_ai_core::CapabilityId,
+        inputs: &[InputRole],
+    ) -> RouteSupport {
+        self.factory.route_support(&RouteQuery {
+            connection,
+            model,
+            capability,
+            inputs,
+            outputs: 1,
+            stream: false,
+            has_options: false,
+        })
+    }
+
+    /// The saved choice for `role`, what this build can do with it, and what has really worked, as
+    /// separate facts. Reads no key and contacts nothing.
+    pub fn route_facts(&self, role: &Role) -> RouteFacts {
+        let not_configured = |why: String| RouteFacts {
+            configured: Err(why),
+            executable: RouteSupport::Untested,
+            last_success_ms: None,
+        };
+        let store = match self.shared.load() {
+            Ok(store) => store,
+            Err(e) => return not_configured(e.to_string()),
+        };
+        let resolved = match store.resolve(&self.app, role) {
+            Ok(resolved) => resolved,
+            Err(e) => return not_configured(e.to_string()),
+        };
+        let executable = if self.factory.knows(&resolved.connection.provider) {
+            self.route_support(
+                resolved.connection,
+                &resolved.model.id,
+                &role.capability,
+                &role.inputs,
+            )
+        } else {
+            RouteSupport::Unsupported {
+                reason: NO_ADAPTER.to_owned(),
+            }
+        };
+        RouteFacts {
+            configured: Ok(()),
+            executable,
+            last_success_ms: self.last_success(resolved.connection, &resolved.model.id),
+        }
+    }
+
+    /// When this connection and model last finished a real job at the connection's current address,
+    /// from request history if it is on. Editing the address keeps the connection's id, so a job
+    /// sent to the old address does not count.
+    fn last_success(&self, connection: &Connection, model: &ModelId) -> Option<u64> {
+        let destination = Disclosure::destination_for(connection);
+        self.history()
+            .ok()?
+            .entries
+            .iter()
+            .filter(|e| e.start.connection == connection.id.as_str())
+            .filter(|e| e.start.model == model.as_str())
+            .filter(|e| e.start.destination == destination)
+            .filter_map(|e| e.end.as_ref())
+            .filter(|end| end.outcome == Outcome::Done)
+            .map(|end| end.at_ms)
+            .max()
+    }
+
+    /// Whether this app cannot run this model for `role`, so it must not be offered here: this
+    /// build has no adapter for the connection, or the adapter would refuse it.
+    fn known_unsupported(&self, role: &Role, connection: &Connection, model: &ModelId) -> bool {
+        !self.factory.knows(&connection.provider)
+            || matches!(
+                self.route_support(connection, model, &role.capability, &role.inputs),
+                RouteSupport::Unsupported { .. }
+            )
+    }
+
+    /// Every model that could fill `role`, for a picker. One the adapter would refuse is left out.
     pub fn choices(&self, role: &Role) -> Result<Vec<Choice>, AiError> {
         let store = self.shared.load()?;
         store
@@ -353,6 +469,7 @@ impl AiClient {
             .map_err(|e| AiError::invalid(e.to_string()))?;
         Ok(eligible(role, &store.connections)
             .into_iter()
+            .filter(|r| !self.known_unsupported(role, r.connection, &r.model.id))
             .map(|r| Choice {
                 connection: r.connection.id.clone(),
                 connection_label: r.connection.label.clone(),
@@ -372,7 +489,8 @@ impl AiClient {
         store
             .check_tool(role)
             .map_err(|e| AiError::invalid(e.to_string()))?;
-        let eligible = eligible(role, &store.connections);
+        let mut eligible = eligible(role, &store.connections);
+        eligible.retain(|r| !self.known_unsupported(role, r.connection, &r.model.id));
         let candidates: Vec<Candidate<'_>> = eligible
             .iter()
             .map(|r| Candidate {
@@ -434,7 +552,7 @@ impl AiClient {
             connection: connection.clone(),
             model: model.clone(),
         };
-        self.shared.update(|store| {
+        self.shared.try_update(|store| {
             store
                 .check_tool(role)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
@@ -443,7 +561,18 @@ impl AiClient {
                 &[std::slice::from_ref(&binding)],
                 &store.connections,
             )
-            .map_err(|e| AiError::invalid(e.to_string()))?;
+            .map_err(|e| AiError::invalid(e.to_string()))
+            .and_then(|resolved| {
+                // This app's own choice must be one it can run, unlike the suite default.
+                if !self.factory.knows(&resolved.connection.provider) {
+                    return Err(AiError::unsupported(NO_ADAPTER));
+                }
+                match self.route_support(resolved.connection, model, &role.capability, &role.inputs)
+                {
+                    RouteSupport::Unsupported { reason } => Err(AiError::unsupported(reason)),
+                    _ => Ok(()),
+                }
+            })?;
             set_override(store, &self.app, binding);
             Ok::<(), AiError>(())
         })??;
@@ -452,94 +581,18 @@ impl AiClient {
 
     /// Removes this app's own choice, so the launcher default applies again.
     pub fn clear_binding(&self, role: &RoleId) -> Result<(), AiError> {
-        self.shared.update(|store| {
-            if let Some(settings) = store.apps.get_mut(&self.app) {
-                settings.overrides.retain(|b| &b.role != role);
+        // With no choice to remove, nothing is written: no file is created and no bytes change.
+        // `Err(())` from the closure only means there was nothing to clear.
+        let _ = self.shared.try_update(|file| {
+            let settings = file.apps.get_mut(&self.app).ok_or(())?;
+            let before = settings.overrides.len();
+            settings.overrides.retain(|b| &b.role != role);
+            if settings.overrides.len() == before {
+                return Err(());
             }
+            Ok(())
         })?;
         Ok(())
-    }
-
-    /// Resolves the role and checks the request. Sends nothing and reads no key.
-    pub fn plan(&self, role: &Role, request: Request) -> Result<Plan, AiError> {
-        if request.capability != role.capability {
-            return Err(AiError::invalid(format!(
-                "this request is for {}, but \"{}\" needs {}",
-                request.capability, role.label, role.capability
-            )));
-        }
-        let store = self.shared.load()?;
-        let resolved = store
-            .resolve(&self.app, role)
-            .map_err(|e| AiError::unsupported(e.to_string()))?;
-        request.validate(resolved.spec, &Limits::default())?;
-        // Refuse here, before anyone is asked to agree to send something this app cannot send.
-        if !self.factory.knows(&resolved.connection.provider) {
-            return Err(AiError::unsupported(NO_ADAPTER));
-        }
-        let disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
-        Ok(Plan {
-            connection: resolved.connection.clone(),
-            model: resolved.model.id.clone(),
-            request,
-            disclosure,
-            role_id: role.id.clone(),
-            role_label: role.label.clone(),
-        })
-    }
-
-    /// Starts the job. Refuses with [`ErrorKind::ConsentRequired`] if `ledger` does not cover the
-    /// plan's disclosure.
-    pub fn start(&self, plan: &Plan, ledger: &ConsentLedger) -> Result<Job, AiError> {
-        if plan.needs_consent(ledger) {
-            return Err(AiError::new(
-                ErrorKind::ConsentRequired,
-                format!(
-                    "sending to {} needs your agreement first",
-                    plan.disclosure.destination
-                ),
-            ));
-        }
-        let provider = match self.prepare(plan) {
-            Ok(provider) => provider,
-            Err(e) => {
-                self.log_refused(plan, None, &e);
-                return Err(e);
-            }
-        };
-        let estimate = provider.estimate(&plan.model, &plan.request).ok().flatten();
-        match provider.submit(&plan.model, &plan.request) {
-            Ok(id) => {
-                let recorder = self.history.as_ref().map(|file| {
-                    Arc::new(history::begin(file, plan, &id, estimate, self.keep_prompts))
-                });
-                Ok(Job {
-                    provider,
-                    id,
-                    recorder,
-                })
-            }
-            Err(e) => {
-                self.log_refused(plan, estimate, &e);
-                Err(e)
-            }
-        }
-    }
-
-    /// Reads the key and builds the adapter.
-    fn prepare(&self, plan: &Plan) -> Result<Arc<dyn Provider>, AiError> {
-        // Without an adapter there is nothing to give the key to, so do not fetch it.
-        if !self.factory.knows(&plan.connection.provider) {
-            return Err(AiError::unsupported(NO_ADAPTER));
-        }
-        let secret = secret_for(&*self.secrets, &plan.connection)?;
-        self.factory.build(&plan.connection, secret)
-    }
-
-    fn log_refused(&self, plan: &Plan, estimate: Option<craft_ai_core::CostEstimate>, e: &AiError) {
-        if let Some(file) = &self.history {
-            history::refused(file, plan, estimate, self.keep_prompts, e);
-        }
     }
 }
 

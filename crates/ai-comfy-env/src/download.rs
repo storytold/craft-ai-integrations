@@ -99,7 +99,7 @@ enum Attempt {
 
 impl Downloader {
     pub fn new(config: DownloadConfig) -> Self {
-        let agent = ureq::Agent::new_with_config(
+        let agent = ureq::Agent::with_parts(
             ureq::Agent::config_builder()
                 .tls_config(craft_ai_http::tls_config())
                 .proxy(craft_ai_http::loopback_proxy())
@@ -109,6 +109,8 @@ impl Downloader {
                 .timeout_connect(Some(config.connect_timeout))
                 .timeout_recv_body(Some(config.body_timeout))
                 .build(),
+            ureq::unversioned::transport::DefaultConnector::new(),
+            craft_ai_media::links::GuardedResolver::new(config.allow_loopback),
         );
         Self { agent, config }
     }
@@ -169,16 +171,21 @@ impl Downloader {
         let part = parent.join(format!("{leaf}.part"));
         let mut resumes = 0u8;
         loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(AiError::new(ErrorKind::Cancelled, "download cancelled"));
+            }
             match self.attempt(file, &part, token, cancel, progress)? {
                 Attempt::Done => break,
                 Attempt::Interrupted { moved } => {
-                    resumes += 1;
-                    if !moved || resumes > self.config.max_resumes {
+                    // The budget is checked before it is spent, so the count never passes
+                    // `max_resumes` and cannot wrap, even at 255.
+                    if !moved || resumes >= self.config.max_resumes {
                         return Err(AiError::new(
                             ErrorKind::Network,
                             "the download was interrupted; run it again to continue",
                         ));
                     }
+                    resumes += 1;
                     std::thread::sleep(self.config.retry_delay);
                 }
             }

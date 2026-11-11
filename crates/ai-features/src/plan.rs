@@ -90,23 +90,22 @@ pub struct Plan {
     pub blockers: Vec<Blocker>,
 }
 
-/// Works out what `feature`'s first local recipe still needs on a computer described by
-/// `inventory`. A feature with no local recipe gets [`State::NoLocalRoute`] and an empty
-/// [`Plan::recipe`].
+/// Works out what `feature`'s first ComfyUI recipe still needs on a computer described by
+/// `inventory`. A feature with no ComfyUI recipe gets [`State::NoLocalRoute`] and an empty
+/// [`Plan::recipe`]; a built-in route is planned by [`plan_native`].
 pub fn plan(feature: &Feature, inventory: &Inventory) -> Plan {
-    match feature.locals.first() {
+    match feature.comfyui_recipes().next() {
         Some(recipe) => plan_recipe(feature, recipe, inventory),
         None => empty(feature, String::new()),
     }
 }
 
-/// Works out what every one of `feature`'s local recipes still needs, one [`Plan`] each, in
+/// Works out what every one of `feature`'s ComfyUI recipes still needs, one [`Plan`] each, in
 /// catalogue order. Each names its recipe in [`Plan::recipe`], so several models for one tool
 /// can be shown and installed side by side without one standing in for another.
 pub fn plans(feature: &Feature, inventory: &Inventory) -> Vec<Plan> {
     feature
-        .locals
-        .iter()
+        .comfyui_recipes()
         .map(|recipe| plan_recipe(feature, recipe, inventory))
         .collect()
 }

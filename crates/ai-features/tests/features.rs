@@ -308,8 +308,8 @@ fn each_photocraft_tool_has_one_shared_tool_with_the_right_job_and_inputs() {
 
 #[test]
 fn a_tool_without_a_checked_route_offers_none() {
-    // Remove background has no verified local recipe and no hosted adapter that matts an image.
-    let f = feature("remove-background");
+    // Remove objects has no verified local recipe and no hosted adapter that fills a masked area.
+    let f = feature("remove-object");
     assert!(f.locals.is_empty());
     assert!(f.cloud.is_empty());
 }

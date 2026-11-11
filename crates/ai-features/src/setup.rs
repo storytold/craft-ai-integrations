@@ -273,7 +273,7 @@ fn offer_for(
             None => feature.first_usable_recipe()?,
         }
     } else {
-        feature.locals.first().filter(|r| r.usable)?
+        feature.comfyui_recipes().next().filter(|r| r.usable)?
     };
     // The built-in route compares the runtime's own files: the named one, or else the first
     // runtime that names files at all.

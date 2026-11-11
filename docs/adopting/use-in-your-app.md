@@ -144,6 +144,19 @@ let request = Request::new(role.capability.clone())
 
 - **Inputs** are `prompt`, `system`, `source`, `mask`, `reference` and `context`. Send only the
   ones your `Role` lists. A model that cannot take them is never offered for your tool.
+- **Reference pictures for Generative fill** are optional `reference` inputs, added after the
+  source, mask and prompt, in the order you want them used. Gemini and ArtCraft Omni take them;
+  FLUX.1 Fill takes none. Ask `route_facts` or `plan` first: a model that cannot take references
+  at all refuses the request before the person is asked to agree, and nothing is dropped
+  quietly. The shared layer sets no count: each model's limit is the service's (Google documents
+  14 pictures per request for Nano Banana Pro, 2 and 2.1, the source and mask included), and a
+  request with too many is refused by the service after the person has agreed to send it. Each
+  reference must be inline PNG, JPEG or WebP data (PNG only for Omni), at most 10 MB, 8,192
+  pixels a side and 32 megapixels, and it must decode in full. For Gemini, the whole request as
+  sent (the base64 source, normalized mask and references, plus the generated instruction with
+  your prompt) must be at most 20,000,000 bytes, roughly 15 MB of pictures, or it is refused
+  before sending. A reference guides what the new content looks like; it does not promise a result of any quality, and a listed model does not
+  mean the account can use it.
 - **Payloads** are `Payload::text`, `Payload::inline(media_type, bytes)` (up to 32 MiB by
   default) or `Payload::handle(uri, media_type, size)` for something too big to copy.
 - **Params** are named values. The consent prompt shows their names, never their values.
@@ -154,7 +167,9 @@ let request = Request::new(role.capability.clone())
 ## 6. Plan
 
 `plan` checks the request against the chosen model and builds the disclosure: what would leave
-this computer, and where it would go. It sends nothing and reads no key.
+this computer, and where it would go. It sends nothing and reads no key. For a `file:` handle on
+this computer it shows the file's size on disk, not the `size` you passed. A file it cannot look
+at, or a handle address that does not parse, shows no size.
 
 <!-- snippet: plan -->
 ```rust
@@ -202,6 +217,9 @@ The rules for your prompt:
 
 - Show `plan.disclosure()`: the destination, and what is sent (the kind of each input and its
   size). Nothing else about the request needs to be shown.
+- Show `plan.estimate()` beside it when it is `Some` (`craft_ai_egui::text::cost_text` words it).
+  It comes from the saved model's price, needs no key and contacts nothing. `None` means no price
+  is known, not that the job is free, so say nothing about cost then.
 - Offer the four terms in `ConsentTerm::ALL`: this time, one hour, one day, until turned off. The
   words are yours, so you can translate them. `ConsentTerm::id()` is the stable name.
 - Start the job with the ledger that `agree` returns. Save your ledger only when
@@ -322,6 +340,13 @@ so you draw them and run the work on a thread:
    on the test picture, because every built-in route reads clicks and some read no words. A
    selection that chose nothing fails the test, and so does a selection that returned a mask with
    no result beside it, because the contract gives every route both.
+
+For a sample, call `start_sample(feature, None)` first. If it returns
+`TestStart::NeedsConsent`, show and retain that disclosure. After the person agrees, pass
+`Some(&disclosure)` to `start_sample`. If settings or the sample have changed, a different
+disclosure comes back for review, with nothing sent or remembered. `start_test` follows the
+same pattern for a caller-supplied request. This replaces the former boolean approval argument;
+an approval callback must retain the disclosure rather than reconstruct it from current settings.
 
 Nothing in these steps binds a model, downloads anything or starts a job without the person
 pressing the button.

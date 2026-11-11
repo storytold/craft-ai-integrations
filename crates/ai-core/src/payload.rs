@@ -23,6 +23,7 @@ pub struct Limits {
 }
 
 impl Default for Limits {
+    /// The default inline and text size limits.
     fn default() -> Self {
         Self {
             max_inline_bytes: DEFAULT_MAX_INLINE_BYTES,
@@ -60,6 +61,8 @@ validated_string!(
 );
 
 impl MediaType {
+    /// The broad kind of this media type, from its prefix: `image/`, `video/`, `audio/`,
+    /// `text/` or JSON, PDF, and anything else as `Other`.
     pub fn kind(&self) -> PayloadKind {
         let s = self.as_str();
         if s.starts_with("image/") {
@@ -98,6 +101,11 @@ pub struct PayloadHandle {
     pub media_type: MediaType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
+    /// When a hosted link stops working, as Unix seconds (UTC), if anyone knows. `None` means
+    /// unknown, not "never". A `file:` handle has none. Set by the media layer from a signed
+    /// link, or by an adapter whose provider states the lifetime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
 }
 
 /// Data in a request or a result.
@@ -116,16 +124,20 @@ pub enum Payload {
 }
 
 impl Payload {
+    /// A text payload.
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
     }
 
+    /// Media carried in the payload itself. Refuses an invalid media type.
     pub fn inline(media_type: &str, data: Vec<u8>) -> Result<Self, AiError> {
         let media_type =
             MediaType::new(media_type).map_err(|e| AiError::invalid(format!("media type: {e}")))?;
         Ok(Self::Inline { media_type, data })
     }
 
+    /// A link to media held elsewhere. Refuses an empty, over-long or control-character `uri`
+    /// and an invalid media type. The handle starts with no known expiry.
     pub fn handle(uri: &str, media_type: &str, size_bytes: Option<u64>) -> Result<Self, AiError> {
         if uri.is_empty() || uri.len() > MAX_URI_LEN || uri.chars().any(char::is_control) {
             return Err(AiError::invalid(
@@ -138,9 +150,11 @@ impl Payload {
             uri: uri.to_owned(),
             media_type,
             size_bytes,
+            expires_at: None,
         }))
     }
 
+    /// The broad kind of this payload: text, or the kind of its media type.
     pub fn kind(&self) -> PayloadKind {
         match self {
             Self::Text { .. } => PayloadKind::Text,
@@ -239,10 +253,12 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 mod base64_bytes {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    /// Writes the bytes as one base64 string.
     pub fn serialize<S: Serializer>(data: &[u8], s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&super::base64_encode(data))
     }
 
+    /// Reads the bytes back from a base64 string, refusing text that is not valid base64.
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let text = String::deserialize(d)?;
         super::base64_decode(&text).ok_or_else(|| serde::de::Error::custom("invalid base64"))

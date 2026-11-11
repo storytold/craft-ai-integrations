@@ -76,6 +76,7 @@ pub(super) fn sam21() -> LocalRecipe {
         label: "SAM 2.1".to_owned(),
         usable: true,
         workflow: "sam21-segment".to_owned(),
+        comfyui: true,
         models,
         packs: vec![
             NodePack {

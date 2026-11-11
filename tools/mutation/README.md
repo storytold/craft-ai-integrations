@@ -14,6 +14,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py rt` | rten engine picture handling: bounded PNG and JPEG decoding, mask encoding, resampling. |
 | `mutation_check.py bp` | Local Burn weight preparation (`ai-burn-setup`): source hashes, cache key, damaged saved weights, cancel. |
 | `mutation_check.py be` | Burn engine: saved-weights loading, the panic guard, answer checks, file names, its catalogue route, the `.bpk` binding rule and the shared architecture revision. |
+| `mutation_check.py bo` | A recipe only built-in runtimes run is never offered, planned, installed, registered or advised as a ComfyUI model. |
 | `mutation_check.py fr` | First-run setup flow: the licence tick only where needed, the one start button, the suggested folder, adopting checked files, the route-aware try-it sample, status and picker when a file has gone, route notes and engine advice. Cases in `mutation_first_run.py`. |
 | `mutation_check.py at` | `AppTools` (`ai-client/src/app_tools.rs`): an unknown tool never becomes another tool, custom tools are listed, a request carries the tool's capability, run returns outputs and reports a failed or cancelled job as an error, one cancel reaches every waiting job, a finished job removes only itself, and a job past its wait ends cancelled. Cases in `mutation_app_tools.py`. |
 | `mutation_check.py gs` | Generic selection: scratch sinks, the refusal of clicks and mapped selection workflows. |
@@ -26,6 +27,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py vx` | Vertex express adapter (`ai-vertex/src/lib.rs`): the API key travels in the `x-goog-api-key` header, never in the request URL. |
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |
 | `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
+| `mutation_check.py kf` | Standard secret chain (`secrets/standard.rs`): a locked secret file is reported, not read as empty; an empty passphrase counts as none; when to ask for a passphrase. Cases in `mutation_keys.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh
@@ -49,3 +51,5 @@ files while one runs. Afterwards read the restored source and rerun the focused 
 
 Logs go to `tools/mutation/verification/` (not committed) after passing through `scrub.py`, which
 replaces a Windows or Unix profile folder with `%USERPROFILE%` so no account name is written.
+
+`gi` checks that Gemini retains unread terminal states and that a running poll does not mark a result delivered. It uses seeded job tracking and a closed loopback endpoint, with no live provider.

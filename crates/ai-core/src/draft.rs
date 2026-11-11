@@ -21,7 +21,7 @@ use std::fmt;
 
 use crate::connection::{Auth, Billing, Connection, Locality};
 use crate::endpoint::Endpoint;
-use crate::ids::{ConnectionId, SecretRef, validate_id};
+use crate::ids::{ConnectionId, ModelId, SecretRef, validate_id};
 use crate::model::ModelInfo;
 use crate::secret::SecretString;
 
@@ -51,6 +51,7 @@ pub struct Preset {
 pub use presets::PRESETS;
 use presets::preset_models;
 
+pub(crate) mod omni_models;
 mod presets;
 
 /// Which box a problem belongs to, so a form can mark it.
@@ -72,6 +73,7 @@ pub struct DraftError {
 }
 
 impl DraftError {
+    /// A problem with `field`, described by `message`.
     fn new(field: Field, message: impl Into<String>) -> Self {
         Self {
             field,
@@ -81,6 +83,7 @@ impl DraftError {
 }
 
 impl fmt::Display for DraftError {
+    /// The message alone, which is safe to show.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.message)
     }
@@ -129,9 +132,12 @@ pub struct ConnectionDraft {
     secret: Option<SecretRef>,
     /// The address `models` were loaded, preset or last set for.
     models_for: Option<String>,
+    /// Editing: the models the saved connection listed when the form opened it.
+    opened_with: Vec<ModelId>,
 }
 
 impl Default for ConnectionDraft {
+    /// An empty form for a new OpenAI-compatible connection that uses a key and starts enabled.
     fn default() -> Self {
         Self {
             editing: None,
@@ -146,6 +152,7 @@ impl Default for ConnectionDraft {
             models: Vec::new(),
             secret: None,
             models_for: None,
+            opened_with: Vec::new(),
         }
     }
 }
@@ -195,7 +202,15 @@ impl ConnectionDraft {
             models: c.models.clone(),
             secret: c.auth.secret_ref().cloned(),
             models_for: c.endpoint.as_deref().map(|e| e.trim().to_owned()),
+            opened_with: c.models.iter().map(|m| m.id.clone()).collect(),
         }
+    }
+
+    /// Editing: the models the saved connection listed when this form opened it, so a save can
+    /// tell a model the form removed from one listed elsewhere after it opened. Empty for a new
+    /// connection.
+    pub fn opened_with(&self) -> &[ModelId] {
+        &self.opened_with
     }
 
     /// Records models found by a test at `address`, the field value when the test started.
@@ -207,6 +222,19 @@ impl ConnectionDraft {
             return false;
         }
         self.models = models;
+        self.models_for = Some(self.endpoint.trim().to_owned());
+        true
+    }
+
+    /// Records that a test at `address`, the field value when the test started, confirmed the
+    /// models the form already holds, without replacing them. A custom connection's test lists no
+    /// models: the ones a person declared are what it offers, so they now belong to this address
+    /// and a save keeps them. Refused, changing nothing, for an address no longer in the form.
+    #[must_use]
+    pub fn confirm_models_for(&mut self, address: &str) -> bool {
+        if address.trim() != self.endpoint.trim() {
+            return false;
+        }
         self.models_for = Some(self.endpoint.trim().to_owned());
         true
     }
