@@ -36,8 +36,18 @@ A real run can now leave evidence: `craft_ai_client::RunRecord` turns a finished
 (where it went, the kinds and sizes sent, the outcome, and each result's type, size and SHA-256, with no
 prompt, result bytes or link; error and notice text is cleaned of the key, the request text, text parameter values and links, also in JSON-escaped form), and
 refuses a line that still contains the key. The `live_openai` example writes
-one with `--record <file>`. Tested against a scripted server and the mock provider only; no recorded live
-run yet.
+one with `--record <file>`, for OpenAI or, with `omni`, ArtCraft Omni.
+
+Two recorded live runs through `AiClient` (plan, consent, start, wait) are kept in
+[evidence/live-runs.jsonl](evidence/live-runs.jsonl), both on 11 November 2026:
+
+- OpenAI `gpt-4o-mini` text: the service refused it with 429 (no API credit on the account). The record
+  shows the failure as `quota`, with the billing link in the message removed.
+- ArtCraft Omni `nano_banana` image from a prompt: succeeded in 6.8 s and returned one `image/png` link.
+  The record keeps only that type; Omni stated no size, and the image itself was not downloaded, so
+  no hash of its bytes exists. The image's content was not checked.
+
+In both runs the person's real store was left unchanged and no file written held the key.
 
 ## Not verified
 

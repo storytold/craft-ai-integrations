@@ -1,12 +1,19 @@
-//! One real run of the hosted flow against OpenAI, using the key the launcher saved in the OS
-//! keychain. Costs real (small) money for `text` and `image`; `probe` only lists models.
+//! One real run of the hosted flow against OpenAI, or against ArtCraft Omni with `omni`, using the
+//! key the launcher saved in the OS keychain. Costs real (small) money for `text`, `image` and
+//! `omni`; `probe` only lists models.
 //!
 //! ```text
 //! cargo run -p craft-ai-client --example live_openai -- probe
 //! cargo run -p craft-ai-client --example live_openai -- text
 //! cargo run -p craft-ai-client --example live_openai -- image <out.png>
 //! cargo run -p craft-ai-client --example live_openai -- text --record <runs.jsonl>
+//! cargo run -p craft-ai-client --example live_openai -- omni --connection <id> --record <runs.jsonl>
 //! ```
+//!
+//! `omni` asks the saved ArtCraft Omni connection for one `nano_banana` image from a fixed prompt.
+//! Omni returns the image as a link, which is reported by type only and never kept. `--connection`
+//! picks one saved connection by id when several use the same service; without it the first
+//! enabled one is used.
 //!
 //! `--record <file>` appends a [`RunRecord`] line for the run: what was sent (kinds and sizes, not
 //! the prompt), where, how long it took, and each result's type, size and SHA-256. That line is the
@@ -48,12 +55,13 @@ impl Say {
     }
 }
 
-/// Runs the chosen mode (`probe`, `text` or `image`) on a copy of the store, prints what happened
-/// through `Say`, appends a run record when `--record` is given, then proves the real store and
-/// every written file are free of the key.
+/// Runs the chosen mode (`probe`, `text`, `image` or `omni`) on a copy of the store, prints what
+/// happened through `Say`, appends a run record when `--record` is given, then proves the real
+/// store and every written file are free of the key.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let record_to = take_record_flag(&mut args)?;
+    let record_to = take_flag(&mut args, "--record")?.map(PathBuf::from);
+    let chosen = take_flag(&mut args, "--connection")?;
     let mode = args.first().map(String::as_str).unwrap_or("probe");
     // Checked before anything is written: the image would otherwise replace the record.
     if let (Some(record), Some(image)) = (&record_to, args.get(1))
@@ -66,14 +74,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let real = SharedStore::at_default_location()?;
     let before = std::fs::read(real.path())?;
     let store = real.load()?;
+    let (service, name) = if mode == "omni" {
+        ("artcraft-omni", "ArtCraft Omni")
+    } else {
+        ("openai", "OpenAI")
+    };
     let connection = store
         .connections
         .iter()
-        .find(|c| c.provider == "openai" && c.enabled)
-        .ok_or("no OpenAI connection is saved in the launcher")?
+        .find(|c| {
+            c.provider == service
+                && c.enabled
+                && chosen.as_deref().is_none_or(|id| c.id.as_str() == id)
+        })
+        .ok_or(format!(
+            "no matching {name} connection is saved in the launcher"
+        ))?
         .clone();
     let Auth::ApiKey { secret: secret_ref } = &connection.auth else {
-        return Err("the OpenAI connection does not use a key".into());
+        return Err(format!("the {name} connection does not use a key").into());
     };
 
     let keychain = KeychainStore::new();
@@ -87,16 +106,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     say.line("key in the OS keychain: yes");
 
-    // Step 1, free: ask OpenAI which models this key can use.
-    let provider =
-        ProviderFactory::probing().build(&connection, Some(SecretString::new(key.expose())))?;
-    let models = provider.models()?;
+    // Step 1, free: ask the service which models this key can use. Omni has no free key test, so
+    // its saved list is used as it stands; the run itself is what checks it.
+    let models = if mode == "omni" {
+        connection.models.clone()
+    } else {
+        ProviderFactory::probing()
+            .build(&connection, Some(SecretString::new(key.expose())))?
+            .models()?
+    };
     say.line(format!(
         "models this key offers that the layer understands: {}",
         models.len()
     ));
     let wanted: &[&str] = match mode {
         "image" => &["gpt-image-1-mini", "gpt-image-1"],
+        "omni" => &["nano_banana"],
         _ => &["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"],
     };
     let model = wanted
@@ -126,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             c.models = listed;
         }
     })?;
-    let (capability, label, inputs) = if mode == "image" {
+    let (capability, label, inputs) = if mode == "image" || mode == "omni" {
         ("image.generate", "Smoke: image", vec![InputRole::Prompt])
     } else {
         ("text.complete", "Smoke: text", vec![InputRole::Prompt])
@@ -173,6 +198,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_param("size", serde_json::json!("1024x1024"))
             .with_param("quality", serde_json::json!("low"))
+    } else if mode == "omni" {
+        // The Omni adapter maps no generation parameters, so none are sent.
+        Request::new(role.capability.clone()).with_input(
+            InputRole::Prompt,
+            Payload::text("a plain red circle on a white background"),
+        )
     } else {
         Request::new(role.capability.clone())
             .with_input(
@@ -193,7 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let started = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
     let clock = std::time::Instant::now();
     let job = client.start(&plan, &ledger)?;
-    let done = job.wait(Duration::from_millis(500), Duration::from_secs(180))?;
+    let done = job.wait(Duration::from_millis(500), Duration::from_secs(300))?;
     if let Some(path) = &record_to {
         let line = RunRecord::new(&plan, &done, started, clock.elapsed(), &[&say.key])
             .to_json_line(&[&say.key])?;
@@ -230,17 +261,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     finish(&say, &real, &before, &wrote)
 }
 
-/// Removes `--record <file>` from the arguments and returns the file.
-fn take_record_flag(args: &mut Vec<String>) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
-    let Some(at) = args.iter().position(|a| a == "--record") else {
+/// Removes `flag <value>` from the arguments and returns the value.
+fn take_flag(
+    args: &mut Vec<String>,
+    flag: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let Some(at) = args.iter().position(|a| a == flag) else {
         return Ok(None);
     };
     if at + 1 >= args.len() {
-        return Err("--record needs a file".into());
+        return Err(format!("{flag} needs a value").into());
     }
-    let path = PathBuf::from(args.remove(at + 1));
+    let value = args.remove(at + 1);
     args.remove(at);
-    Ok(Some(path))
+    Ok(Some(value))
 }
 
 /// Appends one line, so several runs collect in one file.
