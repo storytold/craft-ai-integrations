@@ -196,6 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     say.line(format!("job ended: {:?}", short(&done.state)));
     let mut wrote: Vec<PathBuf> = vec![dir.path().to_owned()];
+    wrote.extend(record_to.iter().cloned());
     for event in &done.events {
         match event {
             Event::TextDelta { text } => say.line(format!("text: {text}")),
@@ -206,6 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     say.line(format!("output: {} bytes of {media_type}", data.len()));
                     if let Some(out) = args.get(1) {
                         std::fs::write(out, data)?;
+                        wrote.push(PathBuf::from(out));
                         say.line(format!("saved to {out}"));
                     }
                 }
@@ -219,7 +221,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let entries = client.history().map(|h| h.entries.len()).unwrap_or(0);
     say.line(format!("history entries written: {entries}"));
-    wrote.push(dir.path().to_owned());
     finish(&say, &real, &before, &wrote)
 }
 
@@ -258,12 +259,12 @@ fn finish(
     say: &Say,
     real: &SharedStore,
     before: &[u8],
-    folders: &[PathBuf],
+    written: &[PathBuf],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let untouched = std::fs::read(real.path())? == before;
     let mut leaked = say.seen.borrow().iter().any(|l| l.contains(&say.key));
-    for folder in folders {
-        leaked |= folder_contains(folder, say.key.as_bytes());
+    for path in written {
+        leaked |= contains(path, say.key.as_bytes());
     }
     println!("real store untouched: {untouched}");
     println!(
@@ -276,17 +277,15 @@ fn finish(
     Ok(())
 }
 
-fn folder_contains(dir: &Path, needle: &[u8]) -> bool {
-    let Ok(read) = std::fs::read_dir(dir) else {
+/// Whether the file at `path`, or any file under it when it is a folder, holds `needle`. The run
+/// record and a saved image are single files, so both kinds are read.
+fn contains(path: &Path, needle: &[u8]) -> bool {
+    if !path.is_dir() {
+        return std::fs::read(path)
+            .is_ok_and(|b| !needle.is_empty() && b.windows(needle.len()).any(|w| w == needle));
+    }
+    let Ok(read) = std::fs::read_dir(path) else {
         return false;
     };
-    read.flatten().any(|e| {
-        let p = e.path();
-        if p.is_dir() {
-            folder_contains(&p, needle)
-        } else {
-            std::fs::read(&p)
-                .is_ok_and(|b| !needle.is_empty() && b.windows(needle.len()).any(|w| w == needle))
-        }
-    })
+    read.flatten().any(|e| contains(&e.path(), needle))
 }
