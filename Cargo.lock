@@ -2228,6 +2228,7 @@ dependencies = [
 name = "craft-ai-media"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-ai-core",
  "craft-ai-http",
  "image",
