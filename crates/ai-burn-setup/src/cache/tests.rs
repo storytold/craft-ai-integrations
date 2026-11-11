@@ -23,6 +23,10 @@ impl Converter for Fake {
 }
 
 /// A supported test bundle and original files, separate from the cache folder.
+/// Held while a child process is forked and while any preparation runs: a forked child briefly
+/// shares the open lock file of a preparation in flight, which then looks locked to the next run.
+static FORK_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Rig {
     _dir: TempDir,
     source: PathBuf,
@@ -64,6 +68,10 @@ impl Rig {
 
     /// Runs the production cache lifecycle with the supplied tiny converter.
     fn prepare(&self, converter: &dyn Converter) -> Result<PreparedWeights, AiError> {
+        // A process forked meanwhile (see `FORK_GUARD`) would hold this run's lock file open.
+        let _quiet = FORK_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         prepare(
             &self.bundle,
             &self.source,
@@ -271,7 +279,12 @@ fn a_pipe_in_place_of_an_original_is_refused_without_blocking() {
     let r = Rig::new();
     let encoder = r.source.join("encoder.onnx");
     fs::remove_file(&encoder).unwrap();
-    let made = std::process::Command::new("mkfifo").arg(&encoder).status();
+    let made = {
+        let _quiet = FORK_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::process::Command::new("mkfifo").arg(&encoder).status()
+    };
     if !made.is_ok_and(|s| s.success()) {
         eprintln!("skipped: mkfifo is not available");
         return;
