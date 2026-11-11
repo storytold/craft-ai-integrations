@@ -618,3 +618,71 @@ fn an_out_of_credit_send_is_not_sent_again() {
     assert_eq!(failed(&done.state).kind, ErrorKind::Quota);
     assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+/// The scripted server itself refuses an endless request head instead of rescanning it, and still
+/// reads a delimiter that arrives split across two writes.
+#[test]
+fn the_test_server_bounds_a_request_head() {
+    use std::io::{Read, Write};
+    let server = Server::start(|_| Reply::Json(200, "{}".into()));
+    let addr = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+    let mut hostile = std::net::TcpStream::connect(&addr).unwrap();
+    let line = format!("X-Pad: {}\r\n", "a".repeat(1000));
+    let mut sent = hostile.write_all(b"GET /v1/models HTTP/1.1\r\n").is_ok();
+    for _ in 0..200 {
+        sent &= hostile.write_all(line.as_bytes()).is_ok();
+    }
+    let _ = sent; // the server may close before the last write
+    let mut rest = Vec::new();
+    // macOS answers `EINVAL` here once the server has closed the socket, which is expected: the
+    // point is only that no reply arrives.
+    let _ = hostile.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = hostile.read_to_end(&mut rest);
+    assert!(rest.is_empty(), "an oversized head got a reply");
+    assert_eq!(server.count(), 0);
+
+    let mut split = std::net::TcpStream::connect(&addr).unwrap();
+    split
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: x\r\n\r")
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    split.write_all(b"\n").unwrap();
+    let mut reply = Vec::new();
+    split.read_to_end(&mut reply).unwrap();
+    assert!(
+        reply.starts_with(b"HTTP/1.1 200"),
+        "{}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert_eq!(server.count(), 1);
+}
+
+/// A head that is only oversized in the read that carries its delimiter is still refused: the
+/// limit is where the head ends, not whether a delimiter happened to arrive with it. Without that
+/// check the oversized head was parsed and answered.
+#[test]
+fn the_test_server_refuses_a_delimiter_past_the_limit() {
+    use std::io::{Read, Write};
+    let server = Server::start(|_| Reply::Json(200, "{}".into()));
+    let addr = server
+        .url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_owned();
+    let mut client = std::net::TcpStream::connect(&addr).unwrap();
+    // One write: a complete 70 KiB head whose delimiter starts past the server's 64 KiB limit, so
+    // it arrives in the read that crosses the limit.
+    let mut head = b"GET /v1/models HTTP/1.1\r\nX-Pad: ".to_vec();
+    head.extend(std::iter::repeat_n(b'a', 70 * 1024));
+    head.extend_from_slice(b"\r\n\r\n");
+    let _ = client.write_all(&head); // the server may close before the last byte
+    let _ = client.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut rest = Vec::new();
+    let _ = client.read_to_end(&mut rest);
+    assert!(rest.is_empty(), "an oversized head got a reply");
+    assert_eq!(server.count(), 0);
+}
