@@ -100,8 +100,9 @@ fn the_built_in_route_is_registered_and_comfyui_is_refused() {
     assert_eq!(store.connections[0].provider, "burn");
 }
 
-/// Advice lists Burn alone: never ComfyUI, which has no recipe for this tool. An app with the
-/// engine on a graphics card it vouches for is advised it.
+/// Advice lists the built-in engines, Burn (InSPyReNet) and rten (BEN2 + ViTMatte): never ComfyUI,
+/// which has no recipe for this tool. An app with an engine on a graphics card it vouches for is
+/// advised it, and not an engine it does not have.
 #[test]
 fn engine_advice_offers_burn_and_never_comfyui() {
     let w = World::new();
@@ -109,8 +110,8 @@ fn engine_advice_offers_burn_and_never_comfyui() {
         .client(without_engines())
         .engine_advice(&remove_background(), &windows_nvidia());
     let providers: Vec<&str> = advice.iter().map(|a| a.provider.as_str()).collect();
-    assert_eq!(providers, ["burn"]);
-    assert!(!advice[0].usable && !advice[0].recommended);
+    assert_eq!(providers, ["burn", "rten"]);
+    assert!(advice.iter().all(|a| !a.usable && !a.recommended));
 
     let mut factory = without_engines();
     factory.register("burn", |_, _| {
@@ -120,6 +121,8 @@ fn engine_advice_offers_burn_and_never_comfyui() {
     let advice = w
         .client(factory)
         .engine_advice(&remove_background(), &windows_nvidia());
-    assert_eq!(advice.len(), 1);
+    assert_eq!(advice.len(), 2);
+    assert_eq!(advice[0].provider, "burn");
     assert!(advice[0].usable && advice[0].recommended, "{advice:?}");
+    assert!(!advice[1].usable && !advice[1].recommended, "{advice:?}");
 }
