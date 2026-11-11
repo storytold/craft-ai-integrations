@@ -388,3 +388,60 @@ fn notices_usage_and_a_job_not_yet_ended_are_all_kept() {
     };
     assert_eq!(record(&plan, &cancelled).outcome, RunOutcome::Cancelled);
 }
+
+/// The record of a run of `request` that failed with `said`, also given as a notice.
+fn failed_with(request: Request, said: &str) -> RunRecord {
+    let world = mock_world(Script::default());
+    let plan = world.client.plan(&role(), request).unwrap();
+    let done = Finished {
+        state: JobState::Failed {
+            error: AiError::new(ErrorKind::Provider, said.to_owned()),
+        },
+        events: vec![Event::Notice {
+            message: said.to_owned(),
+        }],
+        usage: None,
+    };
+    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY])
+}
+
+/// A parameter's text value, however deeply nested, is removed from messages like request text;
+/// numbers and parameter names are kept.
+#[test]
+fn text_parameter_values_are_removed_from_messages() {
+    let request = Request::new(role().capability)
+        .with_input(InputRole::Prompt, Payload::text(PROMPT))
+        .with_param("max_tokens", json!(8))
+        .with_param("style", json!({"tone": ["a hushed tone"]}));
+    let rec = failed_with(request, "style tone a hushed tone needs max_tokens over 8");
+    let want = "style tone [request text removed] needs max_tokens over 8";
+    assert_eq!(rec.error.unwrap().message, want);
+    assert_eq!(rec.notices, vec![want.to_owned()]);
+}
+
+/// Request text and keys are also found as JSON writes them, as when an adapter quotes the body
+/// it sent: a line break there reads as a backslash and `n`.
+#[test]
+fn request_text_and_keys_are_removed_in_their_json_escaped_form() {
+    let text = "private\nphrase";
+    let key = "sk-\"quoted\"-key";
+    let request =
+        Request::new(role().capability).with_input(InputRole::Prompt, Payload::text(text));
+    let world = mock_world(Script::default());
+    let plan = world.client.plan(&role(), request).unwrap();
+    let said = r#"sent {"input":"private\nphrase","key":"sk-\"quoted\"-key"}"#;
+    let done = Finished {
+        state: JobState::Failed {
+            error: AiError::new(ErrorKind::Provider, said.to_owned()),
+        },
+        events: Vec::new(),
+        usage: None,
+    };
+    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[key]);
+    assert_eq!(
+        rec.error.unwrap().message,
+        r#"sent {"input":"[request text removed]","key":"[key removed]"}"#
+    );
+}

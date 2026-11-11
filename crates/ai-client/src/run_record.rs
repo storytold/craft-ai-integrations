@@ -6,7 +6,8 @@
 //! SHA-256 of the bytes; returned text as its length and hash. A link is never kept, because a
 //! hosted result link can carry a signed token. Error and notice text is kept, because the
 //! adapters word it for people, but it is cleaned when the record is built: the given secrets, the
-//! request's own text inputs and anything shaped like a link are replaced.
+//! request's own text inputs, the text values of its parameters (each also in its JSON-escaped
+//! form) and anything shaped like a link are replaced.
 //!
 //! Invariants: the error and notice text a record holds contains none of the secrets given to
 //! [`RunRecord::new`]. The other fields are copied from the plan and are not checked there, and the
@@ -19,6 +20,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use craft_ai_core::consent::DisclosureItem;
 use craft_ai_core::{AiError, ErrorKind, Event, JobState, Locality, Payload, Usage};
 use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::client::{Finished, Plan};
@@ -148,7 +150,7 @@ impl RunRecord {
         secrets: &[&str],
     ) -> Self {
         let disclosure = plan.disclosure();
-        let prompts: Vec<&str> = plan
+        let mut prompts: Vec<&str> = plan
             .request
             .inputs
             .iter()
@@ -157,6 +159,7 @@ impl RunRecord {
                 _ => None,
             })
             .collect();
+        prompts.extend(text_values(plan.request.params.values()));
         let clean = |text: &str| scrub(text, secrets, &prompts);
         let (outcome, error) = match &finished.state {
             JobState::Succeeded => (RunOutcome::Succeeded, None),
@@ -232,11 +235,22 @@ impl RunRecord {
 fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
     // (start, end, held a key), byte offsets into `text` on character boundaries.
     let mut spans: Vec<(usize, usize, bool)> = Vec::new();
-    let needles = secrets
+    // Each text as given and, when JSON would write it differently, as JSON escapes it: an adapter
+    // that quotes a JSON body back in its message shows a backslash and `n` for a line break.
+    let needles: Vec<(String, bool)> = secrets
         .iter()
         .map(|s| (*s, true))
-        .chain(prompts.iter().map(|p| (*p, false)));
-    for (needle, is_key) in needles.filter(|(n, _)| !n.is_empty()) {
+        .chain(prompts.iter().map(|p| (*p, false)))
+        .flat_map(|(s, is_key)| {
+            let escaped = json_escaped(s);
+            let differs = escaped != s;
+            [(s.to_owned(), is_key)]
+                .into_iter()
+                .chain(differs.then_some((escaped, is_key)))
+        })
+        .collect();
+    for (needle, is_key) in needles.iter().filter(|(n, _)| !n.is_empty()) {
+        let (needle, is_key) = (needle.as_str(), *is_key);
         // Every occurrence, overlapping ones included (`match_indices` skips those): the next
         // search starts one character after the last match began.
         let step = needle.chars().next().map_or(1, char::len_utf8);
@@ -271,6 +285,22 @@ fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
     }
     out.push_str(text.get(from..).unwrap_or_default());
     without_links(&out)
+}
+
+/// Every text value inside `values`, however deeply nested in arrays and objects. Walked with a
+/// list rather than recursion, so a deeply nested parameter cannot exhaust the stack.
+fn text_values<'a>(values: impl Iterator<Item = &'a Value>) -> Vec<&'a str> {
+    let mut pending: Vec<&Value> = values.collect();
+    let mut found = Vec::new();
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::String(s) => found.push(s.as_str()),
+            Value::Array(items) => pending.extend(items),
+            Value::Object(map) => pending.extend(map.values()),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {}
+        }
+    }
+    found
 }
 
 /// `text` with every word that looks like an address (`scheme://...` or `file:...`) replaced, so a

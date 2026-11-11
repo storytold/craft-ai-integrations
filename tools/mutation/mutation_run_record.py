@@ -20,7 +20,7 @@ RR = [
     ('start-time-to-the-second', R, 'SecondsFormat::Millis, true', 'SecondsFormat::Secs, true', CL, T, 'recorded_without_its_words'),
     ('key-check-escaped-form-skipped', R, ' || line.contains(&json_escaped(s))', '', CL, T, 'refused_even_when_escaped'),
     ('key-kept-in-messages', R, '.map(|s| (*s, true))', '.filter(|_| false).map(|s| (*s, true))', CL, T, 'without_the_key_the_prompt_or_a_link'),
-    ('prompt-kept-in-messages', R, '.chain(prompts.iter().map(|p| (*p, false)));', '.chain(prompts.iter().filter(|_| false).map(|p| (*p, false)));', CL, T, 'without_the_key_the_prompt_or_a_link'),
+    ('prompt-kept-in-messages', R, '.chain(prompts.iter().map(|p| (*p, false)))', '.chain(prompts.iter().filter(|_| false).map(|p| (*p, false)))', CL, T, 'without_the_key_the_prompt_or_a_link'),
     ('overlaps-not-merged', R, 'Some(last) if start < last.1 => {', 'Some(last) if false => {', CL, T, 'a_key_inside_the_request_text'),
     ('merged-key-reads-as-text', R, '                last.2 |= is_key;\n', '', CL, T, 'a_key_inside_the_request_text'),
     ('links-kept-in-messages', R, 'if word.contains("://") || word.contains("file:") {', 'if false {', CL, T, 'without_the_key_the_prompt_or_a_link'),
@@ -29,4 +29,8 @@ RR = [
     ('spacing-lost', R, 'out.push_str(&piece[word.len()..]);', "out.push(' ');", CL, T, 'without_the_key_the_prompt_or_a_link'),
     ('overlapping-repeats-skipped', R, 'from = at + step;', 'from = at + needle.len();', CL, T, 'repeated_with_overlap'),
     ('usage-dropped', R, 'usage: finished.usage.clone(),', 'usage: None,', CL, T, 'a_job_not_yet_ended'),
+    ('param-values-kept', R, 'prompts.extend(text_values(plan.request.params.values()));', '', CL, T, 'text_parameter_values'),
+    ('nested-param-values-skipped', R, 'Value::Object(map) => pending.extend(map.values()),', 'Value::Object(_) => {}', CL, T, 'text_parameter_values'),
+    ('nested-list-values-skipped', R, 'Value::Array(items) => pending.extend(items),', 'Value::Array(_) => {}', CL, T, 'text_parameter_values'),
+    ('escaped-form-skipped', R, 'let differs = escaped != s;', 'let differs = false;', CL, T, 'json_escaped_form'),
 ]

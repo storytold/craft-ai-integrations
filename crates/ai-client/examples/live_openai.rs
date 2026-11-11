@@ -55,6 +55,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let record_to = take_record_flag(&mut args)?;
     let mode = args.first().map(String::as_str).unwrap_or("probe");
+    // Checked before anything is written: the image would otherwise replace the record.
+    if let (Some(record), Some(image)) = (&record_to, args.get(1)) {
+        if same_file(record, Path::new(image))? {
+            return Err("--record and the image output name the same file".into());
+        }
+    }
 
     // The real store, read only. Its bytes are compared at the end to prove it was not touched.
     let real = SharedStore::at_default_location()?;
@@ -264,7 +270,7 @@ fn finish(
     let untouched = std::fs::read(real.path())? == before;
     let mut leaked = say.seen.borrow().iter().any(|l| l.contains(&say.key));
     for path in written {
-        leaked |= contains(path, say.key.as_bytes());
+        leaked |= contains(path, say.key.as_bytes())?;
     }
     println!("real store untouched: {untouched}");
     println!(
@@ -278,14 +284,29 @@ fn finish(
 }
 
 /// Whether the file at `path`, or any file under it when it is a folder, holds `needle`. The run
-/// record and a saved image are single files, so both kinds are read.
-fn contains(path: &Path, needle: &[u8]) -> bool {
+/// record and a saved image are single files, so both kinds are read. A file or folder that cannot
+/// be read is an error, never "clean": the check must not pass without reading everything.
+fn contains(path: &Path, needle: &[u8]) -> std::io::Result<bool> {
     if !path.is_dir() {
-        return std::fs::read(path)
-            .is_ok_and(|b| !needle.is_empty() && b.windows(needle.len()).any(|w| w == needle));
+        let bytes = std::fs::read(path)?;
+        return Ok(!needle.is_empty() && bytes.windows(needle.len()).any(|w| w == needle));
     }
-    let Ok(read) = std::fs::read_dir(path) else {
-        return false;
-    };
-    read.flatten().any(|e| contains(&e.path(), needle))
+    for entry in std::fs::read_dir(path)? {
+        if contains(&entry?.path(), needle)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `a` and `b` name one file: the same absolute path, or, when both exist, the same file
+/// once links are followed.
+fn same_file(a: &Path, b: &Path) -> std::io::Result<bool> {
+    if std::path::absolute(a)? == std::path::absolute(b)? {
+        return Ok(true);
+    }
+    Ok(match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    })
 }
