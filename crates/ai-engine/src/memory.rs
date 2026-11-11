@@ -74,8 +74,8 @@ pub(crate) enum Outcome {
 /// Lock order: a job holds the slot, then takes this lock. [`Residency::unload`] holds this lock
 /// and only ever *tries* the slot, so the two never wait on each other. A slot it cannot take
 /// means a job holds it, which is how a running model is told apart. A job reads the unload
-/// request under this lock as it leaves, so an unload either finds the slot free or leaves a
-/// request the holder is certain to see.
+/// request and lets go of the slot while it holds this lock, so an unload either finds the slot
+/// free or leaves a request the holder is certain to see: never one left for the next job.
 #[derive(Default)]
 pub(crate) struct Residency(Mutex<State>);
 
@@ -93,23 +93,30 @@ impl Residency {
         self.lock().held = Some((bytes, estimated));
     }
 
-    /// Called by a job before it lets go of the slot, however its turn ended. Empties the slot
-    /// when `discard` is set (the model was left in a bad state) or an unload was asked for
-    /// meanwhile, and returns the model taken out so the caller drops it after unlocking.
+    /// Ends a job's turn, however it went: lets go of the slot, emptying it first when `discard`
+    /// is set (the model was left in a bad state) or an unload was asked for meanwhile. Returns
+    /// the model taken out, for the caller to drop once no lock is held.
+    ///
+    /// The slot is released while this lock is held. An unload therefore never sees a job that
+    /// has left but still holds the slot, which would defer the unload to the next job.
     pub(crate) fn leave(
         &self,
-        slot: &mut Option<Box<dyn LoadedModel>>,
+        mut slot: MutexGuard<'_, Option<Box<dyn LoadedModel>>>,
         discard: bool,
     ) -> Option<Box<dyn LoadedModel>> {
         let mut state = self.lock();
         state.running = false;
         state.last_used = Some(Instant::now());
-        if !(discard || state.unload_requested) {
-            return None;
-        }
-        state.unload_requested = false;
-        state.held = None;
-        slot.take()
+        let taken = if discard || state.unload_requested {
+            state.unload_requested = false;
+            state.held = None;
+            slot.take()
+        } else {
+            None
+        };
+        drop(slot);
+        drop(state);
+        taken
     }
 
     /// Unloads the model in `slot`. With `idle`, only one unused for at least that long; a busy
@@ -238,37 +245,49 @@ mod tests {
     #[test]
     fn an_unload_during_a_run_waits_for_the_run_to_leave() {
         let (r, slot) = loaded();
-        let mut held = slot.lock().unwrap();
+        let held = slot.lock().unwrap();
         r.enter();
         assert!(matches!(r.unload(&slot, None), Outcome::AfterRun));
         assert!(r.info(&model(), "M").is_some(), "still loaded mid-run");
-        assert!(r.leave(&mut held, false).is_some(), "the run let go of it");
-        assert!(held.is_none());
+        assert!(r.leave(held, false).is_some(), "the run let go of it");
+        assert!(slot.lock().unwrap().is_none());
         assert!(r.info(&model(), "M").is_none());
+    }
+
+    /// The moment a job's `leave` returns, its slot is free, so an unload frees the model at
+    /// once rather than leaving a request for the next job.
+    #[test]
+    fn an_unload_just_after_a_job_left_frees_the_model_at_once() {
+        let (r, slot) = loaded();
+        let held = slot.lock().unwrap();
+        r.enter();
+        assert!(r.leave(held, false).is_none());
+        assert!(matches!(r.unload(&slot, None), Outcome::Freed(_)));
+        assert!(!r.lock().unload_requested, "no request left behind");
     }
 
     /// A job that has taken the slot but not yet marked itself running still gets the request.
     #[test]
     fn an_unload_between_taking_the_slot_and_entering_is_not_lost() {
         let (r, slot) = loaded();
-        let mut held = slot.lock().unwrap();
+        let held = slot.lock().unwrap();
         assert!(matches!(r.unload(&slot, None), Outcome::AfterRun));
         r.enter();
-        assert!(r.leave(&mut held, false).is_some());
+        assert!(r.leave(held, false).is_some());
     }
 
     #[test]
     fn idle_unload_skips_busy_and_recent_models_and_frees_rested_ones() {
         let (r, slot) = loaded();
         {
-            let mut held = slot.lock().unwrap();
+            let held = slot.lock().unwrap();
             r.enter();
             assert!(matches!(
                 r.unload(&slot, Some(Duration::ZERO)),
                 Outcome::Untouched
             ));
             assert!(
-                r.leave(&mut held, false).is_none(),
+                r.leave(held, false).is_none(),
                 "an idle sweep leaves no request"
             );
         }
@@ -292,9 +311,9 @@ mod tests {
     #[test]
     fn a_discarded_model_is_emptied_on_leave() {
         let (r, slot) = loaded();
-        let mut held = slot.lock().unwrap();
+        let held = slot.lock().unwrap();
         r.enter();
-        assert!(r.leave(&mut held, true).is_some());
+        assert!(r.leave(held, true).is_some());
         assert!(r.info(&model(), "M").is_none());
     }
 }

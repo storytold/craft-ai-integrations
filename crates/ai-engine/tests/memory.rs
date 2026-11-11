@@ -1,7 +1,7 @@
 //! Models kept in memory, through the real provider: listing, unloading, idle unloading and the
 //! free-memory check before a load.
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use craft_ai_core::{ErrorKind, JobId, JobState, ModelId, Provider};
@@ -45,6 +45,13 @@ fn run(p: &EngineProvider, r: &FakeRunner) -> JobState {
     finish(p, &job)
 }
 
+/// Makes `r` wait inside its run until the returned flag is cleared.
+fn held(r: &mut FakeRunner) -> Arc<AtomicBool> {
+    let hold = Arc::new(AtomicBool::new(true));
+    r.hold = Some(hold.clone());
+    hold
+}
+
 fn until(what: &str, check: impl Fn() -> bool) {
     let end = Instant::now() + Duration::from_secs(10);
     while !check() {
@@ -75,7 +82,7 @@ fn a_model_is_listed_once_loaded_with_the_file_size_as_its_estimate() {
 fn a_model_that_reports_its_memory_is_listed_with_that_figure_while_it_runs() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = FakeRunner::new("candle", "sam3", "image.segment");
-    r.steps = 40;
+    let hold = held(&mut r);
     r.memory = Some(Arc::new(AtomicU64::new(700_000_000)));
     let runs = r.runs.clone();
     let p = provider(vec![(r.clone(), weights(&dir, "m.bin", 3))]);
@@ -85,6 +92,7 @@ fn a_model_that_reports_its_memory_is_listed_with_that_figure_while_it_runs() {
     assert!(loaded[0].running);
     assert_eq!(loaded[0].bytes, 700_000_000);
     assert!(!loaded[0].estimated);
+    hold.store(false, Ordering::SeqCst);
     finish(&p, &job);
 }
 
@@ -146,7 +154,7 @@ fn unloading_one_model_leaves_the_others_loaded() {
 fn a_model_in_use_is_unloaded_when_its_job_finishes() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = FakeRunner::new("candle", "sam3", "image.segment");
-    r.steps = 40;
+    let hold = held(&mut r);
     let (loads, runs) = (r.loads.clone(), r.runs.clone());
     let p = provider(vec![(r.clone(), weights(&dir, "m.bin", 3))]);
     let job = p.submit(&id("sam3"), &r.good_request().unwrap()).unwrap();
@@ -156,11 +164,18 @@ fn a_model_in_use_is_unloaded_when_its_job_finishes() {
     let done = p.unload(None);
     assert!(done.freed.is_empty());
     assert_eq!(done.after_run, vec![id("sam3")]);
+    assert_eq!(p.loaded_models().len(), 1, "still loaded while it runs");
+    hold.store(false, Ordering::SeqCst);
     assert_eq!(finish(&p, &job), JobState::Succeeded, "the run finished");
     until("the model is let go of", || p.loaded_models().is_empty());
 
     run(&p, &r);
     assert_eq!(loads.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        p.loaded_models().len(),
+        1,
+        "the request was met, not carried over"
+    );
 }
 
 #[test]
@@ -180,13 +195,14 @@ fn idle_unload_frees_only_models_rested_long_enough() {
 fn idle_unload_leaves_a_model_in_use_alone() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = FakeRunner::new("candle", "sam3", "image.segment");
-    r.steps = 40;
+    let hold = held(&mut r);
     let runs = r.runs.clone();
     let p = provider(vec![(r.clone(), weights(&dir, "m.bin", 3))]);
     let job = p.submit(&id("sam3"), &r.good_request().unwrap()).unwrap();
     until("the job is running", || runs.load(Ordering::SeqCst) == 1);
 
     assert_eq!(p.unload_idle(Duration::ZERO), Default::default());
+    hold.store(false, Ordering::SeqCst);
     finish(&p, &job);
     assert_eq!(
         p.loaded_models().len(),
@@ -245,4 +261,28 @@ fn a_loaded_model_runs_again_without_a_memory_check() {
         }));
     assert_eq!(run(&p, &r), JobState::Succeeded, "first load: unknown");
     assert_eq!(run(&p, &r), JobState::Succeeded, "already loaded");
+}
+
+/// The reader is the app's code. If it panics, that job fails in words and the next job runs.
+#[test]
+fn a_free_memory_reader_that_panics_fails_the_job_not_the_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = FakeRunner::new("candle", "sam3", "image.segment");
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let reader: FreeMemory = Arc::new({
+        let calls = calls.clone();
+        move || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("the reader failed on purpose");
+            }
+            None
+        }
+    });
+    let p = provider(vec![(r.clone(), weights(&dir, "m.bin", 3))]).with_free_memory(reader);
+    match run(&p, &r) {
+        JobState::Failed { error } => assert_eq!(error.kind, ErrorKind::Internal),
+        other => panic!("expected a failed job, got {other:?}"),
+    }
+    assert!(p.loaded_models().is_empty());
+    assert_eq!(run(&p, &r), JobState::Succeeded, "the next job still runs");
 }

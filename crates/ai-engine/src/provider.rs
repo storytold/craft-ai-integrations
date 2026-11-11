@@ -59,9 +59,8 @@ impl Entry {
         let result = self.turn(&mut slot, request, job, free);
         // Whatever state a model that failed inside was left in, do not reuse it.
         let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal);
-        let let_go = self.residency.leave(&mut slot, discard);
-        drop(slot);
-        drop(let_go);
+        // Dropped here, once the slot and the residency are both released.
+        drop(self.residency.leave(slot, discard));
         result
     }
 
@@ -81,7 +80,8 @@ impl Entry {
         let ctx = job.context();
         if slot.is_none() {
             let needed = guarded(|| Ok(self.runner.memory_needed(&self.weights)))?;
-            memory::check_fits(&self.model.label, needed, free)?;
+            // The reader is the app's code: a panic in it fails this job, not the worker.
+            guarded(|| memory::check_fits(&self.model.label, needed, free))?;
             let weights = self.weights.clone();
             let model = guarded(|| self.runner.load(&weights))?;
             match reported(model.as_ref()) {
