@@ -111,8 +111,10 @@ impl GuardedResolver {
         }
     }
 
-    fn allowed(&self, ip: IpAddr) -> bool {
-        !internal_addr(ip) || (self.allow_loopback && loopback_addr(ip))
+    /// Loopback answers pass only for a link whose own host is loopback (`loopback_host`), so a
+    /// public name whose DNS later answers `127.0.0.1` is still refused.
+    fn allowed(&self, ip: IpAddr, loopback_host: bool) -> bool {
+        !internal_addr(ip) || (self.allow_loopback && loopback_host && loopback_addr(ip))
     }
 }
 
@@ -131,7 +133,11 @@ impl Resolver for GuardedResolver {
         if to_proxy {
             return Ok(addrs);
         }
-        let blocked = addrs.iter().map(|a| a.ip()).find(|ip| !self.allowed(*ip));
+        let loopback_host = uri.host().is_some_and(loopback_host);
+        let blocked = addrs
+            .iter()
+            .map(|a| a.ip())
+            .find(|ip| !self.allowed(*ip, loopback_host));
         match blocked {
             None => Ok(addrs),
             Some(ip) if shared_addr(ip) => Err(ureq::Error::Io(std::io::Error::new(
@@ -142,6 +148,18 @@ impl Resolver for GuardedResolver {
                 std::io::ErrorKind::PermissionDenied,
                 "the link's name points at a private address",
             ))),
+        }
+    }
+}
+
+/// Whether a link's host (as `Uri::host` gives it, IPv6 in brackets) is loopback, as [`is_loopback`] judges a URL.
+fn loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<IpAddr>() {
+        Ok(ip) => loopback_addr(ip),
+        Err(_) => {
+            let name = bare(host).to_ascii_lowercase();
+            name == "localhost" || name.ends_with(".localhost")
         }
     }
 }
@@ -285,6 +303,26 @@ fn internal_v6(ip: Ipv6Addr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_loopback_host_may_connect_to_loopback() {
+        for host in [
+            "localhost",
+            "LOCALHOST.",
+            "app.localhost",
+            "127.0.0.1",
+            "[::1]",
+        ] {
+            assert!(super::loopback_host(host), "{host}");
+        }
+        for host in [
+            "example.com",
+            "localhost.example.com",
+            "10.0.0.1",
+            "[fd00::1]",
+        ] {
+            assert!(!super::loopback_host(host), "{host}");
+        }
+    }
 
     /// A tiny loopback server that answers every request with 200, and acts as a CONNECT proxy
     /// when asked to (it then answers the tunnelled request the same way).
