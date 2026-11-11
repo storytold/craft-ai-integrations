@@ -56,10 +56,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let record_to = take_record_flag(&mut args)?;
     let mode = args.first().map(String::as_str).unwrap_or("probe");
     // Checked before anything is written: the image would otherwise replace the record.
-    if let (Some(record), Some(image)) = (&record_to, args.get(1)) {
-        if same_file(record, Path::new(image))? {
-            return Err("--record and the image output name the same file".into());
-        }
+    if let (Some(record), Some(image)) = (&record_to, args.get(1))
+        && same_file(record, Path::new(image))?
+    {
+        return Err("--record and the image output name the same file".into());
     }
 
     // The real store, read only. Its bytes are compared at the end to prove it was not touched.

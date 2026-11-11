@@ -228,63 +228,79 @@ impl RunRecord {
     }
 }
 
-/// `text` with each secret, each request text and each link replaced by a placeholder. Secrets and
-/// request texts are all found in the original text and overlapping matches are removed together,
-/// so a key inside a prompt cannot break the prompt's match and leave the rest of it behind. A
-/// removed stretch that held a key reads "[key removed]". Links are removed from what remains.
+/// What a removed stretch held, in the order that names a merged stretch: a stretch that held a
+/// key reads "[key removed]" whatever else it covered, then a link, then request text.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Removed {
+    RequestText,
+    Link,
+    Key,
+}
+
+impl Removed {
+    /// The placeholder that replaces the stretch.
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::RequestText => "[request text removed]",
+            Self::Link => "[link removed]",
+            Self::Key => "[key removed]",
+        }
+    }
+}
+
+/// `text` with each secret, each request text and each link replaced by a placeholder. All three
+/// are found in the original text and overlapping matches are removed together, so a key inside a
+/// prompt cannot break the prompt's match, and request text inside a link cannot split the link
+/// and leave the rest of its address (and any signed token) behind.
 fn scrub(text: &str, secrets: &[&str], prompts: &[&str]) -> String {
-    // (start, end, held a key), byte offsets into `text` on character boundaries.
-    let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+    // (start, end, what it held), byte offsets into `text` on character boundaries.
+    let mut spans: Vec<(usize, usize, Removed)> = link_spans(text);
     // Each text as given and, when JSON would write it differently, as JSON escapes it: an adapter
     // that quotes a JSON body back in its message shows a backslash and `n` for a line break.
-    let needles: Vec<(String, bool)> = secrets
+    let needles: Vec<(String, Removed)> = secrets
         .iter()
-        .map(|s| (*s, true))
-        .chain(prompts.iter().map(|p| (*p, false)))
-        .flat_map(|(s, is_key)| {
+        .map(|s| (*s, Removed::Key))
+        .chain(prompts.iter().map(|p| (*p, Removed::RequestText)))
+        .flat_map(|(s, kind)| {
             let escaped = json_escaped(s);
             let differs = escaped != s;
-            [(s.to_owned(), is_key)]
+            [(s.to_owned(), kind)]
                 .into_iter()
-                .chain(differs.then_some((escaped, is_key)))
+                .chain(differs.then_some((escaped, kind)))
         })
         .collect();
-    for (needle, is_key) in needles.iter().filter(|(n, _)| !n.is_empty()) {
-        let (needle, is_key) = (needle.as_str(), *is_key);
+    for (needle, kind) in needles.iter().filter(|(n, _)| !n.is_empty()) {
+        let (needle, kind) = (needle.as_str(), *kind);
         // Every occurrence, overlapping ones included (`match_indices` skips those): the next
         // search starts one character after the last match began.
         let step = needle.chars().next().map_or(1, char::len_utf8);
         let mut from = 0;
         while let Some(found) = text.get(from..).and_then(|rest| rest.find(needle)) {
             let at = from + found;
-            spans.push((at, at + needle.len(), is_key));
+            spans.push((at, at + needle.len(), kind));
             from = at + step;
         }
     }
     spans.sort_unstable();
-    let mut merged: Vec<(usize, usize, bool)> = Vec::new();
-    for (start, end, is_key) in spans {
+    let mut merged: Vec<(usize, usize, Removed)> = Vec::new();
+    for (start, end, kind) in spans {
         match merged.last_mut() {
             Some(last) if start < last.1 => {
                 last.1 = last.1.max(end);
-                last.2 |= is_key;
+                last.2 = last.2.max(kind);
             }
-            _ => merged.push((start, end, is_key)),
+            _ => merged.push((start, end, kind)),
         }
     }
     let mut out = String::with_capacity(text.len());
     let mut from = 0;
-    for (start, end, is_key) in merged {
+    for (start, end, kind) in merged {
         out.push_str(text.get(from..start).unwrap_or_default());
-        out.push_str(if is_key {
-            "[key removed]"
-        } else {
-            "[request text removed]"
-        });
+        out.push_str(kind.placeholder());
         from = end;
     }
     out.push_str(text.get(from..).unwrap_or_default());
-    without_links(&out)
+    out
 }
 
 /// Every text value inside `values`, however deeply nested in arrays and objects. Walked with a
@@ -303,20 +319,20 @@ fn text_values<'a>(values: impl Iterator<Item = &'a Value>) -> Vec<&'a str> {
     found
 }
 
-/// `text` with every word that looks like an address (`scheme://...` or `file:...`) replaced, so a
-/// signed result link in an adapter's message is not kept. Spacing is left as it was.
-fn without_links(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+/// Where each word that looks like an address (`scheme://...` or `file:...`) sits in `text`, so a
+/// signed result link in an adapter's message is not kept. Words are split on whitespace, and the
+/// whitespace itself is never part of a span, so spacing is left as it was.
+fn link_spans(text: &str) -> Vec<(usize, usize, Removed)> {
+    let mut spans = Vec::new();
+    let mut at = 0;
     for piece in text.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
         if word.contains("://") || word.contains("file:") {
-            out.push_str("[link removed]");
-        } else {
-            out.push_str(word);
+            spans.push((at, at + word.len(), Removed::Link));
         }
-        out.push_str(&piece[word.len()..]);
+        at += piece.len();
     }
-    out
+    spans
 }
 
 /// `secret` as JSON writes it inside a string, so a secret holding a quote, backslash or control

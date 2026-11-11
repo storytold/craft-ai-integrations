@@ -445,3 +445,19 @@ fn request_text_and_keys_are_removed_in_their_json_escaped_form() {
         r#"sent {"input":"[request text removed]","key":"[key removed]"}"#
     );
 }
+
+/// A link that holds a parameter's text is removed whole, in an error and in a notice: removing
+/// the text first would split the address and keep the rest of it, signed token included.
+#[test]
+fn a_link_holding_request_text_is_removed_whole() {
+    let request = Request::new(role().capability)
+        .with_input(InputRole::Prompt, Payload::text(PROMPT))
+        .with_param("quality", json!("low"));
+    let rec = failed_with(
+        request,
+        "got https://cdn.example.com/low/image.png?token=signed-token at low quality",
+    );
+    let want = "got [link removed] at [request text removed] quality";
+    assert_eq!(rec.error.unwrap().message, want);
+    assert_eq!(rec.notices, vec![want.to_owned()]);
+}
