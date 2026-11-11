@@ -53,6 +53,11 @@ pub struct FakeRunner {
     /// While set, a run waits after its first step (still answering Cancel), so a test can look
     /// at a job that is certainly running. Clear it to let the run finish.
     pub hold: Option<Arc<AtomicBool>>,
+    /// While set, a load waits before reading anything, so a test can act on a job that has
+    /// not loaded its model yet. Clear it to let the load go on.
+    pub load_hold: Option<Arc<AtomicBool>>,
+    /// How many loads have started (counted before `load_hold` is waited on).
+    pub load_started: Arc<AtomicUsize>,
 }
 
 impl FakeRunner {
@@ -70,6 +75,8 @@ impl FakeRunner {
             deaf: false,
             memory: None,
             hold: None,
+            load_hold: None,
+            load_started: Arc::default(),
         }
     }
 
@@ -116,6 +123,14 @@ impl ModelRunner for FakeRunner {
     fn load(&self, weights: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
         if !weights.is_file() {
             return Err(AiError::unsupported("no such weights"));
+        }
+        self.load_started.fetch_add(1, Ordering::SeqCst);
+        while self
+            .load_hold
+            .as_ref()
+            .is_some_and(|h| h.load(Ordering::SeqCst))
+        {
+            std::thread::sleep(Duration::from_millis(1));
         }
         self.loads.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(self.clone()))

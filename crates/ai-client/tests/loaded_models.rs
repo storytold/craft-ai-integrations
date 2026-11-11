@@ -311,3 +311,56 @@ fn clients_from_one_factory_share_one_loaded_copy() {
     assert_eq!(ids(&one).len(), 1);
     assert_eq!(ids(&one), ids(&two));
 }
+
+/// The connection changes while the old job is still loading its model and another job waits
+/// behind it. Both old jobs finish and let go of what they loaded, so only the new model is left
+/// and it can be freed.
+#[test]
+fn a_job_loading_when_its_connection_changes_leaves_nothing_behind() {
+    let w = World::new(4);
+    let mut r = runner();
+    let gate = Arc::new(AtomicBool::new(true));
+    r.load_hold = Some(gate.clone());
+    let (started, loads) = (r.load_started.clone(), r.loads.clone());
+    let app = w.client(&r);
+    let first = start(&app);
+    until("the first job is loading", || {
+        started.load(Ordering::SeqCst) == 1
+    });
+    assert!(app.loaded_models().is_empty(), "nothing is loaded yet");
+    // Waits for the slot behind the first job, so it loads only after the swap.
+    let queued = start(&app);
+
+    let file = w.dir.path().join("sam3-new.safetensors");
+    std::fs::write(&file, b"new").unwrap();
+    let desk = ToolDesk::new(w.bare("launcher"), w.shared.clone(), None);
+    desk.enable_native_with(&select_subject(), "candle", &file)
+        .unwrap();
+    let second = start(&app);
+    until("the second job is loading", || {
+        started.load(Ordering::SeqCst) == 2
+    });
+
+    gate.store(false, Ordering::SeqCst);
+    for job in [first, queued, second] {
+        let done = job
+            .wait(Duration::from_millis(2), Duration::from_secs(10))
+            .unwrap();
+        assert_eq!(done.state, JobState::Succeeded);
+    }
+    until("the old job's model is let go of", || {
+        app.loaded_models().len() == 1
+    });
+    assert_eq!(
+        app.loaded_models()[0].model.bytes,
+        3,
+        "only the new model remains"
+    );
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        3,
+        "the queued job loaded the old model again"
+    );
+    assert_eq!(app.unload_all_models().freed.len(), 1);
+    assert!(app.loaded_models().is_empty());
+}

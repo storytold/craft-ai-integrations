@@ -167,17 +167,18 @@ impl Kept {
                 provider: provider.clone(),
             },
         );
-        drop(built);
         if let Some(old) = replaced {
             // Jobs already submitted to the old provider still run. Retired, it lets go of every
             // model as its job finishes, and it stays listed until it holds nothing and has no
-            // job left that could load one, so the memory is never out of sight.
+            // job left that could load one, so the memory is never out of sight. It moves to
+            // the retiring list before the cache lock is released, so a listing never misses it.
             old.provider.retire();
             self.retiring
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((id, old.label, old.provider));
         }
+        drop(built);
         Ok(provider)
     }
 
