@@ -162,18 +162,9 @@ fn an_interrupted_download_resumes_from_its_part_file() {
     assert_eq!(std::fs::read(path).unwrap(), data);
     let requests = server.recorded();
     assert_eq!(requests.len(), 1);
-    #[cfg(unix)]
     assert_eq!(
         requests[0].header("range"),
         Some(format!("bytes={half}-").as_str())
-    );
-    // Off Unix the link count cannot be read, so a part from an earlier run is cleared and the
-    // download starts again instead of being resumed.
-    #[cfg(not(unix))]
-    assert_eq!(
-        requests[0].header("range"),
-        None,
-        "a part from an earlier run is not resumed"
     );
 }
 

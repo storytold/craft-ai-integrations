@@ -86,6 +86,10 @@ fn open_part(part: &Path, append: bool) -> std::io::Result<std::fs::File> {
         options.append(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+        // FILE_FLAG_OPEN_REPARSE_POINT: a link at the name is opened as itself (and then refused
+        // below), not followed.
+        #[cfg(windows)]
+        std::os::windows::fs::OpenOptionsExt::custom_flags(&mut options, 0x0020_0000);
     } else {
         match std::fs::remove_file(part) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
@@ -97,8 +101,8 @@ fn open_part(part: &Path, append: bool) -> std::io::Result<std::fs::File> {
     let meta = file.metadata()?;
     #[cfg(unix)]
     let single = std::os::unix::fs::MetadataExt::nlink(&meta) == 1;
-    // The link count cannot be read here, so a part from an earlier run is never resumed (see
-    // `resumable`) and this handle is always the one this run created exclusively.
+    // The link count of a file is not readable off Unix without a new dependency, so a hard link
+    // to a part file is the one case not caught there (see `resumable`).
     #[cfg(not(unix))]
     let single = true;
     if !meta.is_file() || !single {
@@ -109,9 +113,9 @@ fn open_part(part: &Path, append: bool) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-/// Whether a part file may be resumed: a plain file with one name. The link count is only
-/// readable on Unix, so elsewhere a part from an earlier run is cleared and downloaded afresh
-/// rather than appended to a file a hard link may join it to.
+/// Whether a part file may be resumed: a plain file (not a link), and on Unix one with a single
+/// name. The link count is not readable elsewhere without a new dependency, so there a hard link
+/// joined to the part file is not detected; links of the other kind are.
 fn resumable(meta: &std::fs::Metadata) -> bool {
     if !meta.file_type().is_file() {
         return false;
@@ -122,7 +126,7 @@ fn resumable(meta: &std::fs::Metadata) -> bool {
     }
     #[cfg(not(unix))]
     {
-        false
+        true
     }
 }
 
