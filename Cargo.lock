@@ -2242,7 +2242,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "ureq 3.5.0",
+ "ureq 3.5.1",
 ]
 
 [[package]]
