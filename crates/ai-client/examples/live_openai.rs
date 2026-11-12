@@ -26,6 +26,9 @@
 //! use and goes only into the adapter. Everything printed passes through `Say`, which replaces the
 //! key if it ever appears, and a leak check at the end reads back every file this run wrote.
 
+#[path = "live_openai/output_paths.rs"]
+mod output_paths;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,15 +68,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let record_to = take_flag(&mut args, "--record")?.map(PathBuf::from);
     let chosen = take_flag(&mut args, "--connection")?;
     let mode = args.first().map(String::as_str).unwrap_or("probe");
-    // Checked before anything is written: the image would otherwise replace the record.
-    if let (Some(record), Some(image)) = (&record_to, args.get(1))
-        && same_file(record, Path::new(image))?
-    {
-        return Err("--record and the image output name the same file".into());
-    }
-
     // The real store, read only. Its bytes are compared at the end to prove it was not touched.
     let real = SharedStore::at_default_location()?;
+    output_paths::validate(
+        real.path(),
+        record_to.as_deref(),
+        args.get(1).map(Path::new),
+    )?;
     let before = std::fs::read(real.path())?;
     let store = real.load()?;
     let (service, name) = if mode == "omni" {
@@ -333,16 +334,4 @@ fn contains(path: &Path, needle: &[u8]) -> std::io::Result<bool> {
         }
     }
     Ok(false)
-}
-
-/// Whether `a` and `b` name one file: the same absolute path, or, when both exist, the same file
-/// once links are followed.
-fn same_file(a: &Path, b: &Path) -> std::io::Result<bool> {
-    if std::path::absolute(a)? == std::path::absolute(b)? {
-        return Ok(true);
-    }
-    Ok(match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    })
 }

@@ -45,6 +45,9 @@ serde_json = { workspace = true }
 sha2 = "0.11"
 
 [dev-dependencies]
+# The live example checks existing output aliases, including Windows hardlinks, without unsafe.
+# same-file 1.0.6 is already locked through walkdir; use its provided MIT licence.
+same-file = "=1.0.6"
 serde_json.workspace = true
 tempfile = "3"
 png = "0.18"

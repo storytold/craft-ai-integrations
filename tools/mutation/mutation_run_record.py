@@ -7,8 +7,16 @@ Format: (name, file, old, new, package, test target, test filter).
 R = 'crates/ai-client/src/run_record.rs'
 CL = 'craft-ai-client'
 T = 'run_record'
+P = 'crates/ai-client/examples/live_openai/output_paths.rs'
+PT = 'live_output_paths'
 
 RR = [
+    # Run-record and image destinations cannot corrupt the real shared store, even through aliases.
+    ('record-can-name-store', P, '&& same_file(record, store)?', '&& false && same_file(record, store)?', CL, PT, 'a_record_cannot_append'),
+    ('image-can-name-store', P, '&& same_file(image, store)?', '&& false && same_file(image, store)?', CL, PT, 'an_image_cannot_replace'),
+    ('hardlink-identity-ignored', P, 'Ok(matches!((a, b), (Some(a), Some(b)) if a == b))', 'Ok(false)', CL, PT, 'a_record_hardlink_to_the_shared_store'),
+    ('record-image-alias-allowed', P, '&& same_file(record, image)?', '&& false && same_file(record, image)?', CL, PT, 'record_and_image_hardlinks'),
+    ('identity-error-treated-as-different', P, 'Err(error) => Err(error),', 'Err(_) => Ok(None),', CL, PT, 'an_unreadable_output_identity'),
     ('key-check-off', R, '.any(|s| !s.is_empty() && (line.contains(s) || line.contains(&json_escaped(s))))', '.any(|_: &&str| false)', CL, T, 'refused_even_when_escaped'),
     ('empty-secret-refuses-everything', R, '!s.is_empty() && (line.contains(s)', '(line.contains(s)', CL, T, 'refused_even_when_escaped'),
     ('link-address-kept', R, 'media_type: h.media_type.as_str().to_owned(),\n                size_bytes', 'media_type: h.uri.clone(),\n                size_bytes', CL, T, 'never_a_link'),
