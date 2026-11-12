@@ -269,3 +269,25 @@ fn a_queue_spec_makes_room_before_the_billable_call() {
     );
     assert_eq!(server.count(), before, "the paid submit was never sent");
 }
+
+/// `n` tiny objects, comma-separated: about 7 bytes each on the wire, about 800 once parsed
+/// as a plain `serde_json::Value`.
+fn tiny_objects(n: usize) -> String {
+    vec![r#"{"":0}"#; n].join(",")
+}
+
+/// A reply's cost once parsed is bounded, not only its bytes: about 1 MiB of tiny objects (some
+/// 120 MiB as a plain `Value`) is refused.
+#[test]
+fn a_reply_of_tiny_objects_is_refused() {
+    let body = format!(
+        r#"{{"data":[{{"b64_json":"{}"}}],"extra":[{}]}}"#,
+        b64(&png_bytes()),
+        tiny_objects(150_000)
+    );
+    let server = Server::start(move |_| Reply::Json(200, body.clone()));
+    let p = direct(&server, |_| {});
+    let id = p.submit(&model(), &image_request("x")).unwrap();
+    let message = failure(&p, &id);
+    assert!(message.contains("too large"), "{message}");
+}

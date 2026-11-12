@@ -287,7 +287,7 @@ P4 = [
     ('input-limit-not-passed-on', CF_PROV, 'crate::input::read_image(&input.payload, self.max_upload_bytes)', 'crate::input::read_image(&input.payload, crate::input::DEFAULT_MAX_UPLOAD_BYTES)', CF, 'media_checks', 'over_the_limit'),
     ('input-web-address-read', CF_IN, 'if url.scheme() != "file" {', 'if false {', CF, 'media_checks', 'only_plain_local'),
     ('input-other-machine-read', CF_IN, 'if !matches!(url.host_str(), None | Some("" | "localhost")) {', 'if false {', CF, 'media_checks', 'only_plain_local'),
-    ('input-folder-read', CF_IN, 'if !meta.is_file() {', 'if false {', CF, 'media_checks', 'only_plain_local'),
+    ('input-folder-read', CF_IN, 'if !file.metadata()?.is_file() {', 'if false {', CF, 'media_checks', 'only_plain_local'),
     ('input-file-size-looked-at-late', CF_IN, 'if meta.len() > max {', 'if false {', CF, 'lib', 'a_file_over_the_limit'),
     ('input-file-read-unbounded', CF_IN, 'reader.take(max.saturating_add(1))', 'reader.take(u64::MAX)', CF, 'lib', 'a_reader_is_read_no_further'),
     ('input-sent-before-all-checked', CF_PROV, UPLOAD_ORDER_OLD, UPLOAD_ORDER_NEW, CF, 'media_checks', 'never_uploaded'),
@@ -591,6 +591,7 @@ from mutation_first_run import FR  # noqa: E402
 from mutation_gemini import GI  # noqa: E402
 from mutation_keys import KF  # noqa: E402
 from mutation_engine_memory import CM, MM  # noqa: E402
+from mutation_reply_parse import RP  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -652,7 +653,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM}
+GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM, 'rp': RP}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

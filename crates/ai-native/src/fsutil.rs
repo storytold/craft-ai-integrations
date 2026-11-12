@@ -6,6 +6,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::owner_only;
+
 /// How long to wait for another process to finish writing before giving up.
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -37,13 +39,14 @@ fn file_name_or_default(path: &Path) -> String {
 
 fn ensure_parent(path: &Path) -> io::Result<()> {
     match path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        Some(dir) => fs::create_dir_all(dir),
+        Some(dir) => owner_only::create_dir_all(dir),
         None => Ok(()),
     }
 }
 
 /// Writes `bytes` to `path` so a reader sees the old file or the new one, never a mix. The temp
-/// file is private to the user on Unix and is flushed before the rename.
+/// file is new, private to the user (mode 0600 on Unix, an owner-only access list on Windows)
+/// and flushed before the rename.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     ensure_parent(path)?;
     let name = file_name_or_default(path);
@@ -56,14 +59,15 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn write_tmp(tmp: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(tmp)?;
+    let mut file = match owner_only::create_file(tmp) {
+        // A crash can leave a temp file under this process id. It is removed, never reused: a file
+        // someone else made first would keep their ownership and so their access.
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            fs::remove_file(tmp)?;
+            owner_only::create_file(tmp)?
+        }
+        other => other?,
+    };
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -156,5 +160,24 @@ mod tests {
         .unwrap();
         assert!(blocked);
         assert!(with_lock(&p, || Ok(true)).unwrap());
+    }
+
+    /// A readable temp file left at this process's temp name is replaced, not written through, so
+    /// its loose mode never reaches the saved file.
+    #[cfg(unix)]
+    #[test]
+    fn a_leftover_temp_file_does_not_loosen_the_saved_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.enc.json");
+        let tmp = dir
+            .path()
+            .join(format!(".secrets.enc.json.tmp-{}", std::process::id()));
+        fs::write(&tmp, b"stale").unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644)).unwrap();
+        atomic_write(&p, b"new").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"new");
+        let mode = fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }
