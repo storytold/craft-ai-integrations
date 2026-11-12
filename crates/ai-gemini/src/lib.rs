@@ -32,6 +32,7 @@ use craft_ai_core::{
     ModelInfo, Output, Payload, Provider, Request, SecretString, capability::CapabilityId,
     endpoint::Endpoint, model::CapabilitySpec, payload::Limits,
 };
+use craft_ai_http::json::ReplyError;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -50,6 +51,11 @@ pub const DEFAULT_MODEL: &str = "gemini-nano-banana-2.1";
 
 /// The largest answer read: a 4K picture in base64 inside JSON fits easily.
 const MAX_REPLY: u64 = 48 * 1024 * 1024;
+/// The estimated memory an answer may cost once parsed ([`craft_ai_http::json::parse`]). A
+/// picture's base64 costs about its length, so this leaves room above [`MAX_REPLY`] for the
+/// answer's structure; an answer of many tiny objects, which would cost about a hundred times
+/// its size, is refused instead.
+const MAX_REPLY_PARSED: usize = 64 * 1024 * 1024;
 /// The most of an error answer read, for its message.
 const MAX_ERROR_REPLY: u64 = 64 * 1024;
 /// Requests in flight to Google at once, cancelled ones included (see [`Permit`]), and jobs
@@ -280,8 +286,10 @@ fn call(
     }
     let bytes = read_bounded(response.into_body(), MAX_REPLY)?
         .ok_or_else(|| AiError::new(ErrorKind::Provider, "Gemini reply is too large"))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| AiError::new(ErrorKind::Provider, "Gemini returned invalid JSON"))
+    craft_ai_http::json::parse(&bytes, MAX_REPLY_PARSED).map_err(|e| match e {
+        ReplyError::TooLarge => AiError::new(ErrorKind::Provider, "Gemini reply is too large"),
+        ReplyError::NotJson => AiError::new(ErrorKind::Provider, "Gemini returned invalid JSON"),
+    })
 }
 
 /// True while the job is known and not yet ended (a cancel ends it).

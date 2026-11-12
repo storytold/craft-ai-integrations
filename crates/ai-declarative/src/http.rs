@@ -6,11 +6,17 @@ use std::time::Duration;
 
 use craft_ai_core::spec::{Method, SpecAuth};
 use craft_ai_core::{AiError, ErrorKind, SecretString};
+use craft_ai_http::json::ReplyError;
 use serde_json::Value;
 use ureq::{Body, http::Response};
 
 /// Largest reply read, in bytes.
 pub(crate) const MAX_REPLY: usize = 32 * 1024 * 1024;
+/// The estimated memory a reply may cost once parsed ([`craft_ai_http::json::parse`]). A base64
+/// picture costs about its length, so this leaves room above [`MAX_REPLY`] for the reply's
+/// structure; a reply of many tiny objects, which would cost about a hundred times its size, is
+/// refused instead.
+pub(crate) const MAX_REPLY_PARSED: usize = 64 * 1024 * 1024;
 
 pub(crate) struct Http {
     base: String,
@@ -146,11 +152,14 @@ impl Http {
         if bytes.iter().all(u8::is_ascii_whitespace) {
             return Ok(Value::Null);
         }
-        serde_json::from_slice(&bytes).map_err(|_| {
-            AiError::new(
+        craft_ai_http::json::parse(&bytes, MAX_REPLY_PARSED).map_err(|e| match e {
+            ReplyError::TooLarge => {
+                AiError::new(ErrorKind::Provider, format!("{label} reply is too large"))
+            }
+            ReplyError::NotJson => AiError::new(
                 ErrorKind::Provider,
                 format!("{label} returned invalid JSON"),
-            )
+            ),
         })
     }
 }

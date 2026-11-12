@@ -3,7 +3,8 @@
 //! Everything here is pure (no I/O): jobs.rs owns the connection and feeds lines in. The reply
 //! is bounded as it grows. No line longer than [`MAX_SSE_LINE`] is accepted, and the total
 //! kept - every text delta plus every tool call's name and arguments - may not pass
-//! [`MAX_STREAM_TOTAL`], the same size as the whole-reply cap in `http::MAX_BODY`. A server
+//! [`MAX_STREAM_TOTAL`], the same size as the whole chat reply cap in `http::CHAT_REPLY`, and no
+//! line may cost more than [`MAX_SSE_LINE_PARSED`] once parsed. A server
 //! that streams past either is refused rather than allowed to grow the reply until the
 //! request timeout.
 
@@ -14,11 +15,14 @@ use crate::chat::{Completion, MAX_TOOL_CALLS, error_text, usage_from};
 
 /// Largest single SSE line accepted, in bytes.
 pub(crate) const MAX_SSE_LINE: usize = 1024 * 1024;
+/// The estimated memory one line may cost once parsed. A line of text costs about its length;
+/// a line of many tiny objects would cost a hundred times it and is refused.
+pub(crate) const MAX_SSE_LINE_PARSED: usize = 4 * MAX_SSE_LINE;
 /// Largest total a stream may keep: every text delta plus every tool call's name and
-/// arguments. The same size as the whole-reply cap (`http::MAX_BODY`), so a stream can never
-/// hold more than a whole reply would; a server that streams past it is refused rather than
-/// allowed to grow the reply until the request timeout.
-pub(crate) const MAX_STREAM_TOTAL: usize = crate::http::MAX_BODY;
+/// arguments. The same size as the whole chat reply cap (`http::CHAT_REPLY`), so a stream can
+/// never hold more than a whole reply would; a server that streams past it is refused rather
+/// than allowed to grow the reply until the request timeout.
+pub(crate) const MAX_STREAM_TOTAL: usize = crate::http::CHAT_REPLY.bytes;
 
 /// Reads a server-sent-events stream one line at a time.
 #[derive(Debug)]
@@ -79,9 +83,11 @@ impl SseState {
             self.done = true;
             return Ok(None);
         }
-        let v: Value = serde_json::from_str(data).map_err(|_| {
-            AiError::new(ErrorKind::Provider, "the stream held an unreadable event")
-        })?;
+        let v = crate::http::parse_json(
+            data.as_bytes(),
+            MAX_SSE_LINE_PARSED,
+            "the stream held an unreadable event",
+        )?;
         if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
             return Err(AiError::new(ErrorKind::Provider, error_text(e)));
         }
@@ -212,9 +218,9 @@ mod tests {
     #[test]
     fn a_stream_past_its_total_is_refused_not_grown() {
         // The stream may never keep more than a whole reply could hold: the same cap as
-        // http::MAX_BODY. Without it a hostile server streams deltas for as long as the
+        // http::CHAT_REPLY. Without it a hostile server streams deltas for as long as the
         // request timeout, and the reply grows without end.
-        assert_eq!(SseState::default().cap, crate::http::MAX_BODY);
+        assert_eq!(SseState::default().cap, crate::http::CHAT_REPLY.bytes);
         let mut s = SseState::default().with_cap(10);
         s.line(r#"data: {"choices":[{"delta":{"content":"0123456789"}}]}"#)
             .unwrap();
