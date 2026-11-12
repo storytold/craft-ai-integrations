@@ -5,11 +5,13 @@ Format: (name, file, old, new, package, test target, test filter).
 """
 A = 'crates/ai-mcp/src/apps/'
 P = 'craft-ai-mcp'
+L = 'crates/ai-agents/src/lib.rs'
+Q = 'craft-ai-agents'
 
 MG = [
-    ('relative-command-started', A + 'registry.rs', 'if !raw.command.is_absolute() {', 'if false {', P, 'lib', 'bad_rows_are_left_out'),
-    ('any-app-id-accepted', A + 'registry.rs', 'if !valid_id(&raw.id) {', 'if false {', P, 'lib', 'bad_rows_are_left_out'),
-    ('app-list-not-capped', A + 'registry.rs', 'if apps.len() >= MAX_APPS {', 'if false {', P, 'lib', 'the_list_is_capped'),
+    ('relative-command-started', L, 'if !raw.command.is_absolute() {', 'if false {', Q, 'lib', 'bad_rows_are_left_out'),
+    ('any-app-id-accepted', L, 'if !valid_id(&raw.id) {', 'if false {', Q, 'lib', 'bad_rows_are_left_out'),
+    ('app-list-not-capped', L, 'if apps.len() >= MAX_APPS {', 'if false {', Q, 'lib', 'the_list_is_capped'),
     ('app-line-not-capped', A + 'child.rs', 'if line.len().saturating_add(chunk.len()) > cap {', 'if false {', P, 'lib', 'capped_line_reader'),
     ('timed-out-connection-kept', A + 'child.rs', 'timeout.as_secs()\n                    );\n                    self.closed = Some(why.clone());', 'timeout.as_secs()\n                    );', P, 'lib', 'a_silent_app_times_out'),
     ('dead-connection-reused', A + 'mod.rs', 'if slot.conn.as_ref().is_none_or(|c| c.closed().is_some()) {', 'if slot.conn.is_none() {', P, 'lib', 'a_dead_connection_is_replaced'),
@@ -19,4 +21,7 @@ MG = [
     ('changed-tools-kept', A + 'mod.rs', 'let changed = slot.conn.as_mut().is_some_and(Conn::take_tools_changed);', 'let changed = slot.conn.as_mut().is_some_and(Conn::take_tools_changed) && false;', P, 'lib', 'read_again_after_the_app_says'),
     ('failed-write-not-reported', A + 'child.rs', '                    let _ = write_failed\n                        .send(Incoming::Closed(format!("writing to the app failed: {e}")));\n', '                    let _ = &write_failed;\n', P, 'lib', 'a_failed_write_ends_the_waiting_request'),
     ('stopped-app-keeps-cached-tools', A + 'mod.rs', 'if changed || slot.conn.as_ref().is_some_and(|c| c.closed().is_some()) {', 'if changed {', P, 'lib', 'an_app_that_stopped_has_its_tools_read_again'),
+    ('switch-not-asked', A + 'mod.rs', '        if (self.switch)() {', '        if true {', P, 'lib', 'the_launchers_switch_is_asked'),
+    ('any-app-allowed', L, 'apps.iter().any(|a| a.id == app_id)', '!apps.is_empty()', Q, 'lib', 'allowed_only_while_the_list_names_it'),
+    ('invalid-id-dispatched', 'crates/ai-mcp/src/mcp.rs', '|| id.as_ref().is_some_and(|v| !valid_id(v))', '|| false', P, 'lib', 'malformed_envelopes_are_invalid_requests'),
 ]

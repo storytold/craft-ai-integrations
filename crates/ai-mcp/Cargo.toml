@@ -13,6 +13,7 @@ name = "craft-ai-mcp"
 path = "src/main.rs"
 
 [dependencies]
+craft-ai-agents.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs = "7"

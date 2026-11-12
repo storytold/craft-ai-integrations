@@ -46,16 +46,21 @@ local configuration folder (`%LOCALAPPDATA%\ArtCraft\mcp` on Windows, beside the
 command or a repeated id are left out, and `craft_list_apps` says why. Without the file the
 gateway offers no app: agents are turned off.
 
-The launcher gives an app other arguments where its plain `mcp` is not what agents should get, and
-only when that install's `mcp --help` names them: PhotoCraft `["mcp", "--live"]` (its open
-window), VectorCraft `["mcp", "--headless"]` (off a control port with no token yet).
+The format is read and written in one place, the crate `craft-ai-agents` (`crates/ai-agents`):
+the launcher writes the list with it, the gateway reads it with it, and each app asks it whether
+the person lets agents use that app (`craft_ai_agents::allowed("photocraft")`). Nobody else parses
+the file.
+
+Every app is started as plain `<app>-cli mcp`. The suite's rule for that command: it works in the
+app's open window when the app is running and accepts agents, and otherwise in a session without
+a window; `--headless` forces the latter. So the launcher needs no per-app arguments.
 
 The file is also the person's consent, for the apps as well as the gateway: the launcher writes it
 only while Settings › AI agents › *Let AI agents use Craft apps* is on, and removes it when that is
 turned off. The gateway asks for it before every tool call: while it is gone, every tool answers
-that agents are turned off, and the app servers the gateway started are stopped. An app that reaches its open window over a control port accepts agents while the file
-names it and the `AI-MCP` flag is on, without a switch of its own (PhotoCraft since
-storytold/photocraft#13396). The file holds no port and no token: each app's CLI finds its own
+that agents are turned off, and the app servers the gateway started are stopped. It is the only
+switch: an app accepts agents into its open window while the file names it (and the `AI-MCP` flag
+is on), and has no switch of its own (PhotoCraft since storytold/photocraft#13396). The file holds no port and no token: each app's CLI finds its own
 app's connection, so tokens never pass through the gateway or the client's configuration.
 
 ## Running it
@@ -86,7 +91,7 @@ storytold/craft-launcher#1432.
 
 | Module | What it does |
 |---|---|
-| `apps/registry.rs` | Which apps: the launcher's `apps.json`; whether agents are still turned on. |
+| `apps/registry.rs` | Which apps: the launcher's `apps.json` through `craft-ai-agents`; whether agents are still turned on. |
 | `apps/child.rs` | An MCP client for one app's `<app>-cli mcp`, with deadlines, queues and line caps. |
 | `apps/mod.rs` | The hub: starts an app on first use, keeps its tool list. |
 | `apps/search.rs` | Ranking an app's tools against a few words. |
