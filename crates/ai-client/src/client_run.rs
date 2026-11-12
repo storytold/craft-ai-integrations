@@ -141,7 +141,8 @@ impl AiClient {
         }
     }
 
-    /// Reads the key and builds the adapter.
+    /// Checks the executable route and workflow snapshot before reading the key, then builds
+    /// from that checked snapshot or the app's registered adapter.
     fn prepare(&self, plan: &Plan) -> Result<Arc<dyn Provider>, AiError> {
         // Without an adapter there is nothing to give the key to, so do not fetch it.
         if !self.factory.knows(&plan.connection.provider) {
@@ -150,15 +151,27 @@ impl AiClient {
         // A plan can be made by another client of this app whose build says otherwise, so this
         // build's own check runs again before the key is read.
         self.refuse_unsupported_route(&plan.connection, &plan.model, &plan.request)?;
-        // The agreement named the workflow's steps as planned; a workflow changed since then
-        // could add a step nobody agreed to.
-        if self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps {
-            return Err(AiError::invalid(
-                "the workflow changed after this job was planned; start it again",
-            ));
+        // Freeze the built-in workflow before the key is read: another import during that
+        // lookup must not replace the graph whose steps were checked for this job.
+        let snapshot = if is_comfyui(&plan.connection) {
+            self.factory
+                .prepare_comfyui_agreed(&plan.model, &plan.disclosure.unknown_steps)
+                .transpose()?
+        } else {
+            None
+        };
+        // App-owned adapters keep their original build path and the step comparison used by
+        // plans. Their own builder is never replaced by the built-in snapshot provider.
+        if snapshot.is_none()
+            && self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps
+        {
+            return Err(AiError::invalid(crate::factory::WORKFLOW_CHANGED));
         }
         let secret = secret_for(&*self.secrets, &plan.connection)?;
-        self.factory.build(&plan.connection, secret)
+        match snapshot {
+            Some(snapshot) => snapshot.build(&self.factory, &plan.connection),
+            None => self.factory.build(&plan.connection, secret),
+        }
     }
 
     /// The steps of a ComfyUI workflow that are not known to keep data on this computer; empty
@@ -166,7 +179,7 @@ impl AiClient {
     fn unknown_steps(&self, connection: &Connection, model: &ModelId) -> Vec<String> {
         // Match the factory's case-insensitive name so a mixed-case connection cannot skip
         // the agreement required for the same workflow.
-        if !connection.provider.eq_ignore_ascii_case("comfyui") {
+        if !is_comfyui(connection) {
             return Vec::new();
         }
         self.factory
@@ -180,4 +193,10 @@ impl AiClient {
             history::refused(file, plan, estimate, self.keep_prompts, e);
         }
     }
+}
+
+/// Whether `connection` uses the ComfyUI adapter. The factory matches names without regard to
+/// case, so this does too: a mixed-case name must not skip the workflow-step agreement.
+fn is_comfyui(connection: &Connection) -> bool {
+    connection.provider.eq_ignore_ascii_case("comfyui")
 }

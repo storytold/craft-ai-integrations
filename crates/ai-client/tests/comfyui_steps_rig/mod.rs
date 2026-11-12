@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use craft_ai_client::{AiClient, ProviderFactory};
 use craft_ai_core::*;
-use craft_ai_native::secrets::MemoryStore;
+use craft_ai_native::secrets::{MemoryStore, SecretStore};
 use craft_ai_native::shared::SharedStore;
 use serde_json::json;
 use support::{Reply, Server};
@@ -50,6 +50,22 @@ impl World {
     /// The same world, with the connection's kind set to `provider`. A `kite-fake` kind is
     /// registered that refuses to build, for plans that must never reach a server.
     pub fn on(provider: &str) -> Self {
+        Self::with(provider, None, |_| {})
+    }
+
+    /// A world whose connection is `provider`. With `secrets`, the connection uses a key read
+    /// from that store; `adjust` may change the factory before the client gets it.
+    pub fn with(
+        provider: &str,
+        secrets: Option<Arc<dyn SecretStore>>,
+        adjust: impl FnOnce(&mut ProviderFactory),
+    ) -> Self {
+        let auth = if secrets.is_some() {
+            json!({"kind": "api_key", "secret": "comfy-key"})
+        } else {
+            json!({"kind": "none"})
+        };
+        let secrets = secrets.unwrap_or_else(|| Arc::new(MemoryStore::new()));
         let dir = tempfile::tempdir().unwrap();
         let server = Server::start(|r| match r.path.as_str() {
             "/system_stats" => Reply::Json(200, "{}".into()),
@@ -66,7 +82,7 @@ impl World {
         let connection: Connection = serde_json::from_value(json!({
             "id": "comfyui-local", "label": "ComfyUI", "provider": provider,
             "endpoint": server.url.trim_end_matches("/v1"), "locality": "local",
-            "auth": {"kind": "none"}, "billing": "free", "models": [model]
+            "auth": auth, "billing": "free", "models": [model]
         }))
         .unwrap();
         shared
@@ -82,16 +98,13 @@ impl World {
             .unwrap();
         let workflows = dir.path().join("workflows");
         std::fs::create_dir_all(&workflows).unwrap();
-        let client = AiClient::new(
-            AppId::new("photocraft").unwrap(),
-            shared,
-            Arc::new(MemoryStore::new()),
-        )
-        .with_factory({
-            let mut factory = ProviderFactory::with_comfyui_library(&workflows);
-            factory.register("kite-fake", |_, _| Err(AiError::unsupported("not built")));
-            factory
-        });
+        let client = AiClient::new(AppId::new("photocraft").unwrap(), shared, secrets)
+            .with_factory({
+                let mut factory = ProviderFactory::with_comfyui_library(&workflows);
+                factory.register("kite-fake", |_, _| Err(AiError::unsupported("not built")));
+                adjust(&mut factory);
+                factory
+            });
         let world = Self {
             dir,
             server,

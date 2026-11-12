@@ -96,9 +96,9 @@ impl Disclosure {
     }
 }
 
-/// One saved agreement: the kinds of data it covers, all lapsing together. Agreeing to a kind
-/// again moves it out of any record with a different expiry, so one kind's renewal never extends
-/// another's.
+/// One saved agreement: the kinds of data and workflow steps it covers, all lapsing together.
+/// Agreeing to a kind again moves it out of records for the same step set with a different expiry,
+/// so renewing one kind or step set never changes another's agreement.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsentRecord {
     pub app: AppId,
@@ -131,6 +131,17 @@ impl ConsentRecord {
             && d.unknown_steps
                 .iter()
                 .all(|s| self.unknown_steps.contains(s))
+    }
+
+    /// The same agreement as `d` would make: same app, connection, destination, capability and
+    /// exactly the same step set, regardless of order or duplicate names. A new grant changes only
+    /// such a record; widening another step set would authorise kinds never agreed for those steps.
+    fn same_scope(&self, d: &Disclosure) -> bool {
+        self.covers(d)
+            && self
+                .unknown_steps
+                .iter()
+                .all(|s| d.unknown_steps.contains(s))
     }
 }
 
@@ -168,15 +179,15 @@ impl ConsentLedger {
         self.record(d, Some(expires_at));
     }
 
-    /// Records the kinds in `d` with the given expiry for the same app, connection, destination
-    /// and capability. The latest agreement sets the expiry of the kinds it names; other kinds
-    /// and other capabilities keep theirs.
+    /// Records the kinds in `d` with the given expiry for the same app, connection, destination,
+    /// capability and exact workflow-step set. The latest agreement sets the expiry of the kinds
+    /// it names; other kinds, capabilities and step sets keep theirs.
     fn record(&mut self, d: &Disclosure, expires_at: Option<u64>) {
         let kinds = d.kinds();
         for r in self
             .records
             .iter_mut()
-            .filter(|r| r.covers(d) && r.expires_at != expires_at)
+            .filter(|r| r.same_scope(d) && r.expires_at != expires_at)
         {
             r.kinds.retain(|k| !kinds.contains(k));
         }
@@ -184,7 +195,7 @@ impl ConsentLedger {
         if let Some(r) = self
             .records
             .iter_mut()
-            .find(|r| r.covers(d) && r.expires_at == expires_at)
+            .find(|r| r.same_scope(d) && r.expires_at == expires_at)
         {
             for k in kinds {
                 if !r.kinds.contains(&k) {
