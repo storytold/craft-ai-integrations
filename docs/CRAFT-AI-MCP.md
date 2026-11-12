@@ -5,7 +5,8 @@ reaches every installed Craft app.
 
 Each Craft app's CLI already serves MCP (`<app>-cli mcp`). Registering every app separately means
 one client entry per app, and each lists all of its tools up front: PhotoCraft alone lists 26 tools,
-34,446 bytes of definitions. The gateway is one entry with four tools (1,530 bytes):
+33,082 bytes of definitions. The gateway is one entry with four tools (1,607 bytes; both the `tools`
+array of `tools/list` as compact JSON, measured 2026-11-13):
 
 | Tool | What it does |
 |---|---|
@@ -25,8 +26,14 @@ Tracked in #195 (EPIC-MCP-GATEWAY).
   writes to it go through their own bounded queue. A start, a listing and a call each have a
   deadline (60 s, 30 s, and 600 s by default for a call, at most 3600 s). An app that misses one is
   dropped and started again on the next call; a call is never sent twice.
-- **In parallel.** Requests from the client are answered in parallel (up to 16), so a long call
-  does not hold up `ping` or a search, and a search over all apps starts them at once.
+- **In parallel.** Requests from the client are answered in parallel (up to 16), and a search over
+  all apps starts them at once. A call holds only its app's connection: `ping`, `craft_list_apps`
+  (which shows the app as `busy`), searching and describing tools answer at once from the tool list
+  read before it; a second call to the same app waits for the first.
+- **The switch, at every step.** A call that waited for its app while agents were turned off never
+  starts; one that was running finishes, then the app's server is stopped. A call that passes its
+  deadline stops the app's server too (in a session without a window, unsaved work goes with it),
+  and `craft_call_tool` is marked `destructiveHint`, so clients can ask before running it.
 - **Requests from an app.** `ping` gets an empty result; anything else (sampling, roots) is
   answered as not supported.
 

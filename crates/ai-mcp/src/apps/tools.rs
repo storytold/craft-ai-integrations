@@ -39,13 +39,15 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": CALL_TOOL,
-            "description": "Run one app tool with its arguments. Returns the app's own result.",
+            "description": "Run one app tool with its arguments. Returns the app's own result. A call that passes timeoutSeconds stops the app's server, losing unsaved work in a session without a window.",
             "inputSchema": {"type": "object", "properties": {
                 "app": {"type": "string"},
                 "tool": {"type": "string"},
                 "arguments": {"type": "object", "description": "As the tool's input schema says."},
                 "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": MAX_CALL_TIMEOUT.as_secs()},
             }, "required": ["app", "tool"]},
+            // It can run any app tool, edits and saves included: clients ask before running it.
+            "annotations": {"readOnlyHint": false, "destructiveHint": true},
         }),
     ]
 }

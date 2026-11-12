@@ -424,3 +424,139 @@ fn the_launchers_switch_is_asked_before_every_call() {
         "other names stay unknown"
     );
 }
+
+/// A fake PhotoCraft whose `tools/call` says it arrived on `entered`, then waits for `release`;
+/// `calls` counts the calls that reached it.
+fn slow_conn(
+    entered: std::sync::mpsc::Sender<()>,
+    release: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+    calls: Arc<AtomicUsize>,
+) -> Conn {
+    fake(move |m, req| {
+        let r = match m {
+            "tools/list" => {
+                json!({"tools": [{"name": "layer.new", "description": "Add a layer."}]})
+            }
+            "tools/call" => {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let _ = entered.send(());
+                let _ = release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10));
+                json!({"content": [{"type": "text", "text": "done"}]})
+            }
+            _ => return None,
+        };
+        Some(vec![
+            json!({"jsonrpc": "2.0", "id": req["id"], "result": r}).to_string(),
+        ])
+    })
+}
+
+type Gate = (
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    Arc<AtomicUsize>,
+);
+
+/// One slow app, its switch, and the gate its calls wait at.
+fn slow_hub(on: Arc<std::sync::atomic::AtomicBool>) -> (Arc<Hub>, Gate) {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let hub = Hub::with_connector(
+        vec![entry("photocraft", "PhotoCraft")],
+        vec![],
+        Box::new(move |_| {
+            Ok(slow_conn(
+                entered_tx.clone(),
+                release_rx.clone(),
+                counted.clone(),
+            ))
+        }),
+    )
+    .with_switch(Box::new(move || on.load(Ordering::SeqCst)));
+    (Arc::new(hub), (entered_rx, release_tx, calls))
+}
+
+/// A long call holds the app, not the gateway: listing the apps, searching all of them and
+/// describing a tool answer at once from the list read before it (storytold/craft-ai-integrations#197
+/// review).
+#[test]
+fn a_long_call_does_not_hold_up_listing_searching_or_describing() {
+    let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (h, (entered, release, _)) = slow_hub(on);
+    let caller = {
+        let h = h.clone();
+        std::thread::spawn(move || {
+            h.call_tool(
+                "photocraft",
+                "layer.new",
+                json!({}),
+                Duration::from_secs(20),
+            )
+        })
+    };
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let start = std::time::Instant::now();
+    let apps = h.list_apps();
+    assert_eq!(apps["apps"][0]["busy"], true, "{apps}");
+    assert_eq!(apps["apps"][0]["started"], true);
+    assert_eq!(apps["apps"][0]["tools"], 1);
+    let found = h.find_tools("layer", None, 10).unwrap();
+    assert_eq!(found["tools"][0]["tool"], "layer.new", "{found}");
+    assert!(h.describe_tool("photocraft", "layer.new").is_ok());
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "waited {:?} on the running call",
+        start.elapsed()
+    );
+    release.send(()).unwrap();
+    assert!(caller.join().unwrap().is_ok());
+    assert!(
+        h.list_apps()["apps"][0].get("busy").is_none(),
+        "not busy once the call ended"
+    );
+}
+
+/// A call that waited for the app while agents were turned off never reaches it; the call that
+/// was running finishes, and the app's server is stopped after it (storytold/craft-ai-integrations#197
+/// review).
+#[test]
+fn a_call_waiting_for_the_app_never_starts_once_agents_are_turned_off() {
+    let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (h, (entered, release, calls)) = slow_hub(on.clone());
+    let args = json!({"app": "photocraft", "tool": "layer.new", "arguments": {}});
+    let call = |h: &Arc<Hub>| {
+        let (h, args) = (h.clone(), args.clone());
+        std::thread::spawn(move || tools::call(&h, CALL_TOOL, &args).unwrap())
+    };
+    let a = call(&h);
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
+    let b = call(&h);
+    // B passed the switch and waits for the app A holds.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!b.is_finished(), "B is queued behind A");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    on.store(false, Ordering::SeqCst);
+    release.send(()).unwrap();
+    let (a, b) = (a.join().unwrap(), b.join().unwrap());
+    assert!(a.get("isError").is_none(), "the running call finishes: {a}");
+    assert_eq!(b["isError"], true, "{b}");
+    assert!(
+        b["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("turned off"),
+        "{b}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "B never reached the app");
+    assert_eq!(
+        h.list_apps()["apps"][0]["started"],
+        false,
+        "the app's server is stopped after A"
+    );
+}
