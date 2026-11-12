@@ -96,3 +96,70 @@ fn tools_call_reaches_the_gateway_and_refuses_the_rest() {
         assert!(r["error"].is_object(), "{bad}");
     }
 }
+
+/// A malformed envelope is `-32600 Invalid Request` and never dispatched: an id that isn't a
+/// string or number is not echoed back, and a `tools/call` with one runs no tool.
+#[test]
+fn malformed_envelopes_are_invalid_requests_and_run_nothing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let starts = Arc::new(AtomicUsize::new(0));
+    let counted = starts.clone();
+    let app = crate::apps::registry::AppEntry {
+        id: "photocraft".into(),
+        name: "PhotoCraft".into(),
+        command: "/fake".into(),
+        args: vec!["mcp".into()],
+    };
+    let hub = crate::apps::Hub::with_connector(
+        vec![app],
+        vec![],
+        Box::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err("not started in this test".into())
+        }),
+    );
+    let s = McpState::new().with_apps(Arc::new(hub));
+    let call =
+        json!({"name": "craft_call_tool", "arguments": {"app": "photocraft", "tool": "doc.new"}});
+    for (request, echoed) in [
+        (
+            json!({"jsonrpc": "2.0", "id": [], "method": "ping"}),
+            Value::Null,
+        ),
+        (
+            json!({"jsonrpc": "2.0", "id": {"a": 1}, "method": "tools/call", "params": call}),
+            Value::Null,
+        ),
+        (
+            json!({"jsonrpc": "2.0", "id": null, "method": "tools/call", "params": call}),
+            Value::Null,
+        ),
+        (
+            json!({"jsonrpc": "2.0", "id": true, "method": "ping"}),
+            Value::Null,
+        ),
+        (json!({"jsonrpc": "2.0", "id": 7}), json!(7)),
+        (
+            json!({"jsonrpc": "2.0", "id": "x", "method": 3}),
+            json!("x"),
+        ),
+        (
+            json!({"jsonrpc": "1.0", "id": [], "method": "ping"}),
+            Value::Null,
+        ),
+    ] {
+        let r = s.handle(&request).unwrap();
+        assert_eq!(r["error"]["code"], -32600, "{request}");
+        assert_eq!(r["id"], echoed, "{request}");
+        assert!(r.get("result").is_none(), "{request}");
+    }
+    assert_eq!(starts.load(Ordering::SeqCst), 0, "no tool ran");
+    // Valid ids still work, strings and numbers alike.
+    for id in [json!(1), json!("abc"), json!(2.5)] {
+        let r = s
+            .handle(&json!({"jsonrpc": "2.0", "id": id, "method": "ping"}))
+            .unwrap();
+        assert_eq!(r["id"], id);
+        assert!(r["result"].is_object());
+    }
+}

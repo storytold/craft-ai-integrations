@@ -35,17 +35,21 @@ impl McpState {
     }
 
     /// Answer one JSON-RPC request. `None` for a notification (no `id`), which gets no response.
+    /// A request whose envelope is malformed (no `"jsonrpc": "2.0"`, an `id` that isn't a string
+    /// or number, no string `method`) gets `-32600 Invalid Request` and is never dispatched; its
+    /// `id` is echoed only when it is a valid one, otherwise `null`.
     pub fn handle(&self, request: &Value) -> Option<Value> {
         let id = request.get("id").cloned();
-        if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return Some(error_response(
-                id.unwrap_or(Value::Null),
-                -32600,
-                "Invalid Request",
-            ));
+        let echo = id.clone().filter(valid_id).unwrap_or(Value::Null);
+        let method = request.get("method").and_then(Value::as_str);
+        let malformed = request.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || id.as_ref().is_some_and(|v| !valid_id(v))
+            || method.is_none();
+        if malformed {
+            return Some(error_response(echo, -32600, "Invalid Request"));
         }
         let id = id?;
-        let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+        let method = method.unwrap_or_default();
         let result = match method {
             "initialize" => Ok(initialize(request)),
             "ping" => Ok(json!({})),
@@ -92,6 +96,11 @@ impl McpState {
             .and_then(|hub| crate::apps::tools::call(hub, name, &args))
             .ok_or_else(|| format!("unknown tool `{name}`"))
     }
+}
+
+/// A JSON-RPC request id MCP accepts: a string or a number (never `null`).
+fn valid_id(id: &Value) -> bool {
+    id.is_string() || id.is_number()
 }
 
 /// True for a published revision this gateway answers with.
