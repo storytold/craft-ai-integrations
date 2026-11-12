@@ -1,13 +1,15 @@
-//! Bridge that exposes Craft AI tools to MCP clients (LM Studio / Bionic) over streamable HTTP at
-//! `/mcp`. The shared catalogue ([`craft_ai_features::builtin`]) is the source of truth for which
-//! tools exist and where they appear, and `tools/list` reflects exactly that catalogue.
+//! `craft-ai-mcp`: one MCP server through which an agent (Claude, Cursor, LM Studio, ...) reaches
+//! every installed Craft app.
 //!
-//! [`discovery`] is a helper that fetches the org's public repositories from GitHub so newly landed
-//! apps can be noticed. It is not yet wired into `tools/list`, so a new app does not show up to MCP
-//! hosts until it is added to the shared catalogue.
+//! Each Craft app already serves MCP from its own CLI (`<app>-cli mcp`). Registering every app
+//! separately means one client entry per app, and each lists all of its tools up front. The
+//! gateway is one entry with four tools ([`apps::tools`]): list the apps, find tools by a few
+//! words, describe one tool, call one tool. An app's MCP server is started the first time an agent
+//! needs it ([`apps`]).
 //!
-//! [`apps`] is the gateway to the Craft apps: four tools that find and run any installed app's own
-//! MCP tools, so one MCP entry reaches every app without loading all of their tool definitions.
+//! The ArtCraft Launcher turns it on (Settings › AI agents), writes the app list it reads
+//! ([`apps::registry`]) and registers `craft-ai-mcp --stdio` in the MCP clients ([`cli`],
+//! [`stdio`]).
 
 #![deny(
     clippy::unwrap_used,
@@ -18,29 +20,13 @@
     clippy::unreachable
 )]
 
-/// Apps: the gateway to every installed Craft app's own MCP server.
+/// The gateway to every installed Craft app's own MCP server.
 pub mod apps;
-
-/// Catalogue: normalizes the shared feature list into flat tool descriptors used by `tools/list`.
-pub mod catalogue;
-/// Cli: the `craft-ai-mcp` command line (`--stdio`, HTTP), callable from other binaries.
+/// The `craft-ai-mcp` command line, callable from other binaries (the launcher ships one).
 pub mod cli;
-/// Discovery: fetches the storytold org's public repositories so newly landed Craft apps can be noticed.
-pub mod discovery;
-/// Router: routes one MCP `tools/call` through the shared client into a Craft AI job.
-pub mod router;
-
-pub use catalogue::{ToolDescriptor, app_names, tools};
-pub use discovery::{OrgRepo, fetch_from, fetch_org_repos};
-
-/// Installer: merges this bridge's entry into Bionic's `ng-mcp.json` and generates per-tool skill folders.
-pub mod installer;
-/// Mcp: JSON-RPC 2.0 handling for the Craft AI MCP bridge (initialize, tools/list, ping, tools/call).
+/// MCP's JSON-RPC methods (initialize, ping, tools/list, tools/call).
 pub mod mcp;
-/// Server: minimal raw-TCP streamable-HTTP transport feeding parsed requests to [`mcp::McpState`].
-pub mod server;
-/// Stdio: MCP over stdin and stdout, for desktop MCP clients.
+/// MCP over stdin and stdout, how desktop MCP clients start a local server.
 pub mod stdio;
 
 pub use mcp::McpState;
-pub use server::{bind, run};

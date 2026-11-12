@@ -121,21 +121,11 @@ fn write_line(output: &mut impl Write, v: &Value) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_ai_client::AiClient;
-    use craft_ai_core::AppId;
-    use craft_ai_native::secrets::MemoryStore;
-    use craft_ai_native::shared::SharedStore;
     use std::sync::Arc;
 
-    fn state() -> (McpState, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let shared = SharedStore::new(dir.path().join("connections.json"));
-        let client = AiClient::new(
-            AppId::new("mcp").unwrap(),
-            shared,
-            Arc::new(MemoryStore::new()),
-        );
-        (McpState::new(client), dir)
+    /// The state and a second value kept for the tests' `let (s, _d) = state()` shape.
+    fn state() -> (McpState, ()) {
+        (McpState::new(), ())
     }
 
     fn run(input: &str) -> Vec<Value> {

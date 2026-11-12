@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-mcp"
-description = "MCP bridge for the Craft apps: the Craft AI tools, and one gateway to every installed app's own MCP server."
+description = "One MCP server for every installed Craft app: four tools that find and run each app's own MCP tools."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,17 +13,9 @@ name = "craft-ai-mcp"
 path = "src/main.rs"
 
 [dependencies]
-craft-ai-features.workspace = true
-craft-ai-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-craft-ai-core.workspace = true
-craft-ai-client.workspace = true
-craft-ai-media.workspace = true
 dirs = "7"
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
-craft-ai-native.workspace = true
-tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"
