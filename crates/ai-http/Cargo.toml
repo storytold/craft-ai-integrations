@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-http"
-description = "The one TLS setting and proxy policy every call in Craft AI uses"
+description = "The one TLS setting, proxy policy and reply-parsing budget every call in Craft AI uses"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,8 @@ publish = false
 
 [dependencies]
 craft-ai-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [lints]
