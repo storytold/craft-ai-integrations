@@ -2230,6 +2230,7 @@ dependencies = [
  "craft-ai-http",
  "craft-ai-media",
  "craft-ai-native",
+ "dirs 7.0.0",
  "serde",
  "serde_json",
  "tempfile",

@@ -26,6 +26,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py vx` | Vertex express adapter (`ai-vertex/src/lib.rs`): the API key travels in the `x-goog-api-key` header, never in the request URL. |
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |
 | `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
+| `mutation_check.py mg` | MCP bridge gateway to the Craft apps: the app list's checks (absolute command, id, cap), the line caps, a timed-out or dead connection replaced, unknown tools refused, and the bridge never granting consent. Cases in `mutation_mcp_gateway.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh

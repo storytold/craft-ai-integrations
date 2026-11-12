@@ -5,6 +5,21 @@
 //! [`discovery`] is a helper that fetches the org's public repositories from GitHub so newly landed
 //! apps can be noticed. It is not yet wired into `tools/list`, so a new app does not show up to MCP
 //! hosts until it is added to the shared catalogue.
+//!
+//! [`apps`] is the gateway to the Craft apps: four tools that find and run any installed app's own
+//! MCP tools, so one MCP entry reaches every app without loading all of their tool definitions.
+
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
+
+/// Apps: the gateway to every installed Craft app's own MCP server.
+pub mod apps;
 
 /// Catalogue: normalizes the shared feature list into flat tool descriptors used by `tools/list`.
 pub mod catalogue;
@@ -22,6 +37,8 @@ pub mod installer;
 pub mod mcp;
 /// Server: minimal raw-TCP streamable-HTTP transport feeding parsed requests to [`mcp::McpState`].
 pub mod server;
+/// Stdio: MCP over stdin and stdout, for desktop MCP clients.
+pub mod stdio;
 
 pub use mcp::McpState;
 pub use server::{bind, run};

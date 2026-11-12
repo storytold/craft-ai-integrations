@@ -4,6 +4,7 @@
 //! the shared catalogue and the [`router`](crate::router). It knows nothing about sockets or HTTP;
 //! the transport in [`server`](crate::server) feeds it parsed requests and hands back responses.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use craft_ai_client::AiClient;
@@ -48,16 +49,27 @@ pub struct McpState {
     /// host). The router still never asks on local connections regardless of this flag.
     auto_consent: bool,
     timeout: Duration,
+    /// The gateway to the Craft apps, when this bridge offers it.
+    apps: Option<Arc<crate::apps::Hub>>,
 }
 
 impl McpState {
-    /// Build a default state (trusted local host, default job budget).
+    /// Build a default state: consent is never granted by the bridge itself (a person approves in
+    /// the app or launcher), default job budget, no app gateway.
     pub fn new(client: AiClient) -> Self {
         Self {
             client,
-            auto_consent: true,
+            auto_consent: false,
             timeout: DEFAULT_JOB_TIMEOUT,
+            apps: None,
         }
+    }
+
+    /// Also offer the gateway to the Craft apps ([`crate::apps`]).
+    #[must_use]
+    pub fn with_apps(mut self, hub: Arc<crate::apps::Hub>) -> Self {
+        self.apps = Some(hub);
+        self
     }
 
     /// Build a state with an explicit job budget and consent policy (used by tests / the binary).
@@ -66,6 +78,7 @@ impl McpState {
             client,
             auto_consent,
             timeout,
+            apps: None,
         }
     }
 
@@ -166,6 +179,9 @@ impl McpState {
             tool.insert("inputSchema".into(), Value::Object(schema));
             tool_values.push(Value::Object(tool));
         }
+        if self.apps.is_some() {
+            tool_values.extend(crate::apps::tools::definitions());
+        }
 
         let mut out = Map::new();
         out.insert("tools".into(), Value::Array(tool_values));
@@ -186,6 +202,12 @@ impl McpState {
         let empty_args = Value::Object(Map::new());
         let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
         let tool_args = params.get("arguments").cloned().unwrap_or(empty_args);
+
+        if let Some(hub) = &self.apps
+            && let Some(result) = crate::apps::tools::call(hub, name, &tool_args)
+        {
+            return Ok(result);
+        }
 
         // Unknown tool names are a client error (JSON-RPC -32601). Known-tool execution outcomes
         // become MCP tool results with `isError` so the host can surface them plainly.
@@ -302,176 +324,5 @@ fn error_response(id: Value, code: i32, message: String) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use craft_ai_core::AppId;
-    use craft_ai_native::secrets::MemoryStore;
-    use craft_ai_native::shared::SharedStore;
-    use serde_json::json;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-
-    /// A client with no saved connections and an empty key store: every remote tool reports what is
-    /// missing, which is exactly the "prompt to install" path we want to exercise.
-    fn test_client() -> AiClient {
-        let dir = tempdir().unwrap();
-        let shared = SharedStore::new(dir.path().join("connections.json"));
-        let secrets = Arc::new(MemoryStore::new());
-        AiClient::new(AppId::new("mcp").unwrap(), shared, secrets)
-    }
-
-    #[test]
-    fn initialize_advertises_tools() {
-        let state = McpState::new(test_client());
-        let req = init_req("initialize");
-        let resp = state.handle(&req).unwrap();
-        assert_eq!(resp["jsonrpc"], "2.0");
-        assert_eq!(
-            resp["result"]["protocolVersion"].as_str().unwrap(),
-            "2025-06-18"
-        );
-        assert!(resp["result"]["capabilities"]["tools"].is_object());
-    }
-
-    #[test]
-    fn initialize_echoes_a_supported_requested_version() {
-        let state = McpState::new(test_client());
-        let req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "protocolVersion": "2025-11-25" },
-        });
-        let resp = state.handle(&req).unwrap();
-        assert_eq!(
-            resp["result"]["protocolVersion"].as_str().unwrap(),
-            "2025-11-25"
-        );
-    }
-
-    #[test]
-    fn initialize_falls_back_for_an_unsupported_requested_version() {
-        let state = McpState::new(test_client());
-        // A well-formed but unsupported revision must fall back to the default, not be echoed.
-        let req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "protocolVersion": "2025-03-26" },
-        });
-        let resp = state.handle(&req).unwrap();
-        assert_eq!(
-            resp["result"]["protocolVersion"].as_str().unwrap(),
-            DEFAULT_PROTOCOL_VERSION
-        );
-    }
-
-    #[test]
-    fn initialize_rejects_a_malformed_version_with_fallback() {
-        let state = McpState::new(test_client());
-        // A malformed (not `YYYY-MM-DD`) revision must fall back to the default.
-        let req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "protocolVersion": "not-a-date" },
-        });
-        let resp = state.handle(&req).unwrap();
-        assert_eq!(
-            resp["result"]["protocolVersion"].as_str().unwrap(),
-            DEFAULT_PROTOCOL_VERSION
-        );
-    }
-
-    #[test]
-    fn is_protocol_version_accepts_well_formed_dates() {
-        assert!(is_protocol_version("2025-06-18"));
-        assert!(is_protocol_version("2025-11-25"));
-        assert!(is_protocol_version("2024-11-05"));
-    }
-
-    #[test]
-    fn is_protocol_version_rejects_malformed_dates() {
-        assert!(!is_protocol_version("")); // empty
-        assert!(!is_protocol_version("2025-06-1")); // too short
-        assert!(!is_protocol_version("abcd-ef-gh")); // non-digit positions
-        assert!(!is_protocol_version("2025-06-18x")); // too long
-    }
-
-    #[test]
-    fn ping_returns_empty_result() {
-        let state = McpState::new(test_client());
-        let resp = state.handle(&init_req("ping")).unwrap();
-        assert_eq!(resp["result"], Value::Object(Map::new()));
-    }
-
-    #[test]
-    fn tools_list_returns_every_builtin() {
-        let state = McpState::new(test_client());
-        let resp = state.handle(&init_req("tools/list")).unwrap();
-        let tools = resp["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), craft_ai_features::builtin().len());
-        // Every tool has a name, description and an object schema.
-        for t in tools {
-            assert!(t["name"].is_string());
-            assert!(t["description"].is_string());
-            assert_eq!(t["inputSchema"]["type"], "object");
-        }
-    }
-
-    #[test]
-    fn tools_call_reports_what_is_missing() {
-        let state = McpState::new(test_client());
-        let req = call_req("generate-image", json!({"prompt": "a cat"}));
-        let resp = state.handle(&req).unwrap();
-        // No model is bound, so the router must surface a plain reason as an error tool result.
-        assert_eq!(resp["result"]["isError"], true);
-        assert!(!resp["result"]["content"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn tools_call_unknown_tool_is_an_error() {
-        let state = McpState::new(test_client());
-        let req = call_req("not-a-tool", json!({}));
-        let resp = state.handle(&req).unwrap();
-        assert!(resp["error"].is_object());
-    }
-
-    #[test]
-    fn tools_call_accepts_top_level_params_for_leniency() {
-        let state = McpState::new(test_client());
-        // Non-conforming client: name/arguments at the top level instead of under `params`.
-        // We still route to the named tool rather than treating it as unknown.
-        let lenient_req = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "name": "generate-image",
-            "arguments": { "prompt": "a cat" }
-        });
-        let lenient_resp = state.handle(&lenient_req).unwrap();
-
-        // The same call in the standard wire format (params under `params`) must produce an
-        // identical result — proving the lenient path routes to the named tool rather than any
-        // arbitrary error.
-        let std_req = call_req("generate-image", json!({ "prompt": "a cat" }));
-        let std_resp = state.handle(&std_req).unwrap();
-
-        assert_eq!(lenient_resp["result"], std_resp["result"]);
-    }
-
-    /// Tiny helper so tests read like the wire format.
-    fn init_req(method: &str) -> serde_json::Value {
-        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method })
-    }
-
-    /// A `tools/call` request in the standard MCP wire format (params under `params`).
-    fn call_req(name: &str, args: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": { "name": name, "arguments": args }
-        })
-    }
-}
+#[path = "mcp_tests.rs"]
+mod tests;

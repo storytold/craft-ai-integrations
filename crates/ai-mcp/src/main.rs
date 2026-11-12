@@ -1,108 +1,133 @@
 //! Entry point for the Craft AI MCP bridge.
 //!
-//! Listens on `CRAFT_MCP_PORT` (default 12345) and serves the Craft AI tool catalogue over
-//! streamable HTTP at `/mcp`. The shared connections file is taken from `CRAFT_MCP_CONNECTIONS`;
-//! when unset, a default location under the user's home directory is used. Secrets are read from an
-//! in-memory store in v1, so remote tools report what is missing (the "prompt to install" signal)
-//! until a real keychain is wired up. Set `CRAFT_MCP_SKILLS_DIR` to also generate per-tool SKILL.md
-//! folders for installation through Bionic's `skill.install` tool; the bridge never writes into
-//! Bionic's skills folder itself.
+//! - `craft-ai-mcp --stdio`: MCP over stdin and stdout, the way desktop MCP clients start a local
+//!   server. Offers the Craft AI tools and the gateway to the Craft apps ([`craft_ai_mcp::apps`]);
+//!   `--no-apps` leaves the gateway out. This is what the ArtCraft Launcher registers.
+//! - `craft-ai-mcp` (no flag): streamable HTTP at `http://127.0.0.1:<CRAFT_MCP_PORT>/mcp` (default
+//!   12345) for hosts that only speak HTTP. Offers the Craft AI tools only: the port has no caller
+//!   authentication yet, so it does not drive the apps.
+//!
+//! Connections and keys come from the shared AI setup ([`AiClient::standard`]; `CRAFT_AI_DIR`
+//! moves it). The bridge never grants consent itself; `CRAFT_MCP_AUTO_CONSENT=1` does, for trusted
+//! local development only. Set `CRAFT_MCP_SKILLS_DIR` to also generate per-tool SKILL.md folders
+//! for installation through Bionic's `skill.install` tool; the bridge never writes into Bionic's
+//! skills folder itself.
+
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use craft_ai_client::AiClient;
 use craft_ai_core::AppId;
-use craft_ai_native::secrets::MemoryStore;
-use craft_ai_native::shared::SharedStore;
+use craft_ai_mcp::McpState;
 
-fn main() {
-    let port = env::var("CRAFT_MCP_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(12345);
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().expect("bad port");
+const USAGE: &str = "usage: craft-ai-mcp [--stdio [--no-apps]]";
 
-    let connections = default_connections_path();
-    ensure_parent(&connections);
-    let shared = SharedStore::new(connections.clone());
-    let secrets = Arc::new(MemoryStore::new());
-    let client = AiClient::new(AppId::new("mcp").unwrap(), shared, secrets);
-
-    let state = craft_ai_mcp::McpState::new(client);
-
-    // Optionally generate per-tool SKILL.md folders for installation through Bionic's `skill.install`
-    // tool. The bridge never writes into Bionic's skills folder itself; it only produces the folders
-    // here so a user or script can install them. Set CRAFT_MCP_SKILLS_DIR to enable; failures are
-    // logged but do not stop the server (skills are optional). If the requested destination is
-    // Bionic's own skills directory, refuse - writing there would overwrite installed SKILL.md files
-    // without skill.install validation or approval.
-    if let Ok(dir_str) = env::var("CRAFT_MCP_SKILLS_DIR") {
-        let dir = PathBuf::from(&dir_str);
-        if is_bionic_skills_dir(&dir) {
-            eprintln!(
-                "refusing to generate skills into Bionic's skills directory ({}) - use a separate staging folder and install via skill.install",
-                dir.display()
-            );
-        } else {
-            match craft_ai_mcp::installer::write_skills(&dir, &craft_ai_features::builtin()) {
-                Ok(written) => {
-                    println!("wrote {} skill folders to {}", written.len(), dir.display())
-                }
-                Err(e) => eprintln!("failed to write skills to {}: {e}", dir.display()),
-            }
-        }
-    }
-
-    match craft_ai_mcp::bind(addr) {
-        Ok(listener) => {
-            println!(
-                "craft-ai-mcp listening on http://{addr}/mcp (connections: {})",
-                connections.display()
-            );
-            craft_ai_mcp::run(listener, state);
-        }
+fn main() -> ExitCode {
+    match run(env::args().skip(1).collect()) {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("failed to bind {addr}: {e}");
-            std::process::exit(1);
+            eprintln!("craft-ai-mcp: {e}");
+            ExitCode::FAILURE
         }
     }
 }
 
-fn default_connections_path() -> PathBuf {
-    env::var("CRAFT_MCP_CONNECTIONS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = env::var("HOME")
-                .unwrap_or_else(|_| std::env::var("USERPROFILE").unwrap_or_default());
-            PathBuf::from(home).join(".craft-ai/connections.json")
-        })
+fn run(args: Vec<String>) -> Result<(), String> {
+    let mut stdio = false;
+    let mut apps = true;
+    for a in &args {
+        match a.as_str() {
+            "--stdio" => stdio = true,
+            "--no-apps" => apps = false,
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
+        }
+    }
+
+    let app = AppId::new("mcp").map_err(|e| e.to_string())?;
+    let client = AiClient::standard(app).map_err(|e| format!("the shared AI setup: {e}"))?;
+    let mut state = if env::var("CRAFT_MCP_AUTO_CONSENT").as_deref() == Ok("1") {
+        eprintln!("craft-ai-mcp: CRAFT_MCP_AUTO_CONSENT=1, consent is granted without asking");
+        McpState::with_policy(client, true, craft_ai_mcp::mcp::DEFAULT_JOB_TIMEOUT)
+    } else {
+        McpState::new(client)
+    };
+
+    write_skills_if_asked();
+
+    if stdio {
+        if apps {
+            let (entries, notes) = craft_ai_mcp::apps::registry::discover();
+            for n in &notes {
+                eprintln!("craft-ai-mcp: {n}");
+            }
+            state = state.with_apps(Arc::new(craft_ai_mcp::apps::Hub::new(entries, notes)));
+        }
+        let stdin = std::io::stdin().lock();
+        let stdout = std::io::stdout().lock();
+        return craft_ai_mcp::stdio::serve(&state, stdin, stdout).map_err(|e| e.to_string());
+    }
+
+    let port: u16 = match env::var("CRAFT_MCP_PORT") {
+        Ok(p) => p
+            .parse()
+            .map_err(|_| format!("CRAFT_MCP_PORT `{p}` is not a port number"))?,
+        Err(_) => 12345,
+    };
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = craft_ai_mcp::bind(addr).map_err(|e| format!("failed to bind {addr}: {e}"))?;
+    println!("craft-ai-mcp listening on http://{addr}/mcp");
+    craft_ai_mcp::run(listener, state);
+    Ok(())
 }
 
-fn ensure_parent(path: &Path) {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+/// Generate per-tool SKILL.md folders into `CRAFT_MCP_SKILLS_DIR` when it is set. Failures are
+/// logged and do not stop the server (skills are optional). Bionic's own skills folder is refused:
+/// writing there would overwrite installed SKILL.md files without `skill.install` validation.
+fn write_skills_if_asked() {
+    let Ok(dir_str) = env::var("CRAFT_MCP_SKILLS_DIR") else {
+        return;
+    };
+    let dir = PathBuf::from(&dir_str);
+    if is_bionic_skills_dir(&dir) {
+        eprintln!(
+            "refusing to generate skills into Bionic's skills directory ({}) - use a separate staging folder and install via skill.install",
+            dir.display()
+        );
+        return;
+    }
+    match craft_ai_mcp::installer::write_skills(&dir, &craft_ai_features::builtin()) {
+        Ok(written) => eprintln!("wrote {} skill folders to {}", written.len(), dir.display()),
+        Err(e) => eprintln!("failed to write skills to {}: {e}", dir.display()),
     }
 }
 
-/// True when `p` resolves inside Bionic's skills directory, where writing generated SKILL.md files
-/// would overwrite installed skills without `skill.install` validation or approval.
+/// True when `p` resolves inside Bionic's skills directory (`.lmstudio/skills`).
 fn is_bionic_skills_dir(p: &Path) -> bool {
-    let canon = match p.canonicalize() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(canon) = p.canonicalize() else {
+        return false;
     };
-    let comps: Vec<_> = canon.components().collect();
-    // True when the resolved path ends in `.lmstudio/skills`, independent of separator style.
-    comps.len() >= 2
-        && comps[comps.len() - 1]
-            .as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case("skills")
-        && comps[comps.len() - 2]
-            .as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case(".lmstudio")
+    let mut comps = canon.components().rev();
+    let last = comps
+        .next()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase());
+    let parent = comps
+        .next()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase());
+    last.as_deref() == Some("skills") && parent.as_deref() == Some(".lmstudio")
 }
