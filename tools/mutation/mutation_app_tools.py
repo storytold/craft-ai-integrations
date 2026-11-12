@@ -27,8 +27,10 @@ AT = [
     ('own-limit-ignored', A, 'let done = job.wait(step, limit);', 'let done = job.wait(step, LIMIT);', CL, T, 'outlasts_the_wait'),
     ('text-reply-dropped', A, 'Event::TextDelta { text: part } => text.push_str(&part),', 'Event::TextDelta { .. } => {}', CL, 'app_tools_stop', 'a_text_reply'),
     ('refused-stop-reported-as-stopped', A, 'Err(_) => job.poll().is_ok_and(|snap| snap.state.is_terminal()),', 'Err(_) => true,', CL, 'app_tools_stop', 'will_not_stop'),
-    ('refused-cancel-hidden', A, '            if !stop(&job) {\n                refused = refused.saturating_add(1);\n            }', '            let _ = stop(&job);', CL, 'app_tools_stop', 'a_refused_cancel'),
+    ('refused-cancel-hidden', A, '            if job.cancel().is_err() {\n                refused = refused.saturating_add(1);\n            }', '            let _ = job.cancel();', CL, 'app_tools_stop', 'a_refused_cancel'),
     ('unreadable-answer-left-running', A, '            if stop(&job) {\n                e.message', '            if true {\n                e.message', CL, 'app_tools_stop', 'unreadable_answer'),
+    ('cancel-reads-the-result-away', A, '            if job.cancel().is_err() {', '            if !stop(&job) {', CL, 'app_tools_stop', 'as_the_job_finishes'),
+    ('zero-wait-starts-a-job', A, '        if limit.is_zero() {', '        if limit.is_zero() && false {', CL, 'app_tools_stop', 'zero_wait'),
     ('online-job-asked-every-step', A, 'Locality::Remote => REMOTE_STEP,', 'Locality::Remote => STEP,', CL, 'app_tools_stop', 'online_job'),
     ('unreadable-store-is-an-unknown-tool', A, '.map_err(|e| e.to_string())\n    }', '.or_else(|_| Ok(Vec::new()))\n    }', CL, 'app_tools_stop', 'unreadable_store'),
 ]

@@ -78,8 +78,9 @@ For a tool nobody has declared yet, write the `Role` yourself. That is the subje
 
 ## 4. Ask `status`, and draw what it says
 
-`status` answers one question: can this tool run right now, in this app? It reads no key and
-sends nothing.
+`status` answers one question: can this tool run right now, in this app? It sends nothing. For a
+connection that needs a key it checks that a key is saved, which asks the key store (the system
+keychain may prompt); the key is never used or returned.
 
 <!-- snippet: status -->
 ```rust
@@ -117,7 +118,8 @@ the same shared choices and `report()` lists every catalogue tool, then every cu
 declared, with its `RoleStatus`. It sends nothing and writes nothing. A tool bound to a connection
 that needs a key is checked for a saved key, so the key store is asked (the system keychain may
 prompt) and the key is dropped unused. Call `report()` when a menu or page opens, not every frame.
-Use `role(id)` and `client()` when you go on to `plan` and `start`.
+To run a tool, use `AppTools` as below. `role(id)` and `client()` are the lower-level path, for an
+app that calls `plan` and `start` itself.
 
 **One way to run a tool.** `AppTools` also does steps 6 to 8 for you, so no app writes its own job
 loop. `request(id)` starts a request with the tool's capability, `plan(id, request)` checks it

@@ -76,12 +76,14 @@ impl Canceller {
     ///
     /// # Errors
     /// Returns the sentence to show when a job could not be stopped (some online services cannot
-    /// stop a job once it has started), so the app does not tell the person it stopped.
+    /// stop a job once it has started), so the app does not tell the person it stopped. A refusal
+    /// is reported as it is: the job is not read here, because a read would take its result away
+    /// from the [`AppTools::run`] call still waiting for it.
     pub fn cancel(&self) -> Result<(), String> {
         let jobs: Vec<Job> = lock(&self.0).iter().map(|(_, job)| job.clone()).collect();
         let mut refused = 0usize;
         for job in jobs {
-            if !stop(&job) {
+            if job.cancel().is_err() {
                 refused = refused.saturating_add(1);
             }
         }
@@ -98,8 +100,9 @@ impl Canceller {
     }
 }
 
-/// Asks `job` to stop. True when it stopped or had already ended; false when the provider refused
-/// and the job still reads as running (or cannot be read at all).
+/// Asks `job` to stop after its wait has ended. True when it stopped or had already ended; false
+/// when the provider refused and the job still reads as running (or cannot be read at all). Only
+/// for a job nobody is waiting for any more: the read takes any result it finds.
 fn stop(job: &Job) -> bool {
     match job.cancel() {
         Ok(()) => true,
@@ -235,16 +238,22 @@ impl AppTools {
     /// [`run`](Self::run) with the longest wait chosen by the app. A job still running when
     /// `limit` passes, or whose state can no longer be read, is asked to stop; when it cannot be
     /// stopped the error says it may still be running. A job at an online service is looked at
-    /// once a second, one on this computer more often.
+    /// once a second, one on this computer more often. A `limit` of zero starts nothing, because
+    /// a job that cannot be waited for could not be watched or stopped.
     ///
     /// # Errors
-    /// As [`run`](Self::run).
+    /// As [`run`](Self::run), and for a `limit` of zero.
     pub fn run_for(
         &self,
         plan: &Plan,
         ledger: &ConsentLedger,
         limit: Duration,
     ) -> Result<Vec<Output>, String> {
+        if limit.is_zero() {
+            return Err(
+                "There is no time to wait for this tool, so it was not started.".to_owned(),
+            );
+        }
         let job = self.client.start(plan, ledger).map_err(|e| e.message)?;
         let number = self.next_job.fetch_add(1, Ordering::Relaxed);
         lock(&self.running).push((number, job.clone()));

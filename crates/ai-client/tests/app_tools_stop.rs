@@ -1,11 +1,11 @@
 //! `AppTools` when a job does not end cleanly, and what a text tool returns.
 //!
 //! Scripted stand-in only: a temporary store, an in-memory key store and a stand-in service that
-//! answers with text, refuses to stop, sends an answer that cannot be read, or counts how often it
-//! is asked. No network and no model.
+//! answers with text, refuses to stop, sends an answer that cannot be read, finishes just as it
+//! is asked to stop, or counts how often it is asked. No network and no model.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use craft_ai_client::{AiClient, AppTools, ProviderFactory, RoleStatus};
@@ -31,6 +31,9 @@ enum Mode {
     Broken,
     /// Finishes after `FINISH`, counting every look.
     Counting,
+    /// Runs until asked to stop, then refuses because it has just finished: the next look gets
+    /// its text reply, once, as a service that reports each event once would.
+    FinishesOnCancel,
 }
 
 /// How long a `Counting` job runs.
@@ -41,6 +44,7 @@ struct Stub {
     started: Instant,
     polls: Arc<AtomicUsize>,
     cancels: Arc<AtomicUsize>,
+    delivered: AtomicBool,
 }
 
 fn info() -> ModelInfo {
@@ -81,12 +85,26 @@ impl Provider for Stub {
                 Ok(JobSnapshot::new(JobState::Succeeded))
             }
             Mode::Counting => Ok(running),
+            Mode::FinishesOnCancel if self.cancels.load(Ordering::SeqCst) == 0 => Ok(running),
+            Mode::FinishesOnCancel => Ok(JobSnapshot {
+                state: JobState::Succeeded,
+                events: if self.delivered.swap(true, Ordering::SeqCst) {
+                    Vec::new()
+                } else {
+                    vec![Event::TextDelta {
+                        text: "kept".to_owned(),
+                    }]
+                },
+                usage: None,
+            }),
         }
     }
     fn cancel(&self, _: &JobId) -> Result<(), AiError> {
         self.cancels.fetch_add(1, Ordering::SeqCst);
         match self.mode {
-            Mode::Refuses => Err(AiError::unsupported("this service cannot stop a job")),
+            Mode::Refuses | Mode::FinishesOnCancel => {
+                Err(AiError::unsupported("this service cannot stop a job"))
+            }
             _ => Ok(()),
         }
     }
@@ -145,6 +163,7 @@ fn world(mode: Mode, remote: bool) -> Result<World, Box<dyn std::error::Error>> 
             started: Instant::now(),
             polls: p.clone(),
             cancels: c.clone(),
+            delivered: AtomicBool::new(false),
         }) as Arc<dyn Provider>)
     });
     let client = AiClient::new(AppId::new("wordcraft")?, shared, secrets).with_factory(factory);
@@ -267,5 +286,39 @@ fn an_unreadable_store_is_not_an_unknown_tool() -> TestResult {
     let request = Request::new(CapabilityId::parse("text.complete")?);
     let error = tools.plan("rewrite", request).unwrap_err();
     assert!(!error.contains("not part of the suite"), "{error}");
+    Ok(())
+}
+
+/// A cancel that arrives as the job finishes does not take the result away from the run waiting
+/// for it.
+#[test]
+fn a_cancel_as_the_job_finishes_keeps_its_result() -> TestResult {
+    let w = world(Mode::FinishesOnCancel, false)?;
+    let tools = Arc::new(w.tools);
+    let canceller = tools.canceller();
+    let (plan, ledger) = planned(&tools)?;
+    let waiting = {
+        let tools = tools.clone();
+        std::thread::spawn(move || tools.run_for(&plan, &ledger, Duration::from_secs(5)))
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while canceller.waiting() == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(canceller.cancel().is_err(), "the refusal is reported");
+    let outputs = waiting.join().unwrap()?;
+    assert_eq!(outputs.len(), 1, "the finished job's result was lost");
+    assert_eq!(outputs[0].payload, Payload::text("kept"));
+    Ok(())
+}
+
+/// A wait of zero starts nothing, so no job is left that nobody can watch or stop.
+#[test]
+fn a_zero_wait_starts_nothing() -> TestResult {
+    let w = world(Mode::Refuses, true)?;
+    let (plan, ledger) = planned(&w.tools)?;
+    let error = w.tools.run_for(&plan, &ledger, Duration::ZERO).unwrap_err();
+    assert!(error.contains("not started"), "{error}");
+    assert_eq!(w.cancels.load(Ordering::SeqCst), 0, "a job was started");
     Ok(())
 }
