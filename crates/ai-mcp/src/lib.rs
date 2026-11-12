@@ -23,5 +23,5 @@ pub mod mcp;
 /// Server: minimal raw-TCP streamable-HTTP transport feeding parsed requests to [`mcp::McpState`].
 pub mod server;
 
-pub use mcp::McpState;
+pub use mcp::{DEFAULT_JOB_TIMEOUT, McpState};
 pub use server::{bind, run};

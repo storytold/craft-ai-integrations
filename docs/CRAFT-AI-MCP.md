@@ -19,7 +19,7 @@ plan → consent → start → wait).
 
 | Module | Responsibility |
 |---|---|
-| `main.rs` | Entry point. Reads `CRAFT_MCP_PORT` (default **12345**) and `CRAFT_MCP_CONNECTIONS`, builds the shared store + in-memory secret store, constructs an `AiClient` for app id `mcp`, binds the listener and runs it. |
+| `main.rs` | Entry point. Reads `CRAFT_MCP_PORT` (default **12345**). By default builds the client via `AiClient::standard` (canonical shared store + keys from env then the OS keychain); `CRAFT_MCP_CONNECTIONS` is an opt-in override for testing/dev. Consent is fail-closed (`auto_consent = false`) per #164 - a person approves in the ArtCraft Launcher, never the bridge. Binds the listener and runs it. |
 | `server.rs` | Raw-TCP streamable-HTTP transport: one thread per connection, reads a single request (headers + body), dispatches to `McpState::handle`, writes a plain-JSON response with `Connection: close`. No HTTP framework on purpose — keeps the binary tiny and dependency-free. |
 | `mcp.rs` | Protocol layer only. Maps MCP `initialize` / `tools/list` / `ping` / `tools/call` onto the shared catalogue and the router. Knows nothing about sockets or HTTP. Builds JSON Schemas for tool inputs from each feature's declared inputs. |
 | `router.rs` | The heart of the bridge. Turns one MCP `tools/call` into a Craft AI job: looks up the feature, checks `AiClient::status` (the plain-language "what is missing" signal), builds the request from JSON args, plans it, honors consent, then starts and waits on the job. Returns `Succeeded` / `Unavailable` / `NeedsConsent` / `Failed`. |
@@ -38,7 +38,7 @@ CRAFT_MCP_PORT=8901 CRAFT_MCP_CONNECTIONS=/path/to/connections.json ./craft-ai-m
 ```
 
 - **Localhost only** — the listener binds `127.0.0.1`, so it is a trusted local host; no remote exposure.
-- **Secrets are in-memory (v1).** A real keychain is not wired up yet, so any tool that would send data to a remote destination reports *what is missing* ("prompt to install") instead of crashing. This is intentional and tested.
+- **Secrets from env then OS keychain.** By default (`AiClient::standard`) keys come from `CRAFT_AI_SECRET_<REF>` environment variables, then the OS keychain (Windows Credential Manager / macOS Keychain / Secret Service). When `CRAFT_MCP_CONNECTIONS` is set for testing/dev, the same layered secret source applies. A tool that would send data to a remote destination still reports *what is missing* ("prompt to install") rather than crashing when no key is found.
 
 ## Connecting from Bionic / LM Studio
 
@@ -107,33 +107,28 @@ The installed set (Windows paths; adjust per platform):
 | TextureCraft | `C:\Programs\TextureCraft\texturecraft-cli.exe mcp` |
 | VectorCraft | `C:\Programs\VectorCraft\vectorcraft-cli.exe mcp` |
 | WordCraft | `C:\Programs\WordCraft\wordcraft-cli.exe mcp` |
-| MailCraft (beta) | `C:\Program Files\MailCraft\mailcraft-cli.exe mcp` |
+| MailCraft (beta) | `C:\Programs\mailcraft\mailcraft-cli.exe mcp` |
 | MaterialCraft | `C:\Programs\MaterialCraft\materialcraft-cli.exe mcp` |
 
-To add a new app: drop its entry into `ng-mcp.json` using the same shape. No code change is needed
-for the bridge itself — it lists whatever is in the shared catalogue, and discovery flags apps that
-are on GitHub but not yet catalogued.
+The paths above are examples for one install layout; each app lives wherever you installed it, so
+adjust `command` to match your machine before registering. To add a new app: drop its entry into
+`ng-mcp.json` using the same shape. No code change is needed for the bridge itself — it lists
+whatever is in the shared catalogue, and discovery flags apps that are on GitHub but not yet
+catalogued.
 
-## Keeping the bridge running (Windows)
+## Keeping the bridge running
 
-Unlike the per-app stdio CLIs, which Bionic spawns on demand, the unified HTTP bridge is a **long-running process** that must already be listening when Bionic connects to `http://127.0.0.1:12345/mcp`. If it is not running, the "Craft AI" entry appears in the MCP list but cannot connect. Two helpers keep it alive with no manual effort:
+Unlike the per-app stdio CLIs, which Bionic spawns on demand, the unified HTTP bridge is a **long-running process** that must already be listening when Bionic connects to `http://127.0.0.1:12345/mcp`. If it is not running, the "Craft AI" entry appears in the MCP list but cannot connect.
 
-### Launcher script - `start-craft-ai-mcp.bat`
+The bridge ships no auto-start helper (no launcher script or scheduled task). Startup is **user-initiated** so a person makes the choice explicitly — matching the consent design in #164:
 
-Lives next to the binary at `C:\Programs\craft-ai-integrations\start-craft-ai-mcp.bat`. It is idempotent: if something is already listening on port 12345 it exits quietly (no-op); otherwise it starts `craft-ai-mcp.exe` in a minimized window. Safe to double-click repeatedly.
+- **ArtCraft Launcher.** The launcher's local-services controls start/stop the bridge and register it with the host. This is the intended path for installed users (see craft-ai-integrations#164).
+- **Manually, or from chat.** Run the binary directly, or paste an install prompt into an agent chat so it starts on your behalf (NVIDIA-style):
 
-### Logon scheduled task - `CraftAI-MCP-Bridge`
-
-A current-user Task Scheduler entry that runs the launcher at every interactive logon, so the bridge auto-starts after a reboot with no admin rights:
-
-```powershell
-$action   = New-ScheduledTaskAction -Execute 'C:\Programs\craft-ai-integrations\start-craft-ai-mcp.bat'
-$trigger  = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName 'CraftAI-MCP-Bridge' -Action $action -Trigger $trigger -Principal $principal
-```
-
-Remove it with `Unregister-ScheduledTask -TaskName 'CraftAI-MCP-Bridge' -Confirm:$false`.
+  ```sh
+  # default: listens on http://127.0.0.1:12345/mcp
+  ./target/debug/craft-ai-mcp
+  ```
 
 ### Verifying it is up
 
@@ -198,8 +193,9 @@ folders into the global skills directory by hand — see the skill-management gu
   revision (the previously hardcoded `2025-03-07` was rejected by LM Studio). Revisions that require
   `_meta` inside `params` (`2025-11-25`, `2026-07-28`) are a client-side concern; Bionic's client
   must be checked against this.
-- **Secrets are in-memory (v1).** No real keychain yet; remote destinations report "what is missing"
-  rather than failing silently.
+- **Secrets from env then OS keychain.** Keys come from `CRAFT_AI_SECRET_<REF>` environment variables,
+  then the OS keychain. When neither has a key for a remote destination, that tool reports "what is
+  missing" (the prompt-to-install signal) rather than failing silently.
 - **Click/reference inputs not expressible.** App-specific inputs (e.g. a selection tool's clicks)
   cannot be passed through plain JSON args in v1; the router rejects them with a clear message.
 - **Localhost only.** The bridge binds `127.0.0.1`; it is not intended to be exposed on a network.
@@ -210,7 +206,7 @@ folders into the global skills directory by hand — see the skill-management gu
 ## Security notes
 
 - Consent is honored exactly as in the apps: local connections never prompt; remote destinations need
-  an agreement (or auto-grant when `auto_consent` is true, which is how this bridge runs for trusted
-  local hosts). The router surfaces `NeedsConsent` with a disclosure naming *kinds and sizes* of data
-  that would leave the machine — never contents.
+  an agreement. The bridge runs **fail-closed** (`auto_consent = false`): it never grants consent on
+  its own — a person approves in the ArtCraft Launcher (see #164). The router surfaces `NeedsConsent`
+  with a disclosure naming *kinds and sizes* of data that would leave the machine — never contents.
 - Discovery reads only public GitHub metadata; it sends no keys or secrets.
