@@ -23,6 +23,8 @@ pub mod apps;
 
 /// Catalogue: normalizes the shared feature list into flat tool descriptors used by `tools/list`.
 pub mod catalogue;
+/// Cli: the `craft-ai-mcp` command line (`--stdio`, HTTP), callable from other binaries.
+pub mod cli;
 /// Discovery: fetches the storytold org's public repositories so newly landed Craft apps can be noticed.
 pub mod discovery;
 /// Router: routes one MCP `tools/call` through the shared client into a Craft AI job.
