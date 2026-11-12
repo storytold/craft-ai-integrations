@@ -125,27 +125,39 @@ fn a_long_comparison_is_read_without_keeping_it() {
 }
 
 #[test]
-fn a_short_commit_id_must_match_the_commit_github_names() {
-    let server = github(status("behind"));
-    assert_eq!(
-        resolve(&server, "https://github.com/owner/Pack/tree/0123456")
-            .unwrap()
-            .commit,
-        COMMIT
-    );
-    let server = github(status("behind"));
-    let e = resolve(&server, "https://github.com/owner/Pack/tree/fedcba9").unwrap_err();
-    assert!(e.message.contains("pasted commit"), "{}", e.message);
-    assert!(!paths(&server).contains(&compare_path()));
+fn a_short_commit_id_of_any_length_is_checked_too() {
+    // GitHub accepts any unambiguous prefix, so a six- or four-character id must not slip past
+    // the check that a seven-character one gets.
+    for short in ["0123456", "012345", "0123", "0123456789AB"] {
+        let server = github(status("ahead"));
+        let e = resolve(
+            &server,
+            &format!("https://github.com/owner/Pack/tree/{short}"),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("main line"), "{short}: {}", e.message);
+        let server = github(status("behind"));
+        let c = resolve(
+            &server,
+            &format!("https://github.com/owner/Pack/tree/{short}"),
+        )
+        .unwrap();
+        assert_eq!(c.commit, COMMIT, "{short}");
+        assert!(paths(&server).contains(&compare_path()), "{short}");
+    }
 }
 
 #[test]
 fn branch_and_tag_names_and_the_default_branch_need_no_comparison() {
+    // Each of these resolves to a commit that does not begin with the name, so GitHub read it
+    // as one of the repository's own branches or tags, even the ones made of hex digits.
     for address in [
         "https://github.com/owner/Pack",
         "https://github.com/owner/Pack/tree/dev-1.2",
         "https://github.com/owner/Pack/tree/v1.0.0",
         "https://github.com/owner/Pack/tree/abc123",
+        "https://github.com/owner/Pack/tree/2024",
+        "https://github.com/owner/Pack/tree/fedcba9",
     ] {
         let server = github(None);
         resolve(&server, address).unwrap();

@@ -55,12 +55,13 @@ impl Resolver {
             .ok_or_else(|| refused("the source did not name a commit"))?;
         // GitHub serves any commit of a repository's forks under the repository's own name, so
         // a pasted commit id could be a fork's code shown as this repository's. Branch and tag
-        // names are the repository's own; a commit id is accepted only when it is on the
-        // repository's default branch.
-        if let Some(pasted) = spec.reference.as_deref().filter(|r| names_a_commit(r)) {
-            if !sha.starts_with(&pasted.to_ascii_lowercase()) {
-                return Err(refused("the source did not name the pasted commit"));
-            }
+        // names are the repository's own; a commit id, however short, is accepted only when it
+        // is on the repository's default branch.
+        if spec
+            .reference
+            .as_deref()
+            .is_some_and(|r| names_a_commit(r, sha))
+        {
             let main = info
                 .get("default_branch")
                 .and_then(Value::as_str)
@@ -125,10 +126,15 @@ struct Comparison {
     status: String,
 }
 
-/// A reference written as a commit id (7 to 40 hex digits) rather than a branch or tag name.
-/// A branch whose name looks like this is treated as a commit too, which only adds a check.
-fn names_a_commit(reference: &str) -> bool {
-    (7..=40).contains(&reference.len()) && reference.bytes().all(|b| b.is_ascii_hexdigit())
+/// Whether GitHub read `reference` as a commit id: hex digits that begin the commit `sha` it
+/// resolved to. GitHub accepts any unambiguous prefix, even a few characters, so the length
+/// decides nothing. A name GitHub matched as a branch or tag resolves to a commit that does not
+/// begin with that name, and is the repository's own. A branch or tag whose name happens to
+/// begin the commit it points at is checked as a commit too, which only adds a check.
+fn names_a_commit(reference: &str, sha: &str) -> bool {
+    !reference.is_empty()
+        && reference.bytes().all(|b| b.is_ascii_hexdigit())
+        && sha.starts_with(&reference.to_ascii_lowercase())
 }
 
 /// One short clean line: no control characters, at most 120 characters.
