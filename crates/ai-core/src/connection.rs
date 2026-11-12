@@ -19,7 +19,9 @@ use crate::model::ModelInfo;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Locality {
-    /// Loopback server or in-process model: nothing leaves the machine.
+    /// Loopback server or in-process model: nothing leaves the machine. A job that sends a key
+    /// over plain http to such a server is still disclosed as remote (see
+    /// `Disclosure::locality_for`), because another account may hold the port.
     Local,
     Remote,
 }

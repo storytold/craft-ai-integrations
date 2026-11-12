@@ -341,7 +341,11 @@ fn a_declared_model_runs_with_the_named_header_from_the_saved_connection() {
     assert_eq!(ready.billing, Billing::Unknown);
     assert_eq!(client.choices(&role()).unwrap().len(), 1);
     let plan = client.plan(&role(), prompt()).unwrap();
-    let job = client.start(&plan, &ConsentLedger::default()).unwrap();
+    // The key goes over plain http to this computer, so the person is asked first.
+    let mut ledger = ConsentLedger::default();
+    assert!(plan.needs_consent(&ledger));
+    ledger.grant(plan.disclosure());
+    let job = client.start(&plan, &ledger).unwrap();
     let done = job
         .wait(Duration::from_millis(5), Duration::from_secs(10))
         .unwrap();
