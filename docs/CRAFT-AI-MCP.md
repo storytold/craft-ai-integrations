@@ -69,7 +69,7 @@ There is no network listener, so nothing else on the computer can reach it. A cl
 like this (the launcher writes it, see below):
 
 ```json
-{ "mcpServers": { "craft-apps": { "command": "C:/.../craft-ai-mcp.exe", "args": ["--stdio"] } } }
+{ "mcpServers": { "ArtCraft": { "command": "C:/.../craft-ai-mcp.exe", "args": ["--stdio"] } } }
 ```
 
 The command line is also a library function, `craft_ai_mcp::cli::main(args)`: the ArtCraft
