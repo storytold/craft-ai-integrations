@@ -666,7 +666,8 @@ WS = [
     ('steps-not-in-plan', CLIENT_RUN, 'if !steps.is_empty() {\n            disclosure.locality = Locality::Remote;', 'if false {\n            disclosure.locality = Locality::Remote;', CL, 'comfyui_steps', 'nothing_is_sent_until'),
     ('steps-stay-local', CLIENT_RUN, '            disclosure.locality = Locality::Remote;\n', '', CL, 'comfyui_steps', 'nothing_is_sent_until'),
     ('steps-change-not-rechecked', CLIENT_RUN, 'if self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps {', 'if false {', CL, 'comfyui_steps', 'changed_after_planning'),
-    ('steps-other-providers-checked', CLIENT_RUN, 'if connection.provider != "comfyui" {', 'if connection.provider == "never" {', CL, 'comfyui_steps', 'not_comfyui'),
+    ('steps-provider-case-sensitive', CLIENT_RUN, '!connection.provider.eq_ignore_ascii_case("comfyui")', 'connection.provider != "comfyui"', CL, 'comfyui_steps', 'mixed_case_comfyui_names'),
+    ('steps-other-providers-checked', CLIENT_RUN, 'if !connection.provider.eq_ignore_ascii_case("comfyui") {', 'if connection.provider == "never" {', CL, 'comfyui_steps', 'not_comfyui'),
     ('steps-consent-ignores-steps', CONSENT_CORE, '.all(|s| self.unknown_steps.contains(s))', '.all(|_| true)', M, 'consent_steps', 'agreement'),
     ('steps-not-recorded', CONSENT_CORE, '                unknown_steps: d.unknown_steps.clone(),', '                unknown_steps: vec![],', M, 'consent_steps', 'covers_the_steps'),
 ]

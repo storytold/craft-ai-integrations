@@ -115,3 +115,47 @@ fn steps_whose_names_share_a_long_start_are_agreed_to_separately() {
     assert!(e.message.contains("workflow changed"), "{}", e.message);
     assert!(!w.queued());
 }
+
+/// Provider names are case-insensitive in the factory, so every accepted ComfyUI spelling
+/// must disclose the same add-on steps and require the same agreement.
+#[test]
+fn mixed_case_comfyui_names_disclose_add_on_steps() {
+    for provider in ["ComfyUI", "COMFYUI"] {
+        let w = World::on(provider);
+        w.write(&["HttpPost"]);
+        let plan = w.client.plan(&role(), request()).unwrap();
+        assert_eq!(plan.disclosure().locality, Locality::Remote, "{provider}");
+        assert_eq!(
+            plan.disclosure().unknown_steps,
+            vec!["HttpPost".to_owned()],
+            "{provider}"
+        );
+        assert!(plan.needs_consent(&ConsentLedger::default()), "{provider}");
+        assert!(w.server.recorded().is_empty(), "planning sent a request");
+    }
+}
+
+/// A mixed-case provider reaches the real adapter only after the named add-on steps are
+/// agreed to; without agreement not even a metadata request may reach the server.
+#[test]
+fn mixed_case_comfyui_names_cannot_queue_without_consent() {
+    for provider in ["ComfyUI", "COMFYUI"] {
+        let w = World::on(provider);
+        w.write(&["HttpPost"]);
+        let plan = w.client.plan(&role(), request()).unwrap();
+        let error = w
+            .client
+            .start(&plan, &ConsentLedger::default())
+            .expect_err("an add-on step needs agreement with every provider spelling");
+        assert_eq!(error.kind, ErrorKind::ConsentRequired, "{provider}");
+        assert!(
+            !w.queued(),
+            "an unagreed workflow was queued for {provider}"
+        );
+        assert!(w.server.recorded().is_empty(), "{provider}");
+        let mut ledger = ConsentLedger::default();
+        ledger.grant(plan.disclosure());
+        w.client.start(&plan, &ledger).unwrap();
+        assert!(w.queued(), "the agreed workflow did not run for {provider}");
+    }
+}

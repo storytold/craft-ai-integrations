@@ -164,7 +164,9 @@ impl AiClient {
     /// The steps of a ComfyUI workflow that are not known to keep data on this computer; empty
     /// for every other kind of connection, and when the workflow cannot be read.
     fn unknown_steps(&self, connection: &Connection, model: &ModelId) -> Vec<String> {
-        if connection.provider != "comfyui" {
+        // Match the factory's case-insensitive name so a mixed-case connection cannot skip
+        // the agreement required for the same workflow.
+        if !connection.provider.eq_ignore_ascii_case("comfyui") {
             return Vec::new();
         }
         self.factory
