@@ -34,7 +34,7 @@ pub struct Listing {
 pub fn list_models(config: &OpenAiConfig) -> Result<Listing, AiError> {
     let provider = crate::OpenAiProvider::new(config.clone())?;
     let http: &Http = &provider.http;
-    let reply = http.get_json("/models")?;
+    let reply = http.get_json("/models", crate::http::MODELS_REPLY)?;
     let entries = reply.get("data").and_then(Value::as_array).ok_or_else(|| {
         http.scrub(AiError::new(
             ErrorKind::Provider,
