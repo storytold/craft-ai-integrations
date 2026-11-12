@@ -236,7 +236,7 @@ The rules for your prompt:
 
 ## 8. Start, watch, cancel
 
-`start` checks consent again, reads the key (only now), builds the adapter and submits the
+`start` checks consent again, reads the key to use for the job, builds the adapter and submits the
 job. It returns a `Job` you poll.
 
 <!-- snippet: job -->
