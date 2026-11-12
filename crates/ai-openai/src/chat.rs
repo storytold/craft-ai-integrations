@@ -177,12 +177,12 @@ pub(crate) fn error_text(e: &Value) -> String {
 pub(crate) fn events_for(c: &Completion, structured: bool) -> Result<Vec<Event>, AiError> {
     let mut events = Vec::new();
     if structured {
-        let parsed: Value = serde_json::from_str(c.text.trim()).map_err(|_| {
-            AiError::new(
-                ErrorKind::Provider,
-                "the model was asked for structured output but did not return valid JSON",
-            )
-        })?;
+        // The text is the model's own JSON, re-read here, so it gets the same budget as a reply.
+        let parsed = crate::http::parse_json(
+            c.text.trim().as_bytes(),
+            crate::http::CHAT_REPLY.parsed,
+            "the model was asked for structured output but did not return valid JSON",
+        )?;
         let bytes = serde_json::to_vec(&parsed)
             .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode the JSON reply"))?;
         events.push(Event::Output(Output {

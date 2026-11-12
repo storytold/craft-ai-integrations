@@ -173,7 +173,7 @@ impl Provider for OpenAiProvider {
         if let Some(list) = &self.models {
             return Ok(list.clone());
         }
-        let v = self.http.get_json("/models")?;
+        let v = self.http.get_json("/models", http::MODELS_REPLY)?;
         let openrouter = self.http.is_openrouter();
         let mut found: Vec<ModelInfo> = v
             .get("data")

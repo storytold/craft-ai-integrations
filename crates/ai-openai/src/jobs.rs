@@ -243,7 +243,7 @@ fn run_image(
     retry: Backoff,
 ) -> Result<Option<Usage>, AiError> {
     let resp = send(http, cell, retry, p.path, &p.content_type, &p.body)?;
-    let v = http.read_json(resp)?;
+    let v = http.read_json(resp, crate::http::IMAGES_REPLY)?;
     if cell.is_cancelled() {
         return Ok(None);
     }
@@ -275,7 +275,7 @@ fn run_chat(
         return Ok(None);
     }
     if !p.stream {
-        let completion = chat::parse_completion(&http.read_json(resp)?)?;
+        let completion = chat::parse_completion(&http.read_json(resp, crate::http::CHAT_REPLY)?)?;
         for event in chat::events_for(&completion, p.structured)? {
             cell.push(event);
         }
