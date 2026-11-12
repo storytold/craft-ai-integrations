@@ -651,7 +651,24 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF}
+# NV2: a library workflow using steps not known to keep data local is named and asked about.
+STEPS = C + 'ai-comfyui/src/local_steps.rs'
+CONSENT_CORE = C + 'ai-core/src/consent.rs'
+CLIENT_RUN = C + 'ai-client/src/client_run.rs'
+WS = [
+    ('steps-any-class-known', STEPS, '.filter(|class| !KNOWN_LOCAL_STEPS.contains(class))', '.filter(|_| false)', 'craft-ai-comfyui', 'local_steps', 'every_other_step'),
+    ('steps-unnamed-dropped', STEPS, '"(unnamed step)".to_owned()', '"LoadImage".to_owned()', 'craft-ai-comfyui', 'local_steps', 'without_a_readable_name'),
+    ('steps-names-not-cleaned', STEPS, '.filter(|c| !c.is_control())', '.filter(|_| true)', 'craft-ai-comfyui', 'local_steps', 'one_short_clean_line'),
+    ('steps-names-uncut', STEPS, '.take(MAX_NAME_CHARS)', '.take(usize::MAX)', 'craft-ai-comfyui', 'local_steps', 'one_short_clean_line'),
+    ('steps-not-in-plan', CLIENT_RUN, 'if !steps.is_empty() {\n            disclosure.locality = Locality::Remote;', 'if false {\n            disclosure.locality = Locality::Remote;', CL, 'comfyui_steps', 'nothing_is_sent_until'),
+    ('steps-stay-local', CLIENT_RUN, '            disclosure.locality = Locality::Remote;\n', '', CL, 'comfyui_steps', 'nothing_is_sent_until'),
+    ('steps-change-not-rechecked', CLIENT_RUN, 'if self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps {', 'if false {', CL, 'comfyui_steps', 'changed_after_planning'),
+    ('steps-other-providers-checked', CLIENT_RUN, 'if connection.provider != "comfyui" {', 'if connection.provider == "never" {', CL, 'comfyui_steps', 'not_comfyui'),
+    ('steps-consent-ignores-steps', CONSENT_CORE, '.all(|s| self.unknown_steps.contains(s))', '.all(|_| true)', M, 'consent_steps', 'agreement'),
+    ('steps-not-recorded', CONSENT_CORE, '                unknown_steps: d.unknown_steps.clone(),', '                unknown_steps: vec![],', M, 'consent_steps', 'covers_the_steps'),
+]
+
+GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'ws': WS}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

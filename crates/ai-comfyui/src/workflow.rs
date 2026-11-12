@@ -359,6 +359,12 @@ impl Workflow {
         ModelInfo::new(self.id.clone(), self.id.as_str()).with(spec)
     }
 
+    /// The steps of this workflow that are not known to keep data on this computer, sorted and
+    /// named once each (see [`crate::local_steps`]).
+    pub fn unknown_steps(&self) -> Vec<String> {
+        crate::local_steps::unknown_steps(&self.graph)
+    }
+
     /// The id of this workflow, which is also its model id.
     pub fn id(&self) -> &ModelId {
         &self.id

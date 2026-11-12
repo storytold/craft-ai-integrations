@@ -15,7 +15,7 @@ use std::time::Duration;
 use craft_ai_artcraft::{ArtCraftConfig, ArtCraftProvider};
 use craft_ai_bfl::{BflConfig, BflProvider};
 use craft_ai_comfyui::{ComfyConfig, ComfyProvider, WorkflowLibrary};
-use craft_ai_core::{AiError, Backoff, Connection, Locality, Provider, SecretString};
+use craft_ai_core::{AiError, Backoff, Connection, Locality, ModelId, Provider, SecretString};
 use craft_ai_features::GpuVendor;
 use craft_ai_gemini::{GeminiConfig, GeminiProvider};
 use craft_ai_media::{MediaStore, MediaStoreConfig, PersistingProvider};
@@ -299,6 +299,22 @@ impl ProviderFactory {
         MediaStore::new(config.clone())?;
         self.media = Some(config);
         Ok(self)
+    }
+
+    /// The steps of the ComfyUI workflow `model` that are not known to keep data on this
+    /// computer, read from the library the ComfyUI adapter reads. `None` when the library or the
+    /// workflow cannot be read; building the adapter then fails the same way, so nothing is sent.
+    pub(crate) fn comfyui_unknown_steps(&self, model: &ModelId) -> Option<Vec<String>> {
+        let library = match &self.comfyui_library {
+            Some(dir) => WorkflowLibrary::at(dir).ok()?,
+            None => WorkflowLibrary::at_default_location()?,
+        };
+        library
+            .load()
+            .ok()?
+            .into_iter()
+            .find(|w| w.id() == model)
+            .map(|w| w.unknown_steps())
     }
 
     /// Registers the ComfyUI adapter, which needs a workflow library and may save outputs to

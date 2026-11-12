@@ -52,7 +52,28 @@ pub fn disclosure_lines(d: &Disclosure) -> Vec<String> {
     if !d.param_names.is_empty() {
         lines.push(format!("settings: {}", d.param_names.join(", ")));
     }
+    if !d.unknown_steps.is_empty() {
+        lines.push(unknown_steps_line(&d.unknown_steps));
+    }
     lines
+}
+
+/// The most step names one line lists before it says how many more there are.
+const STEPS_SHOWN: usize = 8;
+
+/// Says the workflow has steps this app cannot vouch for, naming them, because such a step may
+/// send what it is given off this computer.
+pub fn unknown_steps_line(steps: &[String]) -> String {
+    let mut names = steps
+        .iter()
+        .take(STEPS_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if steps.len() > STEPS_SHOWN {
+        names.push_str(&format!(" and {} more", steps.len() - STEPS_SHOWN));
+    }
+    format!("the workflow uses add-on steps that may send this off this computer: {names}")
 }
 
 /// The headline above the list.
@@ -151,7 +172,29 @@ mod tests {
             destination: "https://api.example.com".into(),
             items,
             param_names: params.iter().map(|s| (*s).to_owned()).collect(),
+            unknown_steps: vec![],
         }
+    }
+
+    #[test]
+    fn unknown_workflow_steps_are_named_and_a_long_list_is_cut() {
+        let mut d = disclosure(vec![], &[]);
+        d.unknown_steps = vec!["HttpPost".into(), "WebhookSend".into()];
+        assert_eq!(
+            disclosure_lines(&d).last().map(String::as_str),
+            Some(
+                "the workflow uses add-on steps that may send this off this computer: HttpPost, WebhookSend"
+            )
+        );
+        let many: Vec<String> = (0..11).map(|i| format!("Step{i}")).collect();
+        let line = unknown_steps_line(&many);
+        assert!(line.ends_with("Step7 and 3 more"), "{line}");
+        assert!(!line.contains("Step8"), "{line}");
+        assert!(
+            disclosure_lines(&disclosure(vec![], &[]))
+                .iter()
+                .all(|l| !l.contains("add-on"))
+        );
     }
 
     #[test]

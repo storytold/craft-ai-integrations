@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use craft_ai_core::payload::Limits;
 use craft_ai_core::{
-    AiError, Connection, ConsentLedger, CostEstimate, Disclosure, ErrorKind, ModelId, Provider,
-    Request, Role,
+    AiError, Connection, ConsentLedger, CostEstimate, Disclosure, ErrorKind, Locality, ModelId,
+    Provider, Request, Role,
 };
 use craft_ai_native::secrets::secret_for;
 
@@ -34,6 +34,13 @@ impl AiClient {
         self.refuse_unsupported_route(resolved.connection, &resolved.model.id, &request)?;
         let mut disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
         crate::disclosed_size::measure_local_files(&mut disclosure, &request);
+        // A workflow on ComfyUI on this computer can still pass the picture and prompt to an
+        // add-on step that sends them elsewhere, so such steps are named and the person asked.
+        let steps = self.unknown_steps(resolved.connection, &resolved.model.id);
+        if !steps.is_empty() {
+            disclosure.locality = Locality::Remote;
+            disclosure.unknown_steps = steps;
+        }
         let estimate = craft_ai_core::cost::estimate(
             resolved.model.pricing.as_ref(),
             &request,
@@ -143,8 +150,26 @@ impl AiClient {
         // A plan can be made by another client of this app whose build says otherwise, so this
         // build's own check runs again before the key is read.
         self.refuse_unsupported_route(&plan.connection, &plan.model, &plan.request)?;
+        // The agreement named the workflow's steps as planned; a workflow changed since then
+        // could add a step nobody agreed to.
+        if self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps {
+            return Err(AiError::invalid(
+                "the workflow changed after this job was planned; start it again",
+            ));
+        }
         let secret = secret_for(&*self.secrets, &plan.connection)?;
         self.factory.build(&plan.connection, secret)
+    }
+
+    /// The steps of a ComfyUI workflow that are not known to keep data on this computer; empty
+    /// for every other kind of connection, and when the workflow cannot be read.
+    fn unknown_steps(&self, connection: &Connection, model: &ModelId) -> Vec<String> {
+        if connection.provider != "comfyui" {
+            return Vec::new();
+        }
+        self.factory
+            .comfyui_unknown_steps(model)
+            .unwrap_or_default()
     }
 
     /// Records a provider-stage refusal only after app scope and consent have passed.

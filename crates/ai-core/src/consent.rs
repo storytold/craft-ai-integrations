@@ -9,8 +9,10 @@
 //! text does not renew an image permission that has run out. Records saved before capabilities
 //! were scoped
 //! cover nothing, so they ask once more. The clock is the caller's (unix seconds). Local
-//! connections never need consent. The disclosure names exactly what this app sends, which is why
-//! consent stays in the app even when the key came from the launcher.
+//! disclosures never need consent; a local workflow with steps not known to stay local is
+//! planned as remote and names those steps, which an agreement must name too. The disclosure
+//! names exactly what this app sends, which is why consent stays in the app even when the key
+//! came from the launcher.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +45,11 @@ pub struct Disclosure {
     pub items: Vec<DisclosureItem>,
     /// Parameter names only, never values.
     pub param_names: Vec<String>,
+    /// Steps of a local workflow that are not known to keep data on this computer (an add-on
+    /// can send what it is given anywhere). Agreement names these exactly: a record agreed for
+    /// other steps, or for none, does not cover them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown_steps: Vec<String>,
 }
 
 impl Disclosure {
@@ -76,6 +83,7 @@ impl Disclosure {
                 })
                 .collect(),
             param_names: request.params.keys().cloned().collect(),
+            unknown_steps: Vec::new(),
         }
     }
 
@@ -106,16 +114,23 @@ pub struct ConsentRecord {
     /// revoked.
     #[serde(default)]
     pub expires_at: Option<u64>,
+    /// The workflow steps agreed to, by name (see [`Disclosure::unknown_steps`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown_steps: Vec<String>,
 }
 
 impl ConsentRecord {
-    /// Same app, connection, destination and capability. A record with no capability (from before
-    /// consent was scoped to one) matches nothing.
+    /// Same app, connection, destination and capability, and every unknown step the disclosure
+    /// names was agreed to. A record with no capability (from before consent was scoped to one)
+    /// matches nothing.
     fn covers(&self, d: &Disclosure) -> bool {
         self.app == d.app
             && self.connection == d.connection
             && self.destination == d.destination
             && self.capability.as_ref() == Some(&d.capability)
+            && d.unknown_steps
+                .iter()
+                .all(|s| self.unknown_steps.contains(s))
     }
 }
 
@@ -186,6 +201,7 @@ impl ConsentLedger {
                 capability: Some(d.capability.clone()),
                 kinds,
                 expires_at,
+                unknown_steps: d.unknown_steps.clone(),
             });
         }
     }
