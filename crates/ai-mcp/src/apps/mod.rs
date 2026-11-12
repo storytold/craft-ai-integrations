@@ -31,6 +31,11 @@ pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(600);
 pub const MAX_CALL_TIMEOUT: Duration = Duration::from_secs(3600);
 
 type Connector = dyn Fn(&AppEntry) -> Result<Conn, String> + Send + Sync;
+/// Whether the person still lets agents use the Craft apps ([`registry::switched_on`]).
+type Switch = dyn Fn() -> bool + Send + Sync;
+
+/// What an agent is told while the launcher's switch is off.
+pub const SWITCHED_OFF: &str = "AI agents are turned off for the Craft apps. Turn on ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps, then try again.";
 /// One app's tools, or why they could not be read.
 type ToolList = Result<Arc<Vec<Value>>, String>;
 
@@ -46,6 +51,7 @@ pub struct Hub {
     notes: Vec<String>,
     slots: Vec<Mutex<Slot>>,
     connect: Box<Connector>,
+    switch: Box<Switch>,
 }
 
 impl std::fmt::Debug for Hub {
@@ -57,9 +63,30 @@ impl std::fmt::Debug for Hub {
 }
 
 impl Hub {
-    /// A hub that starts each app's real CLI.
+    /// A hub that starts each app's real CLI while the launcher's switch is on.
     pub fn new(apps: Vec<AppEntry>, notes: Vec<String>) -> Self {
         Self::with_connector(apps, notes, Box::new(child::spawn))
+            .with_switch(Box::new(registry::switched_on))
+    }
+
+    /// Ask `switch` before every tool call (tests; [`Hub::new`] asks the launcher's app list).
+    pub fn with_switch(mut self, switch: Box<Switch>) -> Self {
+        self.switch = switch;
+        self
+    }
+
+    /// `Err` while the person has turned agents off. Every app server this gateway started is
+    /// stopped then, so nothing keeps running on the apps after the switch goes off.
+    pub fn check_switch(&self) -> Result<(), String> {
+        if (self.switch)() {
+            return Ok(());
+        }
+        for slot in &self.slots {
+            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.conn = None;
+            slot.tools = None;
+        }
+        Err(SWITCHED_OFF.into())
     }
 
     /// A hub with its own way to connect to an app (tests).
@@ -74,6 +101,7 @@ impl Hub {
             notes,
             slots,
             connect,
+            switch: Box::new(|| true),
         }
     }
 

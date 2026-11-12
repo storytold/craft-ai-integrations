@@ -382,3 +382,45 @@ fn an_app_that_stopped_has_its_tools_read_again() {
     );
     assert_eq!(starts.load(Ordering::SeqCst), 2);
 }
+
+/// Turning agents off in the launcher refuses every tool at once, in a gateway a client already
+/// runs, and stops the app servers it started; turning them on again starts them anew.
+#[test]
+fn the_launchers_switch_is_asked_before_every_call() {
+    use std::sync::atomic::AtomicBool;
+    let starts = Arc::new(AtomicUsize::new(0));
+    let on = Arc::new(AtomicBool::new(true));
+    let switch = on.clone();
+    let h = hub(starts.clone()).with_switch(Box::new(move || switch.load(Ordering::SeqCst)));
+    let call = |name: &str, args: Value| tools::call(&h, name, &args).unwrap();
+    let args = json!({"app": "photocraft", "tool": "layer.new", "arguments": {}});
+    assert_eq!(call(CALL_TOOL, args.clone()).get("isError"), None);
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    on.store(false, Ordering::SeqCst);
+    for (name, a) in [
+        (LIST_APPS, json!({})),
+        (FIND_TOOLS, json!({"query": "blur"})),
+        (CALL_TOOL, args.clone()),
+    ] {
+        let r = call(name, a);
+        assert_eq!(r["isError"], true, "{name}");
+        assert!(
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("turned off"),
+            "{name}: {r}"
+        );
+    }
+    on.store(true, Ordering::SeqCst);
+    assert_eq!(call(CALL_TOOL, args).get("isError"), None);
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        2,
+        "the stopped server is started anew"
+    );
+    assert!(
+        tools::call(&h, "not_a_gateway_tool", &json!({})).is_none(),
+        "other names stay unknown"
+    );
+}

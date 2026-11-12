@@ -9,8 +9,10 @@
 //!     "command": "C:/Program Files/PhotoCraft/photocraft-cli.exe", "args": ["mcp"] } ] }
 //! ```
 //!
-//! Without that file (a developer build, a CLI installed by hand) the gateway looks for each known
-//! app's `<id>-cli` on `PATH` and starts it as `<id>-cli mcp`, the form every Craft CLI accepts.
+//! The file is also the person's consent: the launcher writes it only while Settings › AI agents ›
+//! *Let AI agents use Craft apps* is on and removes it when that is turned off. Without it the
+//! gateway offers no app, and it asks again before every tool call ([`switched_on`]), so turning
+//! the switch off stops a gateway a client already runs.
 
 use std::path::{Path, PathBuf};
 
@@ -177,41 +179,22 @@ pub fn known_name(id: &str) -> Option<&'static str> {
     KNOWN_APPS.iter().find(|(k, _)| *k == id).map(|(_, n)| *n)
 }
 
-/// Each known app whose `<id>-cli` is found in one of `path_dirs`, started as `<id>-cli mcp`.
-pub fn from_path_dirs(path_dirs: &[PathBuf]) -> Vec<AppEntry> {
-    KNOWN_APPS
-        .iter()
-        .filter_map(|(id, name)| {
-            let file = format!("{id}-cli{}", std::env::consts::EXE_SUFFIX);
-            path_dirs
-                .iter()
-                .map(|d| d.join(&file))
-                .find(|p| p.is_file())
-                .map(|command| AppEntry {
-                    id: (*id).to_string(),
-                    name: (*name).to_string(),
-                    command,
-                    args: vec!["mcp".to_string()],
-                })
-        })
-        .collect()
+/// The apps to offer: the launcher's list, or none while agents are turned off. The second value
+/// says what was left out and why.
+pub fn discover() -> Found {
+    let Some(dir) = mcp_dir() else {
+        return (Vec::new(), vec!["no per-user configuration folder".into()]);
+    };
+    match load(&dir) {
+        Ok(Some(found)) => found,
+        Ok(None) => (Vec::new(), vec![super::SWITCHED_OFF.into()]),
+        Err(e) => (Vec::new(), vec![e]),
+    }
 }
 
-/// The apps to offer: the launcher's list when there is one, otherwise the known apps on `PATH`.
-/// The second value says what was left out and why.
-pub fn discover() -> Found {
-    let mut notes = Vec::new();
-    if let Some(dir) = mcp_dir() {
-        match load(&dir) {
-            Ok(Some(found)) => return found,
-            Ok(None) => {}
-            Err(e) => notes.push(e),
-        }
-    }
-    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
-        .unwrap_or_default();
-    (from_path_dirs(&path_dirs), notes)
+/// Whether the launcher's app list is there: agents are turned on.
+pub fn switched_on() -> bool {
+    mcp_dir().is_some_and(|d| d.join(APPS_FILE).is_file())
 }
 
 #[cfg(test)]
@@ -298,17 +281,5 @@ mod tests {
         assert!(load(dir.path()).unwrap().is_none());
         std::fs::create_dir(dir.path().join(APPS_FILE)).unwrap();
         assert!(load(dir.path()).is_err());
-    }
-
-    #[test]
-    fn finds_known_clis_on_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = format!("pdfcraft-cli{}", std::env::consts::EXE_SUFFIX);
-        std::fs::write(dir.path().join(&file), b"").unwrap();
-        let apps = from_path_dirs(&[dir.path().to_path_buf()]);
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].id, "pdfcraft");
-        assert_eq!(apps[0].name, "PdfCraft");
-        assert_eq!(apps[0].args, vec!["mcp"]);
     }
 }

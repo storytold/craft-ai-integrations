@@ -70,6 +70,12 @@ fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
 
 /// Run gateway tool `name`. `None` when `name` is not one of the gateway's tools.
 pub fn call(hub: &Hub, name: &str, args: &Value) -> Option<Value> {
+    if !super::GATEWAY_TOOLS.contains(&name) {
+        return None;
+    }
+    if let Err(e) = hub.check_switch() {
+        return Some(error_result(&e));
+    }
     let result = match name {
         LIST_APPS => Ok(text_result(&hub.list_apps())),
         FIND_TOOLS => find(hub, args),
