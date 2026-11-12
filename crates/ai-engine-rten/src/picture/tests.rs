@@ -192,7 +192,7 @@ fn a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding() {
         let mut out = Vec::new();
         let mut encoder = Encoder::new(&mut out, 100);
         for i in 0..n {
-            let mut seg = super::EXTENDED_XMP_PREFIX.to_vec();
+            let mut seg = craft_ai_core::jpeg::EXTENDED_XMP_PREFIX.to_vec();
             seg.extend_from_slice(&[b'0'; 32]);
             seg.extend_from_slice(&n.to_be_bytes());
             seg.extend_from_slice(&i.to_be_bytes());
@@ -204,13 +204,13 @@ fn a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding() {
             .unwrap();
         out
     };
-    let fine = with_fragments(super::MAX_XMP_FRAGMENTS as u32);
+    let fine = with_fragments(craft_ai_core::jpeg::MAX_XMP_FRAGMENTS as u32);
     assert_eq!(
-        super::extended_xmp_fragments(&fine),
-        super::MAX_XMP_FRAGMENTS
+        craft_ai_core::jpeg::extended_xmp_fragments(&fine),
+        craft_ai_core::jpeg::MAX_XMP_FRAGMENTS
     );
     assert_eq!(decode_jpeg(&fine).unwrap().width, 16);
-    let hostile = with_fragments(super::MAX_XMP_FRAGMENTS as u32 + 1);
+    let hostile = with_fragments(craft_ai_core::jpeg::MAX_XMP_FRAGMENTS as u32 + 1);
     let e = decode_jpeg(&hostile).err().unwrap();
     assert!(e.message.contains("could not be read"), "{}", e.message);
 }

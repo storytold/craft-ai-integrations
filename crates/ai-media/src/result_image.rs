@@ -11,8 +11,11 @@
 //! `image` crate, which the workspace already uses for the local engines. Their decodes share one
 //! process-wide memory budget ([`DECODE_BUDGET`]), so many workers finishing at once wait their
 //! turn instead of each holding a full frame. The JPEG decoder fills in a picture cut short rather
-//! than failing, so a JPEG's marker structure must also reach its end-of-image marker.
+//! than failing, so a JPEG's marker structure must also reach its end-of-image marker, and a JPEG
+//! with more Extended XMP fragments than the shared cap is refused before the decoder (whose header
+//! parse costs quadratic time in their number) or the budget is reached.
 
+use craft_ai_core::jpeg::too_many_xmp_fragments;
 use image::{ImageFormat, ImageReader, Limits};
 use std::io::Cursor;
 use std::sync::{Condvar, Mutex, PoisonError};
@@ -73,7 +76,11 @@ pub fn decoded_result(data: &[u8]) -> Option<&'static str> {
     }
     let readable = match media {
         "image/png" => png_rows_read(data, height),
-        "image/jpeg" => reaches_eoi(data) && decodes(data, ImageFormat::Jpeg, width, height),
+        "image/jpeg" => {
+            !too_many_xmp_fragments(data)
+                && reaches_eoi(data)
+                && decodes(data, ImageFormat::Jpeg, width, height)
+        }
         "image/webp" => decodes(data, ImageFormat::WebP, width, height),
         _ => false,
     };
