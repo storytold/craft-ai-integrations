@@ -177,6 +177,8 @@ A connection to a server on this computer that uses a key over plain `http` coun
 it. Whichever program holds that port receives the key, and on a computer shared by several
 accounts that can be another person's program. The plan is marked remote, so the person is asked
 once for that address. Over `https`, or with no key, a server on this computer needs no consent.
+The plan's disclosure sets `key_in_clear`, and the shared `disclosure_lines` adds a line saying
+the saved key goes too, unencrypted, and why. An app with its own consent screen must show it.
 
 <!-- snippet: consent -->
 ```rust

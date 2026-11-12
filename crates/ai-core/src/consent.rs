@@ -44,6 +44,10 @@ pub struct Disclosure {
     pub items: Vec<DisclosureItem>,
     /// Parameter names only, never values.
     pub param_names: Vec<String>,
+    /// The connection's saved key goes with the request, unencrypted, to an address on this
+    /// computer (see [`Disclosure::sends_key_in_clear`]). Never the key itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub key_in_clear: bool,
 }
 
 impl Disclosure {
@@ -64,17 +68,22 @@ impl Disclosure {
     /// is, so such a request counts as leaving this computer and is asked about first. Over
     /// https, or with no key, the connection's own locality stands.
     pub fn locality_for(connection: &Connection) -> Locality {
-        let key_in_clear = connection.auth.secret_ref().is_some()
-            && connection
-                .endpoint
-                .as_deref()
-                .and_then(|e| Endpoint::parse(e).ok())
-                .is_some_and(|e| !e.https);
-        if key_in_clear {
+        if Self::sends_key_in_clear(connection) {
             Locality::Remote
         } else {
             connection.locality
         }
+    }
+
+    /// Whether a request on `connection` sends its saved key over plain http, which only an
+    /// address on this computer may use. Whichever program holds that port reads the key.
+    pub fn sends_key_in_clear(connection: &Connection) -> bool {
+        connection.auth.secret_ref().is_some()
+            && connection
+                .endpoint
+                .as_deref()
+                .and_then(|e| Endpoint::parse(e).ok())
+                .is_some_and(|e| !e.https)
     }
 
     /// What `request` on `connection` would send for `app`, as the consent screen shows it.
@@ -85,6 +94,7 @@ impl Disclosure {
             connection: connection.id.clone(),
             capability: request.capability.clone(),
             locality: Self::locality_for(connection),
+            key_in_clear: Self::sends_key_in_clear(connection),
             destination,
             items: request
                 .inputs

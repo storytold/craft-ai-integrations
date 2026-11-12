@@ -82,6 +82,10 @@ fn a_key_over_plain_http_here_is_not_sent_until_the_person_agrees() {
     let client = client(&dir, &s.url, true);
     let plan = client.plan(&role(), prompt()).unwrap();
     assert_eq!(plan.disclosure().locality, Locality::Remote);
+    assert!(
+        plan.disclosure().key_in_clear,
+        "the screen must say the key goes too"
+    );
     let e = client.start(&plan, &ConsentLedger::default()).unwrap_err();
     assert_eq!(e.kind, ErrorKind::ConsentRequired);
     assert_eq!(s.count(), 0, "nothing, and no key, reached the port");
@@ -106,6 +110,7 @@ fn a_server_here_with_no_key_still_runs_without_asking() {
     let client = client(&dir, &s.url, false);
     let plan = client.plan(&role(), prompt()).unwrap();
     assert_eq!(plan.disclosure().locality, Locality::Local);
+    assert!(!plan.disclosure().key_in_clear);
     let done = client
         .start(&plan, &ConsentLedger::default())
         .unwrap()

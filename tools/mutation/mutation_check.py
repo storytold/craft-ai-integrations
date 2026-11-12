@@ -657,8 +657,10 @@ CONSENT_KEY = C + 'ai-core/src/consent.rs'
 LK = [
     ('local-key-not-asked', CONSENT_KEY, 'locality: Self::locality_for(connection),', 'locality: connection.locality,', M, 'local_key', 'needs_agreement'),
     ('local-key-https-asked-too', CONSENT_KEY, '.is_some_and(|e| !e.https)', '.is_some_and(|_| true)', M, 'local_key', 'no_key_or_https'),
-    ('local-key-keyless-asked-too', CONSENT_KEY, 'let key_in_clear = connection.auth.secret_ref().is_some()', 'let key_in_clear = true', M, 'local_key', 'no_key_or_https'),
+    ('local-key-keyless-asked-too', CONSENT_KEY, 'connection.auth.secret_ref().is_some()\n            && connection', 'true\n            && connection', M, 'local_key', 'no_key_or_https'),
     ('local-key-sent-unasked', CONSENT_KEY, '            Locality::Remote\n        } else {\n            connection.locality', '            connection.locality\n        } else {\n            connection.locality', CL, 'local_key', 'not_sent_until'),
+    ('local-key-not-shown', C + 'ai-egui/src/text.rs', 'if d.key_in_clear {', 'if false {', 'craft-ai-egui', 'lib', 'key_sent_unencrypted'),
+    ('local-key-flag-unset', CONSENT_KEY, 'key_in_clear: Self::sends_key_in_clear(connection),', 'key_in_clear: false,', M, 'local_key', 'needs_agreement'),
 ]
 
 GROUPS = {'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'rp': RP, 'lk': LK}

@@ -31,6 +31,7 @@ fn a_key_over_plain_http_to_this_computer_needs_agreement() {
     ] {
         let d = disclosure(&connection(endpoint, true, "local"));
         assert_eq!(d.locality, Locality::Remote, "{endpoint}");
+        assert!(d.key_in_clear, "{endpoint}");
         assert!(ConsentLedger::default().needs_consent(&d, 0), "{endpoint}");
         assert_eq!(d.destination, fingerprint(endpoint));
     }
@@ -45,6 +46,7 @@ fn no_key_or_https_keeps_the_connection_local() {
     ] {
         let d = disclosure(&connection(endpoint, keyed, "local"));
         assert_eq!(d.locality, Locality::Local, "{endpoint}");
+        assert!(!d.key_in_clear, "{endpoint}");
         assert!(!ConsentLedger::default().needs_consent(&d, 0), "{endpoint}");
     }
 }
@@ -53,6 +55,7 @@ fn no_key_or_https_keeps_the_connection_local() {
 fn a_remote_connection_stays_remote_and_one_agreement_covers_the_local_key() {
     let d = disclosure(&connection("https://api.example.com/v1", true, "remote"));
     assert_eq!(d.locality, Locality::Remote);
+    assert!(!d.key_in_clear, "a key over https is not sent in the clear");
     let d = disclosure(&connection("http://127.0.0.1:11434/v1", true, "local"));
     let mut ledger = ConsentLedger::default();
     ledger.grant(&d);
