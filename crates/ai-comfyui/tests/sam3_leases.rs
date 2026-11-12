@@ -45,6 +45,12 @@ fn session(server: &Server, dir: &Path) -> Sam3Session {
         .with_lock_dir(dir.to_path_buf())
 }
 
+/// A lock folder the session creates, as the default one is. The temp folder itself can let other
+/// local accounts in, and a lock folder like that is refused.
+fn lock_dir(root: &tempfile::TempDir) -> PathBuf {
+    root.path().join("locks")
+}
+
 fn prepared(server: &Server, dir: &Path) -> Sam3Session {
     let mut s = session(server, dir);
     s.prepare(&png()).unwrap();
@@ -83,8 +89,8 @@ fn hover_ids(server: &Server) -> Vec<String> {
 fn two_sessions_on_one_server_hold_different_slots_and_hover_with_their_own() {
     let dir = tempfile::tempdir().unwrap();
     let server = hover_server();
-    let a = prepared(&server, dir.path());
-    let b = prepared(&server, dir.path());
+    let a = prepared(&server, &lock_dir(&dir));
+    let b = prepared(&server, &lock_dir(&dir));
     assert_ne!(a.slot(), b.slot());
     assert!(a.slot().is_some() && b.slot().is_some());
     let ids = collector_ids(&server);
@@ -103,12 +109,12 @@ fn two_sessions_on_one_server_hold_different_slots_and_hover_with_their_own() {
 fn slots_are_bounded_and_a_dropped_session_frees_its_slot() {
     let dir = tempfile::tempdir().unwrap();
     let server = hover_server();
-    let mut held: Vec<Sam3Session> = (0..4).map(|_| prepared(&server, dir.path())).collect();
+    let mut held: Vec<Sam3Session> = (0..4).map(|_| prepared(&server, &lock_dir(&dir))).collect();
     let mut slots: Vec<_> = held.iter().map(|s| s.slot().unwrap()).collect();
     slots.sort_unstable();
     slots.dedup();
     assert_eq!(slots.len(), 4, "four distinct slots");
-    let mut fifth = session(&server, dir.path());
+    let mut fifth = session(&server, &lock_dir(&dir));
     let err = fifth.prepare(&png()).unwrap_err();
     assert!(err.message.contains("slots"), "{}", err.message);
     assert_eq!(fifth.slot(), None);
@@ -124,12 +130,12 @@ fn slots_are_bounded_and_a_dropped_session_frees_its_slot() {
 fn release_gives_the_slot_back_and_leaves_the_session_unprepared() {
     let dir = tempfile::tempdir().unwrap();
     let server = hover_server();
-    let mut a = prepared(&server, dir.path());
+    let mut a = prepared(&server, &lock_dir(&dir));
     let slot = a.slot().unwrap();
     a.release();
     assert_eq!(a.slot(), None);
     assert!(a.preview(1.0, 1.0).is_err(), "released means unprepared");
-    let b = prepared(&server, dir.path());
+    let b = prepared(&server, &lock_dir(&dir));
     assert_eq!(b.slot(), Some(slot));
 }
 
@@ -137,7 +143,7 @@ fn release_gives_the_slot_back_and_leaves_the_session_unprepared() {
 fn preparing_again_keeps_the_same_slot() {
     let dir = tempfile::tempdir().unwrap();
     let server = hover_server();
-    let mut a = prepared(&server, dir.path());
+    let mut a = prepared(&server, &lock_dir(&dir));
     let first = a.slot();
     a.prepare(&png()).unwrap();
     assert_eq!(a.slot(), first);
@@ -149,18 +155,18 @@ fn preparing_again_keeps_the_same_slot() {
 fn a_rejected_image_does_not_take_a_slot() {
     let dir = tempfile::tempdir().unwrap();
     let server = hover_server();
-    let mut bad = session(&server, dir.path());
+    let mut bad = session(&server, &lock_dir(&dir));
     assert!(bad.prepare(b"not a png").is_err());
     assert_eq!(bad.slot(), None);
-    let _four: Vec<_> = (0..4).map(|_| prepared(&server, dir.path())).collect();
+    let _four: Vec<_> = (0..4).map(|_| prepared(&server, &lock_dir(&dir))).collect();
 }
 
 #[test]
 fn each_server_has_its_own_pool() {
     let dir = tempfile::tempdir().unwrap();
     let (one, two) = (hover_server(), hover_server());
-    let a = prepared(&one, dir.path());
-    let b = prepared(&two, dir.path());
+    let a = prepared(&one, &lock_dir(&dir));
+    let b = prepared(&two, &lock_dir(&dir));
     assert_eq!(a.slot(), Some(0));
     assert_eq!(b.slot(), Some(0), "another server, another cache");
 }
@@ -270,6 +276,56 @@ fn a_link_at_a_lock_file_name_is_not_followed() {
     );
 }
 
+/// A folder that already existed (one `CRAFT_AI_DIR` names) and lets every account in is where
+/// another account holds every slot. `icacls` adds Everyone, as a shared folder would have.
+#[cfg(windows)]
+#[test]
+fn a_lock_folder_other_accounts_can_use_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("shared");
+    std::fs::create_dir(&dir).unwrap();
+    let granted = Command::new("icacls")
+        .arg(&dir)
+        .args(["/grant", "*S-1-1-0:(OI)(CI)M"])
+        .output()
+        .unwrap();
+    assert!(granted.status.success(), "{granted:?}");
+    let server = hover_server();
+    let mut s = session(&server, &dir);
+    let err = s.prepare(&png()).unwrap_err();
+    assert!(err.message.contains("lock folder"), "{}", err.message);
+    assert_eq!(s.slot(), None);
+    assert!(
+        std::fs::read_dir(&dir).unwrap().next().is_none(),
+        "nothing created"
+    );
+}
+
+/// A junction needs no special right to make, so it stands in for any link at the folder name.
+#[cfg(windows)]
+#[test]
+fn a_lock_folder_that_is_a_junction_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = root.path().join("locks");
+    let made = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&real)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    let server = hover_server();
+    let mut s = session(&server, &link);
+    let err = s.prepare(&png()).unwrap_err();
+    assert!(err.message.contains("lock folder"), "{}", err.message);
+    assert!(
+        std::fs::read_dir(&real).unwrap().next().is_none(),
+        "nothing created"
+    );
+}
+
 /// Child half of the cross-process test: hold a slot until stdin closes.
 #[test]
 #[ignore = "run only as a child of the cross-process test"]
@@ -314,7 +370,7 @@ fn a_slot_held_by_another_process_is_skipped_and_freed_when_that_process_dies() 
                 "--test-threads=1",
             ])
             .env("CRAFT_LEASE_CHILD_URL", &base)
-            .env("CRAFT_LEASE_CHILD_DIR", dir.path())
+            .env("CRAFT_LEASE_CHILD_DIR", lock_dir(&dir))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -335,7 +391,7 @@ fn a_slot_held_by_another_process_is_skipped_and_freed_when_that_process_dies() 
     let held = rx
         .recv_timeout(std::time::Duration::from_secs(60))
         .expect("the child never reported holding a slot");
-    let mine = prepared(&server, dir.path());
+    let mine = prepared(&server, &lock_dir(&dir));
     assert_ne!(
         mine.slot(),
         Some(held),
@@ -346,7 +402,7 @@ fn a_slot_held_by_another_process_is_skipped_and_freed_when_that_process_dies() 
     child.0.wait().unwrap();
     drop(mine);
     // Both slots are free again, and the lowest free one is the dead holder's.
-    let next = prepared(&server, dir.path());
+    let next = prepared(&server, &lock_dir(&dir));
     assert_eq!(
         next.slot(),
         Some(held),

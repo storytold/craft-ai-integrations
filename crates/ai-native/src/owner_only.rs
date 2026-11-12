@@ -91,6 +91,122 @@ pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     }
 }
 
+/// Refuses a folder that is not private to this user. Windows only: [`create_dir_all`] leaves a
+/// folder that already existed alone, so a caller that keeps something in a fixed folder (SAM 3
+/// slot locks) checks it before use. A link or junction is refused, and so is a folder owned by
+/// another account or whose access list lets any account other than this user, SYSTEM or the
+/// Administrators group in. (Unix callers compare the folder's owner and mode instead.)
+#[cfg(windows)]
+pub fn check_private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    // FILE_ATTRIBUTE_REPARSE_POINT: a link or junction, judged by itself rather than its target.
+    const REPARSE_POINT: u32 = 0x400;
+    let meta = std::fs::symlink_metadata(dir)?;
+    let private = meta.is_dir()
+        && meta.file_attributes() & REPARSE_POINT == 0
+        && sddl_is_private(&win_acl::sddl_of(dir)?, &win_acl::user_sid()?);
+    if private {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the folder is not private to this user",
+        ))
+    }
+}
+
+/// Whether an owner-and-access-list SDDL string (`O:…D:…`) keeps out every account but `me`
+/// (a SID), SYSTEM and the Administrators group. Allow entries are checked whatever their
+/// inheritance flags, because what they pass on reaches the files created inside. Deny entries
+/// only take access away. A missing (null) access list lets everyone in.
+#[cfg(any(windows, test))]
+fn sddl_is_private(sddl: &str, me: &str) -> bool {
+    // SDDL writes the machine's built-in Administrator account (RID 500) as `LA`.
+    let me_alias = (me.starts_with("S-1-5-21-") && me.ends_with("-500")).then_some("LA");
+    // CREATOR OWNER and OWNER RIGHTS name whoever owns the object, checked separately.
+    let trusted =
+        |who: &str| who == me || Some(who) == me_alias || matches!(who, "SY" | "BA" | "CO" | "OW");
+    let Some(rest) = sddl.strip_prefix("O:") else {
+        return false;
+    };
+    let Some(dacl_at) = rest.find("D:") else {
+        return false;
+    };
+    let owner = rest[..dacl_at].split("G:").next().unwrap_or_default();
+    if !(owner == me || Some(owner) == me_alias || owner == "BA") {
+        return false;
+    }
+    let dacl = &rest[dacl_at + 2..];
+    let dacl = dacl.split("S:").next().unwrap_or_default();
+    if dacl.starts_with("NO_ACCESS_CONTROL") {
+        return false;
+    }
+    dacl.split('(').skip(1).all(|ace| {
+        let fields: Vec<&str> = ace.trim_end_matches(')').split(';').collect();
+        let (Some(kind), Some(who)) = (fields.first(), fields.get(5)) else {
+            return false;
+        };
+        let allows = matches!(*kind, "A" | "OA" | "XA" | "ZA");
+        !allows || trusted(who)
+    })
+}
+
+#[cfg(test)]
+mod sddl_tests {
+    use super::sddl_is_private;
+
+    const ME: &str = "S-1-5-21-1-2-3-1001";
+
+    #[test]
+    fn a_folder_this_crate_creates_is_private() {
+        let made = format!("O:{ME}D:P(A;OICI;FA;;;{ME})(A;OICI;FA;;;SY)");
+        assert!(sddl_is_private(&made, ME));
+    }
+
+    #[test]
+    fn the_usual_inherited_list_of_a_profile_folder_is_private() {
+        let temp = format!("O:BAD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;{ME})");
+        assert!(sddl_is_private(&temp, ME));
+    }
+
+    #[test]
+    fn the_built_in_administrator_is_recognised_by_its_alias() {
+        let admin = "S-1-5-21-1-2-3-500";
+        assert!(sddl_is_private(
+            "O:LAD:P(A;OICI;FA;;;LA)(A;OICI;FA;;;SY)",
+            admin
+        ));
+    }
+
+    #[test]
+    fn a_folder_owned_by_another_account_is_refused() {
+        let other = format!("O:S-1-5-21-1-2-3-1002D:P(A;OICI;FA;;;{ME})");
+        assert!(!sddl_is_private(&other, ME));
+    }
+
+    #[test]
+    fn any_other_account_let_in_is_refused() {
+        for who in ["WD", "AU", "BU", "S-1-5-21-1-2-3-1002"] {
+            let shared = format!("O:{ME}D:P(A;OICI;FA;;;{ME})(A;OICIIO;0x1301bf;;;{who})");
+            assert!(!sddl_is_private(&shared, ME), "{who}");
+        }
+    }
+
+    #[test]
+    fn deny_entries_and_a_group_part_do_not_matter() {
+        let denied = format!("O:{ME}G:SYD:P(D;OICI;FA;;;WD)(A;OICI;FA;;;{ME})");
+        assert!(sddl_is_private(&denied, ME));
+    }
+
+    #[test]
+    fn a_missing_access_list_or_malformed_text_is_refused() {
+        assert!(!sddl_is_private(&format!("O:{ME}D:NO_ACCESS_CONTROL"), ME));
+        assert!(!sddl_is_private(&format!("O:{ME}"), ME));
+        assert!(!sddl_is_private("garbage", ME));
+        assert!(!sddl_is_private(&format!("O:{ME}D:P(A;OICI)"), ME));
+    }
+}
+
 #[cfg(test)]
 #[cfg(windows)]
 #[path = "owner_only/tests.rs"]

@@ -11,8 +11,9 @@
 //!
 //! The lock folder belongs to the person running the app. It sits in their AI folder, never in a
 //! shared temp folder another account could create first, and is created private. On Unix a
-//! folder this user does not own, that others can write, or that is a link is refused, and lock
-//! files are never opened through a link. Different accounts sharing one ComfyUI therefore do not
+//! folder this user does not own, that others can write, or that is a link is refused; on Windows
+//! the same goes for a folder whose access list lets another account in. Lock files are never
+//! opened through a link. Different accounts sharing one ComfyUI therefore do not
 //! coordinate slots: that is the trust boundary, not a gap.
 use craft_ai_core::{AiError, ErrorKind};
 use std::fs::{File, OpenOptions, TryLockError};
@@ -94,6 +95,9 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     craft_ai_native::owner_only::create_dir_all(dir)?;
     #[cfg(target_arch = "wasm32")]
     std::fs::create_dir_all(dir)?;
+    // A folder that already existed is left as it was by the call above, so it is checked here.
+    #[cfg(windows)]
+    craft_ai_native::owner_only::check_private_dir(dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -118,6 +122,12 @@ fn open_lock(path: &Path) -> io::Result<File> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT: a link at the name is opened as itself, not followed.
+        options.custom_flags(0x0020_0000);
     }
     options.open(path)
 }

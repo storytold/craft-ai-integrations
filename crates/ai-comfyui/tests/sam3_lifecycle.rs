@@ -31,7 +31,7 @@ fn candidate_server() -> Server {
 fn session(server: &Server, dir: &tempfile::TempDir) -> Sam3Session {
     Sam3Session::new(server.url.trim_end_matches("/v1"))
         .unwrap()
-        .with_lock_dir(dir.path().to_path_buf())
+        .with_lock_dir(dir.path().join("locks"))
 }
 
 fn click() -> sam3::Prompt {
