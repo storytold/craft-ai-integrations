@@ -426,7 +426,8 @@ tool and check what lands in the document.
 
 ## What not to do
 
-- Do not store, read or print a key. The layer reads it inside `start` and nowhere else.
+- Do not store, read or print a key. The layer uses a key only inside `start`; `status` only checks
+  that one is saved and drops it unused.
 - Do not hard-code a model id, a provider or an address. Read the choice.
 - Do not fall back to a different model when the chosen one fails.
 - Do not show engine or hardware words (Candle, Burn, CUDA, VRAM, wgpu) to a person.
