@@ -46,6 +46,17 @@ local configuration folder (`%LOCALAPPDATA%\ArtCraft\mcp` on Windows, beside the
 command or a repeated id are left out, and `craft_list_apps` says why. Without the file, the
 gateway looks for each known app's `<id>-cli` on `PATH`.
 
+The launcher gives an app other arguments where its plain `mcp` is not what agents should get, and
+only when that install's `mcp --help` names them: PhotoCraft `["mcp", "--live"]` (its open
+window), VectorCraft `["mcp", "--headless"]` (off a control port with no token yet).
+
+The file is also the person's consent, for the apps as well as the gateway: the launcher writes it
+only while Settings › AI agents › *Let AI agents use Craft apps* is on, and removes it when that is
+turned off. An app that reaches its open window over a control port accepts agents while the file
+names it and the `AI-MCP` flag is on, without a switch of its own (PhotoCraft since
+storytold/photocraft#13396). The file holds no port and no token: each app's CLI finds its own
+app's connection, so tokens never pass through the gateway or the client's configuration.
+
 ## Running it
 
 ```sh
