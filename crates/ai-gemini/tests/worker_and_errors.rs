@@ -133,3 +133,40 @@ fn a_lite_model_refuses_a_size_it_cannot_make() {
             .is_ok()
     );
 }
+
+/// `n` tiny objects, comma-separated: about 7 bytes each on the wire, about 800 once parsed
+/// as a plain `serde_json::Value`.
+fn tiny_objects(n: usize) -> String {
+    vec![r#"{"":0}"#; n].join(",")
+}
+
+/// A reply's cost once parsed is bounded, not only its bytes: about 1 MiB of tiny objects (some
+/// 120 MiB as a plain `Value`) is refused, from the model list and from a fill.
+#[test]
+fn a_reply_of_tiny_objects_is_refused() {
+    let listing = format!(r#"{{"models":[],"extra":[{}]}}"#, tiny_objects(150_000));
+    let server = Server::start(move |_| Reply::Json(200, listing.clone()));
+    let e = provider(&server.url).models().unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Provider);
+    assert!(e.message.contains("too large"), "{}", e.message);
+
+    let answer = format!(
+        r#"{{"steps":[{{"type":"model_output","content":[]}}],"extra":[{}]}}"#,
+        tiny_objects(150_000)
+    );
+    let server = Server::start(move |_| Reply::Json(200, answer.clone()));
+    let p = provider(&server.url);
+    let done = run_lifecycle_paced(
+        &p,
+        &ModelId::new(DEFAULT_MODEL).unwrap(),
+        &fill_request(),
+        &pause,
+    )
+    .unwrap();
+    match done.state {
+        JobState::Failed { error } => {
+            assert!(error.message.contains("too large"), "{}", error.message)
+        }
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}
