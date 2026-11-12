@@ -11,14 +11,43 @@ use std::time::Duration;
 
 use craft_ai_core::secret::redact;
 use craft_ai_core::{AiError, ErrorKind, SecretString, Usage};
+use craft_ai_http::json::ReplyError;
 use serde_json::Value;
 use ureq::Body;
 use ureq::http::Response;
 
 /// Largest error body read, in bytes.
 const MAX_ERROR_BODY: usize = 64 * 1024;
-/// Largest success body read, in bytes. Several large base64 images fit.
-pub(crate) const MAX_BODY: usize = 128 * 1024 * 1024;
+
+/// What one kind of reply may cost: its bytes on the wire, and the estimated memory of the
+/// parsed tree ([`craft_ai_http::json::parse`]). A byte cap alone does not bound memory: a reply
+/// of many tiny objects costs about a hundred times its size once parsed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReplyLimit {
+    pub bytes: usize,
+    pub parsed: usize,
+}
+
+/// A model list. The longest real lists (OpenRouter's, with prices and descriptions) are a few
+/// MiB; a list of thousands of entries costs well under the parse budget.
+pub(crate) const MODELS_REPLY: ReplyLimit = ReplyLimit {
+    bytes: 8 * 1024 * 1024,
+    parsed: 64 * 1024 * 1024,
+};
+/// A whole chat completion, mostly text. Also the most a stream may keep.
+pub(crate) const CHAT_REPLY: ReplyLimit = ReplyLimit {
+    bytes: 32 * 1024 * 1024,
+    parsed: 64 * 1024 * 1024,
+};
+/// An images reply: several large base64 pictures fit. Long strings cost about their length,
+/// so the parse budget only needs room above the byte cap for the reply's structure.
+pub(crate) const IMAGES_REPLY: ReplyLimit = ReplyLimit {
+    bytes: 128 * 1024 * 1024,
+    parsed: 160 * 1024 * 1024,
+};
+
+/// The message for a reply over its byte cap or its parse budget.
+const TOO_LARGE: &str = "the server's reply was too large";
 
 pub(crate) struct Http {
     agent: ureq::Agent,
@@ -94,13 +123,13 @@ impl Http {
         })
     }
 
-    pub fn get_json(&self, path: &str) -> Result<Value, AiError> {
+    pub fn get_json(&self, path: &str, limit: ReplyLimit) -> Result<Value, AiError> {
         let mut req = self.agent.get(self.url(path));
         if let Some((name, value)) = self.credential() {
             req = req.header(name, value);
         }
         let resp = self.checked(req.call())?;
-        self.read_json(resp)
+        self.read_json(resp, limit)
     }
 
     pub fn post(
@@ -116,15 +145,14 @@ impl Http {
         self.checked(req.send(body))
     }
 
-    pub fn read_json(&self, resp: Response<Body>) -> Result<Value, AiError> {
+    pub fn read_json(&self, resp: Response<Body>, limit: ReplyLimit) -> Result<Value, AiError> {
         let bytes =
-            read_capped(resp.into_body().into_reader(), MAX_BODY).map_err(|e| self.scrub(e))?;
-        serde_json::from_slice(&bytes).map_err(|_| {
-            AiError::new(
-                ErrorKind::Provider,
-                "the server returned a reply that is not JSON",
-            )
-        })
+            read_capped(resp.into_body().into_reader(), limit.bytes).map_err(|e| self.scrub(e))?;
+        parse_json(
+            &bytes,
+            limit.parsed,
+            "the server returned a reply that is not JSON",
+        )
     }
 
     /// Passes 2xx through and turns everything else into an error.
@@ -194,6 +222,14 @@ pub(crate) fn scrub(mut e: AiError, key: Option<&SecretString>) -> AiError {
     e
 }
 
+/// Parses a reply within `budget`; `not_json` is the message for a reply that is not JSON.
+pub(crate) fn parse_json(bytes: &[u8], budget: usize, not_json: &str) -> Result<Value, AiError> {
+    craft_ai_http::json::parse(bytes, budget).map_err(|e| match e {
+        ReplyError::TooLarge => AiError::new(ErrorKind::Provider, TOO_LARGE),
+        ReplyError::NotJson => AiError::new(ErrorKind::Provider, not_json),
+    })
+}
+
 /// Reads at most `max` bytes; more than that is an error rather than a truncated reply.
 pub(crate) fn read_capped(reader: impl Read, max: usize) -> Result<Vec<u8>, AiError> {
     let mut buf = Vec::new();
@@ -205,10 +241,7 @@ pub(crate) fn read_capped(reader: impl Read, max: usize) -> Result<Vec<u8>, AiEr
         )
     })?;
     if buf.len() > max {
-        return Err(AiError::new(
-            ErrorKind::Provider,
-            "the server's reply was too large",
-        ));
+        return Err(AiError::new(ErrorKind::Provider, TOO_LARGE));
     }
     Ok(buf)
 }

@@ -2224,6 +2224,8 @@ name = "craft-ai-http"
 version = "0.1.0"
 dependencies = [
  "craft-ai-core",
+ "serde",
+ "serde_json",
  "ureq 3.5.1",
 ]
 

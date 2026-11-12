@@ -25,6 +25,8 @@
 //! environment's proxy for its loopback traffic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod json;
+
 use craft_ai_core::endpoint::Endpoint;
 use ureq::Proxy;
 use ureq::tls::{RootCerts, TlsConfig};

@@ -106,3 +106,36 @@ fn refuses_unsupported_before_paid_call_and_never_follows_redirects() {
     assert_eq!(e.kind, ErrorKind::Unsupported);
     assert_eq!(s.count(), 0);
 }
+
+/// `n` tiny objects, comma-separated: about 7 bytes each on the wire, about 800 once parsed
+/// as a plain `serde_json::Value`.
+fn tiny_objects(n: usize) -> String {
+    vec![r#"{"":0}"#; n].join(",")
+}
+
+/// A reply's cost once parsed is bounded, not only its bytes: about 1 MiB of tiny objects (some
+/// 120 MiB as a plain `Value`) is refused.
+#[test]
+fn a_reply_of_tiny_objects_is_refused() {
+    let body = format!(
+        r#"{{"candidates":[{{"content":{{"parts":[{{"inlineData":{{"mimeType":"image/png","data":"AQID"}}}}]}}}}],"extra":[{}]}}"#,
+        tiny_objects(150_000)
+    );
+    let s = Server::start(move |_| Reply::Json(200, body.clone()));
+    let p = VertexProvider::new(VertexConfig::new(
+        s.url.clone(),
+        SecretString::new("test-key"),
+    ))
+    .unwrap();
+    let request = Request::new(CapabilityId::parse("image.generate").unwrap())
+        .with_input(InputRole::Prompt, Payload::text("a fox"));
+    let model = ModelId::new("gemini-2.5-flash-image").unwrap();
+    let message = match p.submit(&model, &request) {
+        Err(e) => e.message,
+        Ok(job) => match p.poll(&job).unwrap().state {
+            JobState::Failed { error } => error.message,
+            other => panic!("expected a failure, got {other:?}"),
+        },
+    };
+    assert!(message.contains("too large"), "{message}");
+}
