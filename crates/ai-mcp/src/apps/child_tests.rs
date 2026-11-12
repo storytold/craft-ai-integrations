@@ -247,3 +247,37 @@ fn a_failed_write_ends_the_waiting_request_at_once() {
     );
     assert!(c.closed().is_some());
 }
+
+#[test]
+fn an_app_ping_gets_an_empty_result_during_a_request_and_between_them() {
+    use std::sync::{Arc, Mutex};
+    let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let log = seen.clone();
+    let mut c = fake(move |m, req| {
+        if m.is_empty() {
+            log.lock().unwrap().push(req.clone()); // a reply from the gateway
+            return None;
+        }
+        Some(vec![
+            json!({"jsonrpc": "2.0", "id": "p1", "method": "ping"}).to_string(),
+            json!({"jsonrpc": "2.0", "id": "p2", "method": "ping"}).to_string(),
+            result(req, json!(1)),
+        ])
+    });
+    c.request("x", json!({}), Duration::from_secs(5)).unwrap();
+    // A ping the request did not read before its reply is answered when the queue is drained.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while seen.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+        let _ = c.take_tools_changed();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let seen = seen.lock().unwrap();
+    for id in ["p1", "p2"] {
+        let reply = seen
+            .iter()
+            .find(|v| v["id"] == id)
+            .unwrap_or_else(|| panic!("no reply to {id}: {seen:?}"));
+        assert_eq!(reply["result"], json!({}), "{reply}");
+        assert!(reply.get("error").is_none());
+    }
+}

@@ -142,8 +142,10 @@ impl Conn {
             for line in wrx {
                 if let Err(e) = w.write_all(&line).and_then(|()| w.flush()) {
                     // Wake the request that is waiting: it would otherwise wait out its deadline.
+                    // Waits for room in the queue (the request drains it); ends when the
+                    // connection is dropped.
                     let _ = write_failed
-                        .try_send(Incoming::Closed(format!("writing to the app failed: {e}")));
+                        .send(Incoming::Closed(format!("writing to the app failed: {e}")));
                     return;
                 }
             }
@@ -163,7 +165,11 @@ impl Conn {
     pub fn take_tools_changed(&mut self) -> bool {
         loop {
             match self.rx.try_recv() {
-                Ok(Incoming::Message(v)) => self.note(&v),
+                Ok(Incoming::Message(v)) => {
+                    if !matches!(self.answer_app_request(&v), Ok(true)) {
+                        self.note(&v);
+                    }
+                }
                 Ok(Incoming::TooLong) => {}
                 Ok(Incoming::Closed(why)) => {
                     self.closed = Some(why);
@@ -178,6 +184,22 @@ impl Conn {
             }
         }
         std::mem::take(&mut self.tools_changed)
+    }
+
+    /// Answer a request the app sent (`Ok(true)`): `ping` with an empty result, as MCP asks,
+    /// anything else (sampling, roots) as not supported. `Ok(false)` for any other message.
+    fn answer_app_request(&mut self, v: &Value) -> Result<bool, String> {
+        let (Some(rid), Some(method)) = (v.get("id"), v.get("method")) else {
+            return Ok(false);
+        };
+        let reply = if method.as_str() == Some("ping") {
+            json!({"jsonrpc": "2.0", "id": rid, "result": {}})
+        } else {
+            json!({"jsonrpc": "2.0", "id": rid,
+                "error": {"code": -32601, "message": "not supported by the Craft gateway"}})
+        };
+        self.send(&reply)?;
+        Ok(true)
     }
 
     /// Remember a notification the gateway cares about.
@@ -260,11 +282,7 @@ impl Conn {
                     return Err(why);
                 }
             };
-            // A request from the app (sampling, roots): the gateway offers none of these.
-            if let (Some(rid), Some(_)) = (v.get("id"), v.get("method")) {
-                let reply = json!({"jsonrpc": "2.0", "id": rid,
-                    "error": {"code": -32601, "message": "not supported by the Craft gateway"}});
-                self.send(&reply)?;
+            if self.answer_app_request(&v)? {
                 continue;
             }
             if v.get("id").and_then(Value::as_u64) != Some(id) {

@@ -364,9 +364,18 @@ fn an_app_that_stopped_has_its_tools_read_again() {
     let first =
         text(&tools::call(&h, FIND_TOOLS, &json!({"query": "doc", "app": "wordcraft"})).unwrap());
     assert_eq!(first["tools"][0]["tool"], "doc.old");
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    let again =
-        text(&tools::call(&h, FIND_TOOLS, &json!({"query": "doc", "app": "wordcraft"})).unwrap());
+    // The app ends after its listing; wait (with a bound) until the gateway has seen that.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut again = Value::Null;
+    while std::time::Instant::now() < deadline {
+        again = text(
+            &tools::call(&h, FIND_TOOLS, &json!({"query": "doc", "app": "wordcraft"})).unwrap(),
+        );
+        if again["tools"][0]["tool"] == "doc.new" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     assert_eq!(
         again["tools"][0]["tool"], "doc.new",
         "the restarted app's tools, not the cached ones"
