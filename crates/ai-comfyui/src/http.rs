@@ -1,9 +1,31 @@
 //! Local-only HTTP. Redirects are refused and replies are bounded before parsing.
 use craft_ai_core::{AiError, ErrorKind};
+use craft_ai_http::json::ReplyError;
 use serde_json::Value;
 use std::io::Read;
 use std::time::Duration;
 use ureq::{Body, http::Response};
+
+/// The largest ordinary reply read (system stats, history, a queued prompt), in bytes.
+const SMALL_REPLY: usize = 1024 * 1024;
+/// The estimated memory an ordinary reply may cost once parsed ([`craft_ai_http::json::parse`]).
+/// A byte cap alone does not bound memory: a reply of many tiny objects costs about a hundred
+/// times its size once parsed.
+const SMALL_REPLY_PARSED: usize = 16 * 1024 * 1024;
+/// The largest node list (`/object_info`) read, in bytes.
+const NODE_LIST_REPLY: usize = 16 * 1024 * 1024;
+/// The estimated memory the node list may cost once parsed. A real list is made of many small
+/// objects (one per node and input) and costs several times its size, so this budget is wider
+/// than the others; it still stops a hostile list long before the gigabytes it could cost.
+const NODE_LIST_PARSED: usize = 256 * 1024 * 1024;
+
+/// Parses a reply within `budget`; `not_json` is the message for a reply that is not JSON.
+fn parse(bytes: &[u8], budget: usize, not_json: &str) -> Result<Value, AiError> {
+    craft_ai_http::json::parse(bytes, budget).map_err(|e| match e {
+        ReplyError::TooLarge => AiError::new(ErrorKind::Provider, "ComfyUI reply is too large"),
+        ReplyError::NotJson => AiError::new(ErrorKind::Provider, not_json),
+    })
+}
 
 pub(crate) struct Http {
     agent: ureq::Agent,
@@ -60,16 +82,19 @@ impl Http {
         Ok(bytes)
     }
     pub fn get_json(&self, path: &str) -> Result<Value, AiError> {
-        self.get_json_bounded(path, 1024 * 1024)
+        self.get_json_bounded(path, SMALL_REPLY, SMALL_REPLY_PARSED)
     }
     pub fn get_object_info(&self) -> Result<Value, AiError> {
-        self.get_json_bounded("/object_info", 16 * 1024 * 1024)
+        self.get_json_bounded("/object_info", NODE_LIST_REPLY, NODE_LIST_PARSED)
     }
-    fn get_json_bounded(&self, path: &str, max: usize) -> Result<Value, AiError> {
+    fn get_json_bounded(&self, path: &str, max: usize, budget: usize) -> Result<Value, AiError> {
         let url = format!("{}{path}", self.base);
         let resp = self.check(self.agent.get(url).call())?;
-        serde_json::from_slice(&self.read(resp, max)?)
-            .map_err(|_| AiError::new(ErrorKind::Provider, "ComfyUI returned invalid JSON"))
+        parse(
+            &self.read(resp, max)?,
+            budget,
+            "ComfyUI returned invalid JSON",
+        )
     }
 
     /// Read at most the caller's remaining batch budget, plus one oversize sentinel byte.
@@ -109,12 +134,11 @@ impl Http {
                 .content_type("application/json")
                 .send(&body),
         )?;
-        let bytes = self.read(resp, 1024 * 1024)?;
+        let bytes = self.read(resp, SMALL_REPLY)?;
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|_| AiError::new(ErrorKind::Provider, "ComfyUI returned invalid JSON"))
+        parse(&bytes, SMALL_REPLY_PARSED, "ComfyUI returned invalid JSON")
     }
     /// Uploads one image to ComfyUI's scratch area (`type=temp`) and returns the name a loader
     /// should read, tagged ` [temp]`. A reply that says the file landed anywhere else, in a
@@ -155,12 +179,11 @@ impl Http {
                 )
                 .send(&body),
         )?;
-        let reply: Value = serde_json::from_slice(&self.read(resp, 4096)?).map_err(|_| {
-            AiError::new(
-                ErrorKind::Provider,
-                "ComfyUI returned an invalid upload reply",
-            )
-        })?;
+        let reply = parse(
+            &self.read(resp, 4096)?,
+            SMALL_REPLY_PARSED,
+            "ComfyUI returned an invalid upload reply",
+        )?;
         let name = reply.get("name").and_then(Value::as_str).ok_or_else(|| {
             AiError::new(
                 ErrorKind::Provider,

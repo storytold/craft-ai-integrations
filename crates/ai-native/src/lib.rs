@@ -34,6 +34,7 @@ mod catalog_file;
 mod consent_file;
 mod fsutil;
 mod history_file;
+mod owner_only;
 pub mod paths;
 pub mod secrets;
 pub mod shared;

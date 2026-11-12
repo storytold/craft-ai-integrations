@@ -28,6 +28,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
 | `mutation_check.py kf` | Standard secret chain (`secrets/standard.rs`): a locked secret file is reported, not read as empty; an empty passphrase counts as none; when to ask for a passphrase. Cases in `mutation_keys.py`. |
 | `mutation_check.py rr` | Run records (`ai-client/src/run_record.rs`): error and notice text is cleaned of keys, request text, text parameter values (nested ones too, and each in JSON-escaped form) and links, a line holding a key (plain or JSON-escaped) is refused, an empty secret does not refuse everything, a result link is never kept, results are hashed, and outcome, notices, usage and start time are kept. Cases in `mutation_run_record.py`. |
+| `mutation_check.py rp` | A reply's cost once parsed (`ai-http/src/json.rs`): each charge of the estimate, and the byte cap and parse budget of every OpenAI, Gemini, Vertex, declarative and ComfyUI reply reader. Cases in `mutation_reply_parse.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh
