@@ -11,7 +11,6 @@ Who may call it: only a local program that names this server as `127.0.0.1:<port
   sends that domain as the Host, so DNS rebinding cannot read replies.
 - `Content-Type: application/json`: a page can send text/plain or a form without asking the
   browser first, but not JSON.
-- Threads plus a per-connection timeout: one idle or slow caller cannot hold the listener.
 - Only PNG, JPEG and WebP decoders, matched to the declared type, with the pixel limit checked
   before decoding: other Pillow formats (EPS starts Ghostscript) are never reached.
 """
@@ -20,15 +19,12 @@ import base64
 import binascii
 import io
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 MAX_REQUEST = 24 * 1024 * 1024
 MAX_IMAGE = 16 * 1024 * 1024
 MAX_PIXELS = 36_000_000
-# Seconds a connection may sit idle while sending or receiving. Inference time is not counted.
-SOCKET_TIMEOUT = 30.0
 PIL_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}
 
 
@@ -65,16 +61,13 @@ def predict_with_sam3(checkpoint):
 
     model = build_sam3_image_model(checkpoint_path=str(checkpoint), load_from_HF=False)
     processor = Sam3Processor(model)
-    # Requests arrive on separate threads; the model runs one at a time.
-    model_lock = threading.Lock()
 
     def predict(raw, prompt, mime_type):
         image = open_image(raw, mime_type).convert("RGB")
-        with model_lock:
-            state = processor.set_image(image)
-            result = processor.set_text_prompt(state=state, prompt=prompt)
-            boxes = result["boxes"].detach().cpu().tolist()
-            scores = result["scores"].detach().cpu().tolist()
+        state = processor.set_image(image)
+        result = processor.set_text_prompt(state=state, prompt=prompt)
+        boxes = result["boxes"].detach().cpu().tolist()
+        scores = result["scores"].detach().cpu().tolist()
         if len(boxes) > 256:
             boxes, scores = boxes[:256], scores[:256]
         return {"width": image.width, "height": image.height,
@@ -101,7 +94,7 @@ def _is_json(values):
     return values[0].split(";", 1)[0].strip().lower() == "application/json"
 
 
-def handler_for(predict, timeout=SOCKET_TIMEOUT):
+def handler_for(predict):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             # Do not log prompts, image contents, or arbitrary request paths.
@@ -170,13 +163,12 @@ def handler_for(predict, timeout=SOCKET_TIMEOUT):
                 # Detailed exceptions can contain paths or image data; do not reflect them.
                 self.reply(500, {"error": "SAM 3 inference failed"})
 
-    Handler.timeout = timeout
     return Handler
 
 
 def make_server(port, handler):
-    """Loopback only. Each connection gets its own daemon thread."""
-    return ThreadingHTTPServer(("127.0.0.1", port), handler)
+    """Loopback only."""
+    return HTTPServer(("127.0.0.1", port), handler)
 
 
 def main():

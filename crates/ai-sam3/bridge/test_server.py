@@ -7,9 +7,7 @@ import base64
 import http.client
 import io
 import json
-import socket
 import threading
-import time
 import unittest
 import urllib.error
 import urllib.request
@@ -37,7 +35,7 @@ class BridgeTests(unittest.TestCase):
             cls.seen.append((raw, prompt, mime_type))
             return {"width": 12, "height": 8, "boxes": [[1, 2, 3, 4]], "scores": [0.7]}
 
-        cls.server = make_server(0, handler_for(fake, timeout=1.0))
+        cls.server = make_server(0, handler_for(fake))
         cls.port = cls.server.server_port
         cls.url = "http://127.0.0.1:%s/v1" % cls.port
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -140,28 +138,6 @@ class BridgeTests(unittest.TestCase):
             with self.subTest(content_type=value):
                 self.assertEqual(self.post_detect([self.host(), ("Content-Type", value)]), 415)
         self.assertEqual(self.post_detect([self.host()]), 415)
-
-    def test_idle_connection_does_not_block_other_callers(self):
-        idle = socket.create_connection(("127.0.0.1", self.port))
-        try:
-            idle.sendall(b"POST /v1/detect HTTP/1.1\r\n")
-            started = time.monotonic()
-            with urllib.request.urlopen(self.url + "/health", timeout=3) as resp:
-                self.assertEqual(resp.status, 200)
-            self.assertLess(time.monotonic() - started, 3)
-        finally:
-            idle.close()
-
-    def test_idle_connection_is_closed_after_the_timeout(self):
-        idle = socket.create_connection(("127.0.0.1", self.port))
-        try:
-            idle.settimeout(5)
-            idle.sendall(b"POST /v1/detect HTTP/1.1\r\n")
-            started = time.monotonic()
-            self.assertEqual(idle.recv(1), b"")  # The server hung up.
-            self.assertLess(time.monotonic() - started, 4)
-        finally:
-            idle.close()
 
 
 class HostRuleTests(unittest.TestCase):
