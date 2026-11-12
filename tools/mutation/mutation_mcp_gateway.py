@@ -17,8 +17,10 @@ MG = [
     ('stdio-line-not-capped', 'crates/ai-mcp/src/stdio.rs', r"if line.last() != Some(&b'\n') && n > MAX_LINE {", 'if false {', P, 'lib', 'an_overlong_line_is_refused'),
     ('bridge-grants-consent', 'crates/ai-mcp/src/mcp.rs', 'auto_consent: false,', 'auto_consent: true,', P, 'lib', 'new_never_grants_consent_itself'),
     ('partial-tool-list-accepted', A + 'child.rs', '        // A partial list would be cached as complete, and calls to the rest refused.\n        Err(', '        return Ok(tools);\n        #[allow(unreachable_code)]\n        Err(', P, 'lib', 'a_tool_list_that_never_ends'),
-    ('changed-tools-kept', A + 'mod.rs', 'slot.tools = None;', '{}', P, 'lib', 'read_again_after_the_app_says'),
+    ('changed-tools-kept', A + 'mod.rs', 'let changed = slot.conn.as_mut().is_some_and(Conn::take_tools_changed);', 'let changed = slot.conn.as_mut().is_some_and(Conn::take_tools_changed) && false;', P, 'lib', 'read_again_after_the_app_says'),
     ('unknown-bytes-labelled-png', 'crates/ai-mcp/src/router.rs', '.ok_or_else(|| "the input is not a recognised image".to_string())', '.or(Some("image/png")).ok_or_else(String::new)', P, 'lib', 'unrecognised_bytes_are_refused'),
     ('base64-decoded-before-size-check', 'crates/ai-mcp/src/router.rs', 'if encoded / 4 * 3 > max {', 'if false {', P, 'lib', 'oversized_base64_is_refused'),
+    ('failed-write-not-reported', A + 'child.rs', '                    let _ = write_failed\n                        .try_send(Incoming::Closed(format!("writing to the app failed: {e}")));\n', '                    let _ = &write_failed;\n', P, 'lib', 'a_failed_write_ends_the_waiting_request'),
+    ('stopped-app-keeps-cached-tools', A + 'mod.rs', 'if changed || slot.conn.as_ref().is_some_and(|c| c.closed().is_some()) {', 'if changed {', P, 'lib', 'an_app_that_stopped_has_its_tools_read_again'),
     ('nested-skills-folder-allowed', 'crates/ai-mcp/src/installer.rs', '.any(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))', '.last().is_some_and(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))', P, 'lib', 'bionic_skills_and_anything_inside'),
 ]

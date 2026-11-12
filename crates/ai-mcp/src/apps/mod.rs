@@ -100,7 +100,9 @@ impl Hub {
         };
         let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
         if slot.conn.as_ref().is_none_or(|c| c.closed().is_some()) {
+            // A new process may offer other tools than the one it replaces.
             slot.conn = None;
+            slot.tools = None;
             slot.conn = Some((self.connect)(app)?);
         }
         let Slot { conn, tools } = &mut *slot;
@@ -114,7 +116,10 @@ impl Hub {
     fn tools(&self, i: usize) -> Result<Arc<Vec<Value>>, String> {
         if let Some(slot) = self.slots.get(i) {
             let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-            if slot.conn.as_mut().is_some_and(Conn::take_tools_changed) {
+            let changed = slot.conn.as_mut().is_some_and(Conn::take_tools_changed);
+            // An app that changed its tools, or that stopped, gets its list read again: the next
+            // use starts it anew, and a restarted app may offer other tools.
+            if changed || slot.conn.as_ref().is_some_and(|c| c.closed().is_some()) {
                 slot.tools = None;
             }
             if let Some(t) = &slot.tools {

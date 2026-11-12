@@ -184,8 +184,9 @@ pub fn write_skills(base_dir: &Path, features: &[Feature]) -> Result<Vec<PathBuf
 }
 
 /// True when `p` is Bionic's skills folder (`.lmstudio/skills`) or anywhere inside it, whether or
-/// not it exists yet. Links in the part that exists are resolved first; `..` in the rest counts
-/// as leaving a folder.
+/// not it exists yet. Both the path as written (`..` counts as leaving a folder) and the path with
+/// links resolved are checked: a `.lmstudio/skills` that is a link to another folder is still
+/// Bionic's, and a link from elsewhere into it is too.
 pub fn inside_bionic_skills(p: &Path) -> bool {
     let abs = if p.is_absolute() {
         p.to_path_buf()
@@ -195,8 +196,35 @@ pub fn inside_bionic_skills(p: &Path) -> bool {
             Err(_) => return true, // can't tell where it is: refuse
         }
     };
+    names_bionic_skills(&lexical_parts(&abs)) || resolves_into_bionic_skills(&abs)
+}
+
+/// The lower-cased parts of `p` with `.` dropped and `..` taking one part off.
+fn lexical_parts(p: &Path) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for c in p.components() {
+        let name = c.as_os_str().to_string_lossy().to_lowercase();
+        match name.as_str() {
+            "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(name),
+        }
+    }
+    parts
+}
+
+fn names_bionic_skills(parts: &[String]) -> bool {
+    parts
+        .windows(2)
+        .any(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))
+}
+
+/// [`inside_bionic_skills`] on the path with links resolved in the part that exists.
+fn resolves_into_bionic_skills(abs: &Path) -> bool {
     // Resolve the longest part that exists, then add the rest.
-    let mut existing = abs.as_path();
+    let mut existing = abs;
     let mut rest = Vec::new();
     let resolved = loop {
         if let Ok(c) = existing.canonicalize() {
@@ -224,15 +252,35 @@ pub fn inside_bionic_skills(p: &Path) -> bool {
             _ => parts.push(name),
         }
     }
-    parts
-        .windows(2)
-        .any(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))
+    names_bionic_skills(&parts)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    #[cfg(unix)]
+    fn a_skills_folder_that_is_a_link_is_still_bionics() {
+        let home = tempdir().unwrap();
+        let target = home.path().join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(home.path().join(".lmstudio")).unwrap();
+        let skills = home.path().join(".lmstudio").join("skills");
+        std::os::unix::fs::symlink(&target, &skills).unwrap();
+        assert!(
+            inside_bionic_skills(&skills),
+            "named as Bionic's, even though it resolves elsewhere"
+        );
+        assert!(inside_bionic_skills(&skills.join("x")));
+        let link_in = home.path().join("into-skills");
+        std::os::unix::fs::symlink(&skills, &link_in).unwrap();
+        assert!(
+            !inside_bionic_skills(&target),
+            "the target folder itself is not named as Bionic's"
+        );
+    }
 
     #[test]
     fn bionic_skills_and_anything_inside_are_recognised_existing_or_not() {

@@ -221,3 +221,29 @@ fn a_tools_changed_notification_is_remembered_once() {
     assert!(c.take_tools_changed());
     assert!(!c.take_tools_changed());
 }
+
+#[test]
+fn a_failed_write_ends_the_waiting_request_at_once() {
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("stdin closed"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    // The app keeps stdout open but takes nothing on stdin.
+    let (client_r, _server_w) = std::io::pipe().unwrap();
+    let mut c = Conn::new(Box::new(client_r), Box::new(Broken));
+    let started = std::time::Instant::now();
+    let err = c
+        .request("x", json!({}), Duration::from_secs(30))
+        .unwrap_err();
+    assert!(err.contains("writing to the app failed"), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "not the full deadline"
+    );
+    assert!(c.closed().is_some());
+}

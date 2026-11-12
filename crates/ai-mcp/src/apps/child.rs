@@ -7,7 +7,9 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel, sync_channel};
+use std::sync::mpsc::{
+    Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
+};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -25,6 +27,9 @@ const MAX_PAGES: usize = 64;
 /// Messages the reader thread keeps for the gateway. When they are not picked up, the reader
 /// waits, and so does the app writing them: a chatty app cannot fill the gateway's memory.
 const QUEUE: usize = 256;
+/// Lines waiting for the writer thread. A request writes one line and waits, so a full queue
+/// means the app stopped reading.
+const WRITE_QUEUE: usize = 64;
 /// The notification an app sends when its tool list changed.
 const TOOLS_CHANGED: &str = "notifications/tools/list_changed";
 /// The MCP revision the gateway asks the apps for.
@@ -41,7 +46,7 @@ enum Incoming {
 pub struct Conn {
     /// Lines for the writer thread: a write the app does not take never blocks a request past
     /// its deadline.
-    writer: Sender<Vec<u8>>,
+    writer: SyncSender<Vec<u8>>,
     rx: Receiver<Incoming>,
     next_id: u64,
     child: Option<Child>,
@@ -106,6 +111,7 @@ impl Conn {
     /// Connect to a server reading `writer` and writing `reader`. Starts a reader thread.
     pub fn new(reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>) -> Self {
         let (tx, rx) = sync_channel(QUEUE);
+        let write_failed = tx.clone();
         std::thread::spawn(move || {
             let mut r = BufReader::new(reader);
             loop {
@@ -130,12 +136,15 @@ impl Conn {
                 }
             }
         });
-        let (wtx, wrx) = channel::<Vec<u8>>();
+        let (wtx, wrx) = sync_channel::<Vec<u8>>(WRITE_QUEUE);
         std::thread::spawn(move || {
             let mut w = writer;
             for line in wrx {
-                if w.write_all(&line).and_then(|()| w.flush()).is_err() {
-                    return; // the next send finds the channel closed
+                if let Err(e) = w.write_all(&line).and_then(|()| w.flush()) {
+                    // Wake the request that is waiting: it would otherwise wait out its deadline.
+                    let _ = write_failed
+                        .try_send(Incoming::Closed(format!("writing to the app failed: {e}")));
+                    return;
                 }
             }
         });
@@ -186,8 +195,15 @@ impl Conn {
     fn send(&mut self, msg: &Value) -> Result<(), String> {
         let mut line = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
         line.push(b'\n');
-        self.writer.send(line).map_err(|_| {
-            let why = "writing to the app failed: it stopped reading".to_string();
+        // Never wait to queue a line: an app that stops reading fills the queue, and the
+        // connection is closed then rather than holding lines without end.
+        self.writer.try_send(line).map_err(|e| {
+            let why = match e {
+                TrySendError::Full(_) => {
+                    "writing to the app failed: it stopped reading".to_string()
+                }
+                TrySendError::Disconnected(_) => "writing to the app failed".to_string(),
+            };
             self.closed = Some(why.clone());
             why
         })

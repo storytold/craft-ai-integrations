@@ -329,3 +329,47 @@ fn the_tool_list_is_read_again_after_the_app_says_it_changed() {
     assert_eq!(out["tools"][0]["tool"], "doc.new");
     assert_eq!(lists.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn an_app_that_stopped_has_its_tools_read_again() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let s = starts.clone();
+    let h = Hub::with_connector(
+        vec![entry("wordcraft", "WordCraft")],
+        vec![],
+        Box::new(move |_| {
+            let n = s.fetch_add(1, Ordering::SeqCst);
+            let name = if n == 0 { "doc.old" } else { "doc.new" };
+            let tools = json!([{"name": name}]);
+            if n == 0 {
+                // Lists its tools, then exits: the stream ends.
+                let (client_r, mut server_w) = std::io::pipe().unwrap();
+                let (server_r, client_w) = std::io::pipe().unwrap();
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, Write};
+                    let mut lines = std::io::BufReader::new(server_r).lines();
+                    if let Some(Ok(l)) = lines.next() {
+                        let req: Value = serde_json::from_str(&l).unwrap();
+                        let reply =
+                            json!({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": tools}});
+                        let _ = writeln!(server_w, "{reply}");
+                    }
+                });
+                Ok(Conn::new(Box::new(client_r), Box::new(client_w)))
+            } else {
+                Ok(app_conn(tools))
+            }
+        }),
+    );
+    let first =
+        text(&tools::call(&h, FIND_TOOLS, &json!({"query": "doc", "app": "wordcraft"})).unwrap());
+    assert_eq!(first["tools"][0]["tool"], "doc.old");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let again =
+        text(&tools::call(&h, FIND_TOOLS, &json!({"query": "doc", "app": "wordcraft"})).unwrap());
+    assert_eq!(
+        again["tools"][0]["tool"], "doc.new",
+        "the restarted app's tools, not the cached ones"
+    );
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+}
