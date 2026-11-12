@@ -31,7 +31,7 @@ AFTER_RUN = (
     '            self.residency.loaded(bytes, false);\n'
     '        }\n'
 )
-CHECK = '            guarded(|| memory::check_fits(&self.model.label, needed, free))?;\n'
+CHECK = '            let admitted = guarded(|| admission.admit(&self.model.label, needed, free))?;\n'
 LOAD_START = '        if slot.is_none() {\n            let needed'
 
 MM = [
@@ -42,9 +42,13 @@ MM = [
     ('idle-sweep-marks-busy-models', M, IDLE_SKIP, '', E, 'memory', 'idle_unload_leaves_a_model_in_use_alone'),
     ('unload-leaves-model-listed', M, '        state.held = None;\n        state.unload_requested = false;\n        held.take()', '        state.unload_requested = false;\n        held.take()', E, 'memory', 'unloading_frees_the_model'),
     ('unload-one-takes-all', P, 'model.is_none_or(|m| &e.model.id == m)', 'true', E, 'memory', 'unloading_one_model_leaves_the_others'),
-    ('memory-check-skipped', P, CHECK, '', E, 'memory', 'will_not_fit_is_refused'),
-    ('reader-panic-not-guarded', P, CHECK, '            memory::check_fits(&self.model.label, needed, free)?;\n', E, 'memory', 'reader_that_panics'),
-    ('memory-check-on-every-run', P, LOAD_START, '        memory::check_fits(&self.model.label, Some(1), free)?;\n' + LOAD_START, E, 'memory', 'runs_again_without_a_memory_check'),
+    ('memory-check-skipped', P, CHECK, '            let admitted = ();\n', E, 'memory', 'will_not_fit_is_refused'),
+    ('reader-panic-not-guarded', P, CHECK, '            let admitted = admission.admit(&self.model.label, needed, free)?;\n', E, 'memory', 'reader_that_panics'),
+    ('memory-check-on-every-run', P, LOAD_START, '        drop(admission.admit(&self.model.label, Some(1), free)?);\n' + LOAD_START, E, 'memory', 'runs_again_without_a_memory_check'),
+    ('admitted-load-sets-nothing-aside', M, '        *set_aside = set_aside.saturating_add(bytes);\n', '', E, 'memory', 'another_load_has_been_promised'),
+    ('set-aside-ignored-when-judging', M, '.map(|bytes| bytes.saturating_sub(*set_aside));', ';', E, 'memory', 'another_load_has_been_promised'),
+    ('share-never-given-back', M, '        *set_aside = set_aside.saturating_sub(self.bytes);\n', '', E, 'memory', 'another_load_has_been_promised'),
+    ('admission-not-shared', P, '        self.admission = admission;\n', '', E, 'memory', 'sharing_an_admission'),
     ('fit-compared-the-wrong-way', M, 'if needed <= free {', 'if needed >= free {', E, 'lib', 'fits_or_cannot_be_judged'),
     ('reported-size-ignored-at-load', P, AT_LOAD, '                Some(_) => self.residency.loaded(needed.unwrap_or_default(), true),\n', E, 'memory', 'reports_its_memory'),
     ('size-not-read-again-after-a-run', P, AFTER_RUN, '', E, 'memory', 'grows_between_runs'),
@@ -67,9 +71,11 @@ CM = [
     ('unregister-keeps-old-cache', CF, '        self.support.remove(&name);\n        self.engines.remove(&name);\n    }', '        self.support.remove(&name);\n    }', C, T, 'replacing_an_engine_forgets'),
     ('reader-lost-with-a-new-factory', CC, 'if free.is_some() {', 'if false {', C, T, 'whichever_order'),
     ('reader-not-given-to-existing-engines', CE, '            kept.set_free_memory(read.clone());\n', '', C, T, 'after_a_model_loaded'),
-    ('replaced-provider-not-retired', CE, '            old.provider.retire();\n', '', C, T, 'changed_mid_job'),
+    ('replaced-provider-not-retired', CE, '            old.retire();\n', '', C, T, 'changed_mid_job'),
     ('held-retired-provider-dropped', CE, 'Arc::strong_count(p) > 1 || p.is_busy()', 'p.is_busy()', C, T, 'held_across_a_swap'),
-    ('loading-job-keeps-model-after-swap', CE, '            old.provider.retire();\n', '            old.provider.unload(None);\n', C, T, 'loading_when_its_connection_changes'),
-    ('replaced-provider-hidden', CE, '        out.extend(retiring.iter().cloned());\n', '', C, T, 'changed_mid_job'),
+    ('loading-job-keeps-model-after-swap', CE, '            old.retire();\n', '            old.unload(None);\n', C, T, 'loading_when_its_connection_changes'),
+    ('replaced-provider-hidden', CE, '        merged(out, retiring)\n', '        merged(out, Vec::new())\n', C, T, 'changed_mid_job'),
+    ('engines-judge-loads-apart', CE, 'admission: self.load_admission.clone(),', 'admission: LoadAdmission::default(),', C, T, 'two_engines_at_once'),
+    ('provider-moved-during-listing-listed-twice', CE, 'if !current.iter().any(|(_, _, p)| Arc::ptr_eq(p, &entry.2)) {', 'if true {', C, 'lib', 'listed_once'),
     ('reader-not-given-to-later-engines', CE, '            kept.set_free_memory(self.free_memory.clone());\n', '', C, T, 'before_its_engines'),
 ]

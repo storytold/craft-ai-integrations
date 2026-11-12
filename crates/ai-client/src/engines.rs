@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use craft_ai_core::{AiError, Connection, ConnectionId, ModelId, Provider};
-use craft_ai_engine::{EngineProvider, EngineRegistry, FreeMemory, LoadedModelInfo, Unloaded};
+use craft_ai_engine::{
+    EngineProvider, EngineRegistry, FreeMemory, LoadAdmission, LoadedModelInfo, Unloaded,
+};
 
 use crate::factory::ProviderFactory;
 
@@ -48,7 +50,10 @@ impl ProviderFactory {
                 }
             }
             let registry = registry.clone();
-            let kept = Arc::new(Kept::default());
+            let kept = Arc::new(Kept {
+                admission: self.load_admission.clone(),
+                ..Kept::default()
+            });
             kept.set_free_memory(self.free_memory.clone());
             let cache = kept.clone();
             self.register(&engine, move |connection, _| {
@@ -119,6 +124,8 @@ pub(crate) struct Kept {
     retiring: Mutex<Vec<(String, String, Arc<EngineProvider>)>>,
     /// Read by every provider at load time, so a reader set later still applies.
     free: Arc<Mutex<Option<FreeMemory>>>,
+    /// The factory's, shared by every engine, so loads on two engines at once are judged together.
+    admission: LoadAdmission,
 }
 
 impl Kept {
@@ -157,8 +164,11 @@ impl Kept {
             let current = free.lock().unwrap_or_else(PoisonError::into_inner).clone();
             current.and_then(|read| read())
         });
-        let provider =
-            Arc::new(EngineProvider::from_connection(registry, connection)?.with_free_memory(read));
+        let provider = Arc::new(
+            EngineProvider::from_connection(registry, connection)?
+                .with_free_memory(read)
+                .with_load_admission(self.admission.clone()),
+        );
         let replaced = built.insert(
             id.clone(),
             Built {
@@ -167,18 +177,22 @@ impl Kept {
                 provider: provider.clone(),
             },
         );
-        if let Some(old) = replaced {
-            // Jobs already submitted to the old provider still run. Retired, it lets go of every
-            // model as its job finishes, and it stays listed until it holds nothing and has no
-            // job left that could load one, so the memory is never out of sight. It moves to
-            // the retiring list before the cache lock is released, so a listing never misses it.
-            old.provider.retire();
+        // The old provider moves to the retiring list before the cache lock is released, so a
+        // listing never misses it.
+        let old = replaced.map(|old| {
             self.retiring
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .push((id, old.label, old.provider));
-        }
+                .push((id, old.label, old.provider.clone()));
+            old.provider
+        });
         drop(built);
+        // Retired with no cache lock held, as letting go of a model can take a while. Jobs
+        // already submitted to it still run; each lets go of its model as it finishes, and it
+        // stays listed until it holds nothing and has no job left that could load one.
+        if let Some(old) = old {
+            old.retire();
+        }
         Ok(provider)
     }
 
@@ -197,8 +211,8 @@ impl Kept {
         retiring.retain(|(_, _, p)| {
             Arc::strong_count(p) > 1 || p.is_busy() || !p.loaded_models().is_empty()
         });
-        out.extend(retiring.iter().cloned());
-        out
+        let retiring: Vec<_> = retiring.iter().cloned().collect();
+        merged(out, retiring)
     }
 
     fn loaded(&self, engine: &str) -> Vec<LoadedEngineModel> {
@@ -237,6 +251,20 @@ impl Kept {
     }
 }
 
+/// The current providers, then the retiring ones not already among them. A provider replaced
+/// between the two copies is in both, and is listed once.
+fn merged<T>(
+    mut current: Vec<(String, String, Arc<T>)>,
+    retiring: Vec<(String, String, Arc<T>)>,
+) -> Vec<(String, String, Arc<T>)> {
+    for entry in retiring {
+        if !current.iter().any(|(_, _, p)| Arc::ptr_eq(p, &entry.2)) {
+            current.push(entry);
+        }
+    }
+    current
+}
+
 /// The engines compiled into this build, by cargo feature. Empty when none is turned on.
 pub(crate) fn built_in() -> EngineRegistry {
     #[allow(unused_mut)]
@@ -248,4 +276,18 @@ pub(crate) fn built_in() -> EngineRegistry {
     #[cfg(feature = "burn")]
     registry.extend(craft_ai_engine_burn::runners());
     registry
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_provider_replaced_between_the_two_copies_is_listed_once() {
+        let (moved, old) = (Arc::new(1), Arc::new(2));
+        let entry = |p: &Arc<i32>| ("c".to_owned(), "C".to_owned(), p.clone());
+        let out = merged(vec![entry(&moved)], vec![entry(&old), entry(&moved)]);
+        let listed: Vec<i32> = out.iter().map(|(_, _, p)| **p).collect();
+        assert_eq!(listed, vec![1, 2]);
+    }
 }

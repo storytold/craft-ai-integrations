@@ -171,9 +171,9 @@ pub(crate) fn file_size(weights: &Path) -> Option<u64> {
 pub(crate) fn check_fits(
     label: &str,
     needed: Option<u64>,
-    free: Option<&FreeMemory>,
+    free: Option<u64>,
 ) -> Result<(), AiError> {
-    let (Some(needed), Some(free)) = (needed, free.and_then(|read| read())) else {
+    let (Some(needed), Some(free)) = (needed, free) else {
         return Ok(());
     };
     if needed <= free {
@@ -187,20 +187,67 @@ pub(crate) fn check_fits(
     )))
 }
 
+/// Memory set aside for loads that passed the free-memory check and have not finished loading.
+///
+/// Free memory is read before a load allocates anything, so two loads judged at once would both
+/// count the same free memory. Providers sharing one `LoadAdmission` judge their loads one at a
+/// time, each against free memory less what loads already admitted will take. A load's share is
+/// given back when its load ends, loaded or failed; by then the reader sees the real figure.
+/// Clones share one count.
+#[derive(Clone, Default)]
+pub struct LoadAdmission(Arc<Mutex<u64>>);
+
+/// One admitted load's share of a [`LoadAdmission`], given back when dropped.
+pub(crate) struct Admitted {
+    pool: Arc<Mutex<u64>>,
+    bytes: u64,
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        let mut set_aside = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
+        *set_aside = set_aside.saturating_sub(self.bytes);
+    }
+}
+
+impl LoadAdmission {
+    /// Admits a load needing `needed` bytes when it fits in free memory less what is set aside,
+    /// and sets its share aside. The reader runs with the count held, so loads are judged in turn.
+    pub(crate) fn admit(
+        &self,
+        label: &str,
+        needed: Option<u64>,
+        free: Option<&FreeMemory>,
+    ) -> Result<Admitted, AiError> {
+        let mut set_aside = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let free = free
+            .and_then(|read| read())
+            .map(|bytes| bytes.saturating_sub(*set_aside));
+        check_fits(label, needed, free)?;
+        let bytes = needed.unwrap_or_default();
+        *set_aside = set_aside.saturating_add(bytes);
+        Ok(Admitted {
+            pool: self.0.clone(),
+            bytes,
+        })
+    }
+
+    /// Bytes set aside now (for tests).
+    #[cfg(test)]
+    fn set_aside(&self) -> u64 {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn free(bytes: Option<u64>) -> FreeMemory {
-        Arc::new(move || bytes)
-    }
-
     #[test]
     fn a_load_that_fits_or_cannot_be_judged_goes_ahead() {
-        assert!(check_fits("M", Some(10), Some(&free(Some(10)))).is_ok());
-        assert!(check_fits("M", Some(10), Some(&free(Some(20)))).is_ok());
-        assert!(check_fits("M", None, Some(&free(Some(1)))).is_ok());
-        assert!(check_fits("M", Some(10), Some(&free(None))).is_ok());
+        assert!(check_fits("M", Some(10), Some(10)).is_ok());
+        assert!(check_fits("M", Some(10), Some(20)).is_ok());
+        assert!(check_fits("M", None, Some(1)).is_ok());
         assert!(check_fits("M", Some(10), None).is_ok());
     }
 
@@ -209,7 +256,7 @@ mod tests {
         let err = check_fits(
             "Remove background",
             Some(8_000_000_000),
-            Some(&free(Some(2_500_000_000))),
+            Some(2_500_000_000),
         )
         .unwrap_err();
         assert_eq!(err.kind, craft_ai_core::ErrorKind::Unsupported);
@@ -315,5 +362,38 @@ mod tests {
         r.enter();
         assert!(r.leave(held, true).is_some());
         assert!(r.info(&model(), "M").is_none());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    fn free(bytes: Option<u64>) -> FreeMemory {
+        Arc::new(move || bytes)
+    }
+
+    #[test]
+    fn a_second_load_counts_what_the_first_set_aside() {
+        let gate = LoadAdmission::default();
+        let read = free(Some(3));
+        let first = gate.admit("A", Some(2), Some(&read)).unwrap();
+        assert_eq!(gate.set_aside(), 2);
+        let err = gate.admit("B", Some(2), Some(&read)).err().unwrap();
+        assert_eq!(err.kind, craft_ai_core::ErrorKind::Unsupported);
+        assert!(
+            gate.admit("C", Some(1), Some(&read)).is_ok(),
+            "one byte still fits"
+        );
+        drop(first);
+        assert_eq!(gate.set_aside(), 0, "given back when the load ends");
+        assert!(gate.admit("B", Some(2), Some(&read)).is_ok());
+    }
+
+    #[test]
+    fn a_refused_load_sets_nothing_aside() {
+        let gate = LoadAdmission::default();
+        assert!(gate.admit("A", Some(5), Some(&free(Some(3)))).is_err());
+        assert_eq!(gate.set_aside(), 0);
     }
 }

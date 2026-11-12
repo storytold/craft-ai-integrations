@@ -16,7 +16,9 @@ use craft_ai_core::{
 };
 
 use crate::job::Job;
-use crate::memory::{self, FreeMemory, LoadedModelInfo, Outcome, Residency, Slot, Unloaded};
+use crate::memory::{
+    FreeMemory, LoadAdmission, LoadedModelInfo, Outcome, Residency, Slot, Unloaded,
+};
 use crate::registry::EngineRegistry;
 use crate::runner::{LoadedModel, ModelRunner};
 
@@ -52,12 +54,12 @@ impl Entry {
         &self,
         request: &Request,
         job: &Job,
-        free: Option<&FreeMemory>,
+        memory: (Option<&FreeMemory>, &LoadAdmission),
         retired: &AtomicBool,
     ) -> Result<Vec<Output>, AiError> {
         let mut slot = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         self.residency.enter();
-        let result = self.turn(&mut slot, request, job, free);
+        let result = self.turn(&mut slot, request, job, memory);
         // Whatever state a model that failed inside was left in, do not reuse it. A retired
         // provider keeps nothing once a job is done with it.
         let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal)
@@ -73,7 +75,7 @@ impl Entry {
         slot: &mut Option<Box<dyn LoadedModel>>,
         request: &Request,
         job: &Job,
-        free: Option<&FreeMemory>,
+        (free, admission): (Option<&FreeMemory>, &LoadAdmission),
     ) -> Result<Vec<Output>, AiError> {
         // Only now is the job really running: until this point it was waiting its turn behind
         // another job for the same model. A job cancelled while it waited never loads or runs.
@@ -83,10 +85,14 @@ impl Entry {
         let ctx = job.context();
         if slot.is_none() {
             let needed = guarded(|| Ok(self.runner.memory_needed(&self.weights)))?;
-            // The reader is the app's code: a panic in it fails this job, not the worker.
-            guarded(|| memory::check_fits(&self.model.label, needed, free))?;
+            // The reader is the app's code: a panic in it fails this job, not the worker. The
+            // load's share stays set aside until the load ends, so a load judged at the same
+            // time on another model cannot count the same free memory.
+            let admitted = guarded(|| admission.admit(&self.model.label, needed, free))?;
             let weights = self.weights.clone();
-            let model = guarded(|| self.runner.load(&weights))?;
+            let model = guarded(|| self.runner.load(&weights));
+            drop(admitted);
+            let model = model?;
             match reported(model.as_ref()) {
                 Some(bytes) => self.residency.loaded(bytes, false),
                 None => self.residency.loaded(needed.unwrap_or_default(), true),
@@ -139,6 +145,8 @@ pub struct EngineProvider {
     next: AtomicU64,
     pending: Arc<AtomicUsize>,
     free: Option<FreeMemory>,
+    /// Shared with every provider that judges loads against the same memory.
+    admission: LoadAdmission,
     /// Set by `retire`: every job lets go of its model when it finishes.
     retired: Arc<AtomicBool>,
 }
@@ -171,6 +179,7 @@ impl EngineProvider {
             next: AtomicU64::new(0),
             pending: Arc::default(),
             free: None,
+            admission: LoadAdmission::default(),
             retired: Arc::default(),
         }
     }
@@ -179,6 +188,14 @@ impl EngineProvider {
     /// than starting one that cannot finish. `read` returns `None` when it cannot tell.
     pub fn with_free_memory(mut self, read: FreeMemory) -> Self {
         self.free = Some(read);
+        self
+    }
+
+    /// Judges loads together with every other provider given the same `admission`, so loads
+    /// that start at once cannot both count the same free memory. Without it, a provider judges
+    /// only its own loads together.
+    pub fn with_load_admission(mut self, admission: LoadAdmission) -> Self {
+        self.admission = admission;
         self
     }
 
@@ -331,11 +348,12 @@ impl Provider for EngineProvider {
         let job = Job::new();
         let (work, request, free) = (job.clone(), request.clone(), self.free.clone());
         let retired = self.retired.clone();
+        let admission = self.admission.clone();
         std::thread::Builder::new()
             .name(format!("{}-{n}", self.engine))
             .spawn(move || {
                 let _pending = pending;
-                let result = entry.run(&request, &work, free.as_ref(), &retired);
+                let result = entry.run(&request, &work, (free.as_ref(), &admission), &retired);
                 work.finish(result);
             })
             .map_err(|e| {
@@ -393,7 +411,8 @@ mod tests {
 
         let cancelled = Job::new();
         cancelled.cancel();
-        let result = entry.run(&request, &cancelled, None, &AtomicBool::new(false));
+        let memory = (None, &LoadAdmission::default());
+        let result = entry.run(&request, &cancelled, memory, &AtomicBool::new(false));
         assert_eq!(
             result.as_ref().err().map(|e| e.kind),
             Some(ErrorKind::Cancelled)
@@ -415,7 +434,8 @@ mod tests {
         // removed, the cancelled job above would load (and, without the cancel check, run), so
         // these counters would no longer be 0.
         let control = Job::new();
-        let result = entry.run(&request, &control, None, &AtomicBool::new(false));
+        let memory = (None, &LoadAdmission::default());
+        let result = entry.run(&request, &control, memory, &AtomicBool::new(false));
         assert!(matches!(&result, Ok(outputs) if outputs.len() == 1));
         control.finish(result);
         assert_eq!(control.snapshot().state, JobState::Succeeded);

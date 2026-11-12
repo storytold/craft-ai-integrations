@@ -74,6 +74,8 @@ pub struct ProviderFactory {
     pub(crate) engines: HashMap<String, Arc<crate::engines::Kept>>,
     /// How built-in engines read free memory before a load (see `set_free_memory`).
     pub(crate) free_memory: Option<craft_ai_engine::FreeMemory>,
+    /// Shared by every built-in engine (and by clones), so loads at once are judged together.
+    pub(crate) load_admission: craft_ai_engine::LoadAdmission,
 }
 
 impl ProviderFactory {
@@ -116,6 +118,7 @@ impl ProviderFactory {
             standard_senders: HashSet::new(),
             engines: HashMap::new(),
             free_memory: None,
+            load_admission: craft_ai_engine::LoadAdmission::default(),
         };
         for name in OPENAI_FAMILY {
             f.register(name, move |c, s| {

@@ -418,3 +418,51 @@ fn a_provider_held_across_a_swap_is_listed_when_it_loads_later() {
     });
     until("its model is let go of", || app.loaded_models().is_empty());
 }
+
+/// Built-in engines judge their loads together: while one engine is still loading a model, a
+/// load on another engine cannot count the same free memory.
+#[test]
+fn loads_on_two_engines_at_once_cannot_count_the_same_free_memory() {
+    let w = World::new(2);
+    // The tool also set up on Burn, still bound to Candle: enabling binds only an unbound tool.
+    let file = w.dir.path().join("burn.safetensors");
+    std::fs::write(&file, b"bb").unwrap();
+    let desk = ToolDesk::new(w.bare("launcher"), w.shared.clone(), None);
+    desk.enable_native_with(&select_subject(), "burn", &file)
+        .unwrap();
+    let mut store = w.shared.load().unwrap();
+    let burn = store
+        .connections
+        .iter()
+        .find(|c| c.provider == "burn")
+        .unwrap();
+    let (connection, model) = (burn.id.clone(), burn.models[0].id.clone());
+
+    let mut candle = runner();
+    let gate = Arc::new(AtomicBool::new(true));
+    candle.load_hold = Some(gate.clone());
+    let started = candle.load_started.clone();
+    let mut both = EngineRegistry::new();
+    both.register(candle.clone());
+    both.register(FakeRunner::new("burn", model.as_str(), "image.segment"));
+    let app = w
+        .bare("lightcraft")
+        .with_factory(factory(both))
+        .with_free_memory(reading(Some(3)));
+    let first = start(&app);
+    until("the first load has started", || {
+        started.load(Ordering::SeqCst) == 1
+    });
+
+    for binding in &mut store.defaults {
+        binding.connection = connection.clone();
+        binding.model = model.clone();
+    }
+    w.shared.replace(&store).unwrap();
+    assert!(refused(run(&app)), "the second engine's load is refused");
+    gate.store(false, Ordering::SeqCst);
+    let done = first
+        .wait(Duration::from_millis(2), Duration::from_secs(10))
+        .unwrap();
+    assert_eq!(done.state, JobState::Succeeded);
+}

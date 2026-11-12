@@ -147,5 +147,6 @@ connection each model was set up through. `unload_model` frees one, `unload_all_
 them all, and `unload_idle_models` frees models unused for a given time. A model in use finishes
 its job first. Nothing runs on a timer: the app decides when to call these. Give the client
 `with_free_memory` and a load that will not fit fails in plain words before anything is loaded.
-The model files on disk are never touched. (`EngineProvider` has the same calls for a provider
+Loads that start at once are judged in turn: each counts the memory that loads already under
+way will take, on any built-in engine of the same client. The model files on disk are never touched. (`EngineProvider` has the same calls for a provider
 used on its own.)

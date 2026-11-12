@@ -320,3 +320,75 @@ fn a_retired_provider_keeps_nothing_its_queued_jobs_load() {
         "the queued job loaded it again"
     );
 }
+
+/// Two models that each need 2 bytes, with 3 free: while the first is still loading, the second
+/// is refused rather than both counting the same free memory. Once the first has loaded, its
+/// share is given back.
+#[test]
+fn a_load_counts_memory_another_load_has_been_promised() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = FakeRunner::new("candle", "a", "image.segment");
+    let gate = Arc::new(AtomicBool::new(true));
+    a.load_hold = Some(gate.clone());
+    let started = a.load_started.clone();
+    let b = FakeRunner::new("candle", "b", "image.segment");
+    let p = provider(vec![
+        (a.clone(), weights(&dir, "a.bin", 2)),
+        (b.clone(), weights(&dir, "b.bin", 2)),
+    ])
+    .with_free_memory(reading(Some(3)));
+    let first = p.submit(&id("a"), &a.good_request().unwrap()).unwrap();
+    until("the first load has started", || {
+        started.load(Ordering::SeqCst) == 1
+    });
+
+    match run(&p, &b) {
+        JobState::Failed { error } => {
+            assert!(
+                error.message.contains("enough free memory"),
+                "{}",
+                error.message
+            )
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    gate.store(false, Ordering::SeqCst);
+    assert_eq!(finish(&p, &first), JobState::Succeeded);
+    assert_eq!(
+        run(&p, &b),
+        JobState::Succeeded,
+        "the first load's share was given back"
+    );
+}
+
+/// Providers given one admission judge their loads together.
+#[test]
+fn providers_sharing_an_admission_judge_loads_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = craft_ai_engine::LoadAdmission::default();
+    let mut a = FakeRunner::new("candle", "a", "image.segment");
+    let gate = Arc::new(AtomicBool::new(true));
+    a.load_hold = Some(gate.clone());
+    let started = a.load_started.clone();
+    let b = FakeRunner::new("rten", "b", "image.segment");
+    let one = provider(vec![(a.clone(), weights(&dir, "a.bin", 2))])
+        .with_free_memory(reading(Some(3)))
+        .with_load_admission(shared.clone());
+    let two = EngineProvider::new(
+        "rten",
+        [(
+            Arc::new(b.clone()) as Arc<dyn ModelRunner>,
+            weights(&dir, "b.bin", 2),
+        )],
+    )
+    .with_free_memory(reading(Some(3)))
+    .with_load_admission(shared);
+    let first = one.submit(&id("a"), &a.good_request().unwrap()).unwrap();
+    until("the first load has started", || {
+        started.load(Ordering::SeqCst) == 1
+    });
+
+    assert!(matches!(run(&two, &b), JobState::Failed { .. }));
+    gate.store(false, Ordering::SeqCst);
+    assert_eq!(finish(&one, &first), JobState::Succeeded);
+}
