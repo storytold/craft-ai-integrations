@@ -37,19 +37,27 @@ fn a_step_without_a_readable_name_is_still_reported() {
         "2": {"class_type": 7, "inputs": {}},
         "3": {"class_type": "  ", "inputs": {}}
     });
-    assert_eq!(unknown_steps(&graph), ["(unnamed step)"]);
+    assert_eq!(unknown_steps(&graph), ["", "  "]);
 }
 
 #[test]
-fn reported_names_are_one_short_clean_line() {
-    let long = "A".repeat(500);
+fn reported_names_are_exact_however_long_or_odd() {
+    // Consent compares these names, so nothing is cut or cleaned: two steps that share their
+    // first 80 characters stay two steps.
+    let shared = "A".repeat(80);
     let graph = json!({
-        "1": {"class_type": "Send\nTo\u{7}Host", "inputs": {}},
-        "2": {"class_type": long, "inputs": {}}
+        "1": {"class_type": format!("{shared}One"), "inputs": {}},
+        "2": {"class_type": format!("{shared}Two"), "inputs": {}},
+        "3": {"class_type": "Send\nTo\u{7}Host", "inputs": {}}
     });
-    let steps = unknown_steps(&graph);
-    assert!(steps.contains(&"SendToHost".to_owned()), "{steps:?}");
-    assert!(steps.iter().all(|s| s.chars().count() <= 80), "{steps:?}");
+    assert_eq!(
+        unknown_steps(&graph),
+        [
+            format!("{shared}One"),
+            format!("{shared}Two"),
+            "Send\nTo\u{7}Host".to_owned()
+        ]
+    );
 }
 
 #[test]

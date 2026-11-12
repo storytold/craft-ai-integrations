@@ -89,3 +89,29 @@ fn a_connection_that_is_not_comfyui_is_not_judged_by_the_workflow_library() {
     assert_eq!(plan.disclosure().locality, Locality::Local);
     assert!(plan.disclosure().unknown_steps.is_empty());
 }
+
+#[test]
+fn steps_whose_names_share_a_long_start_are_agreed_to_separately() {
+    // The screen shortens long names; the agreement must not, or consent for one step would
+    // cover another whose name only differs after the cut.
+    let shared = "A".repeat(80);
+    let (one, two) = (format!("{shared}One"), format!("{shared}Two"));
+    let w = World::new();
+    w.write(&[one.as_str()]);
+    let plan = w.client.plan(&role(), request()).unwrap();
+    let mut ledger = ConsentLedger::default();
+    ledger.grant(plan.disclosure());
+    // A fresh plan for the other step is not covered.
+    w.write(&[two.as_str()]);
+    let fresh = w.client.plan(&role(), request()).unwrap();
+    assert_eq!(fresh.disclosure().unknown_steps, vec![two.clone()]);
+    assert!(fresh.needs_consent(&ledger));
+    assert_eq!(
+        w.client.start(&fresh, &ledger).unwrap_err().kind,
+        ErrorKind::ConsentRequired
+    );
+    // Swapping one for the other after planning is refused too.
+    let e = w.client.start(&plan, &ledger).unwrap_err();
+    assert!(e.message.contains("workflow changed"), "{}", e.message);
+    assert!(!w.queued());
+}

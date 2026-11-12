@@ -61,13 +61,33 @@ pub fn disclosure_lines(d: &Disclosure) -> Vec<String> {
 /// The most step names one line lists before it says how many more there are.
 const STEPS_SHOWN: usize = 8;
 
+/// The longest step name shown. A longer name is cut, so a crafted file cannot fill the
+/// consent screen. Only the label is cut; consent keeps the exact name.
+const STEP_LABEL_CHARS: usize = 80;
+
+/// One step name safe to show: no control characters, at most [`STEP_LABEL_CHARS`] characters,
+/// and `(unnamed step)` for a step with no readable name.
+fn step_label(name: &str) -> String {
+    let label: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(STEP_LABEL_CHARS)
+        .collect();
+    let label = label.trim();
+    if label.is_empty() {
+        "(unnamed step)".to_owned()
+    } else {
+        label.to_owned()
+    }
+}
+
 /// Says the workflow has steps this app cannot vouch for, naming them, because such a step may
 /// send what it is given off this computer.
 pub fn unknown_steps_line(steps: &[String]) -> String {
     let mut names = steps
         .iter()
         .take(STEPS_SHOWN)
-        .cloned()
+        .map(|s| step_label(s))
         .collect::<Vec<_>>()
         .join(", ");
     if steps.len() > STEPS_SHOWN {
@@ -195,6 +215,10 @@ mod tests {
                 .iter()
                 .all(|l| !l.contains("add-on"))
         );
+        let odd = unknown_steps_line(&["".into(), "Send\nTo\u{7}Host".into(), "A".repeat(500)]);
+        assert!(odd.contains("(unnamed step), SendToHost, "), "{odd}");
+        assert!(odd.ends_with(&"A".repeat(80)), "{odd}");
+        assert!(!odd.contains(&"A".repeat(81)), "{odd}");
     }
 
     #[test]

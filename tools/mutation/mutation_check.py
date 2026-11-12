@@ -656,11 +656,13 @@ S21 = [
 STEPS = C + 'ai-comfyui/src/local_steps.rs'
 CONSENT_CORE = C + 'ai-core/src/consent.rs'
 CLIENT_RUN = C + 'ai-client/src/client_run.rs'
+EGUI_TEXT = C + 'ai-egui/src/text.rs'
 WS = [
     ('steps-any-class-known', STEPS, '.filter(|class| !KNOWN_LOCAL_STEPS.contains(class))', '.filter(|_| false)', 'craft-ai-comfyui', 'local_steps', 'every_other_step'),
-    ('steps-unnamed-dropped', STEPS, '"(unnamed step)".to_owned()', '"LoadImage".to_owned()', 'craft-ai-comfyui', 'local_steps', 'without_a_readable_name'),
-    ('steps-names-not-cleaned', STEPS, '.filter(|c| !c.is_control())', '.filter(|_| true)', 'craft-ai-comfyui', 'local_steps', 'one_short_clean_line'),
-    ('steps-names-uncut', STEPS, '.take(MAX_NAME_CHARS)', '.take(usize::MAX)', 'craft-ai-comfyui', 'local_steps', 'one_short_clean_line'),
+    ('steps-identity-cut', STEPS, '.map(str::to_owned)', '.map(|c| c.chars().take(80).collect())', 'craft-ai-comfyui', 'local_steps', 'exact_however_long'),
+    ('steps-label-unnamed-dropped', EGUI_TEXT, '"(unnamed step)".to_owned()', '"LoadImage".to_owned()', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
+    ('steps-label-not-cleaned', EGUI_TEXT, '.filter(|c| !c.is_control())', '.filter(|_| true)', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
+    ('steps-label-uncut', EGUI_TEXT, '.take(STEP_LABEL_CHARS)', '.take(usize::MAX)', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
     ('steps-not-in-plan', CLIENT_RUN, 'if !steps.is_empty() {\n            disclosure.locality = Locality::Remote;', 'if false {\n            disclosure.locality = Locality::Remote;', CL, 'comfyui_steps', 'nothing_is_sent_until'),
     ('steps-stay-local', CLIENT_RUN, '            disclosure.locality = Locality::Remote;\n', '', CL, 'comfyui_steps', 'nothing_is_sent_until'),
     ('steps-change-not-rechecked', CLIENT_RUN, 'if self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps {', 'if false {', CL, 'comfyui_steps', 'changed_after_planning'),

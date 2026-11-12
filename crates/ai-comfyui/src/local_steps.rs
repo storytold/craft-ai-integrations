@@ -95,13 +95,10 @@ pub const KNOWN_LOCAL_STEPS: &[&str] = &[
     "SaveImage",
 ];
 
-/// The longest step name reported. A longer name is cut, so a crafted file cannot fill the
-/// consent screen.
-const MAX_NAME_CHARS: usize = 80;
-
-/// The steps of `graph` that are not on [`KNOWN_LOCAL_STEPS`], sorted, each named once. A node
-/// with no readable class is reported as `(unnamed step)`. Names are cleaned of control
-/// characters and cut to a short length.
+/// The steps of `graph` that are not on [`KNOWN_LOCAL_STEPS`], sorted, each named once. Names
+/// are exact: consent and the check that a workflow did not change compare them, so two steps
+/// whose names differ anywhere stay two steps. A node with no readable class is reported as the
+/// empty name. Shortening a name for the screen is the screen's job.
 pub fn unknown_steps(graph: &Value) -> Vec<String> {
     let mut found: Vec<String> = graph
         .as_object()
@@ -109,24 +106,9 @@ pub fn unknown_steps(graph: &Value) -> Vec<String> {
         .flat_map(|nodes| nodes.values())
         .map(|node| node.get("class_type").and_then(Value::as_str).unwrap_or(""))
         .filter(|class| !KNOWN_LOCAL_STEPS.contains(class))
-        .map(clean_name)
+        .map(str::to_owned)
         .collect();
     found.sort();
     found.dedup();
     found
-}
-
-/// One step name safe to show: no control characters, at most [`MAX_NAME_CHARS`] characters.
-fn clean_name(class: &str) -> String {
-    let name: String = class
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(MAX_NAME_CHARS)
-        .collect();
-    let name = name.trim();
-    if name.is_empty() {
-        "(unnamed step)".to_owned()
-    } else {
-        name.to_owned()
-    }
 }
