@@ -156,7 +156,9 @@ impl SharedStore {
                 Err(_) => {
                     let mut backup = self.path.clone().into_os_string();
                     backup.push(".corrupt");
-                    let _ = std::fs::copy(&self.path, PathBuf::from(backup));
+                    // The backup holds the same settings, so it is private like the store, and a
+                    // link already at its name is replaced rather than written through.
+                    let _ = fsutil::atomic_copy(&self.path, &PathBuf::from(backup));
                     None
                 }
             };

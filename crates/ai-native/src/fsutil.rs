@@ -48,17 +48,31 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
 /// file is new, private to the user (mode 0600 on Unix, an owner-only access list on Windows)
 /// and flushed before the rename.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with(path, |file| file.write_all(bytes))
+}
+
+/// Copies `from` to `to` the way [`atomic_write`] writes: the copy is new and private, whatever
+/// the original's mode, and a link already at `to` is replaced rather than written through.
+pub(crate) fn atomic_copy(from: &Path, to: &Path) -> io::Result<()> {
+    let mut source = File::open(from)?;
+    atomic_write_with(to, |file| io::copy(&mut source, file).map(|_| ()))
+}
+
+fn atomic_write_with(
+    path: &Path,
+    fill: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
     ensure_parent(path)?;
     let name = file_name_or_default(path);
     let tmp = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
-    let result = write_tmp(&tmp, bytes).and_then(|()| fs::rename(&tmp, path));
+    let result = write_tmp(&tmp, fill).and_then(|()| fs::rename(&tmp, path));
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
 }
 
-fn write_tmp(tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+fn write_tmp(tmp: &Path, fill: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     let mut file = match owner_only::create_file(tmp) {
         // A crash can leave a temp file under this process id. It is removed, never reused: a file
         // someone else made first would keep their ownership and so their access.
@@ -68,7 +82,7 @@ fn write_tmp(tmp: &Path, bytes: &[u8]) -> io::Result<()> {
         }
         other => other?,
     };
-    file.write_all(bytes)?;
+    fill(&mut file)?;
     file.sync_all()
 }
 

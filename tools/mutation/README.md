@@ -27,6 +27,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py lg` | Remembered licences (`registry/licences.rs`, `install.rs`): terms, versions, local files, damaged record. |
 | `mutation_check.py eg` | Connection panel lifecycle (`ai-egui/src/panel.rs`): the same-frame Save dedup and the stale-answer generation guard. Cases in `mutation_egui.py`; receipt and logs in `verification/eg-mutations.json`. |
 | `mutation_check.py kf` | Standard secret chain (`secrets/standard.rs`): a locked secret file is reported, not read as empty; an empty passphrase counts as none; when to ask for a passphrase. Cases in `mutation_keys.py`. |
+| `mutation_check.py pf` | Private files: the per-user SAM 3 lock folder (owner, mode, links), the folders and history log `ai-native` creates, the corrupt-store copy and the ComfyUI extra-paths file. Most tests are Unix-only. Cases in `mutation_private_files.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh

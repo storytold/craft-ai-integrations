@@ -1,7 +1,8 @@
 //! Owner-only access for the folders and files that hold a person's AI settings, history and
 //! secrets.
 //!
-//! Unix does this with mode `0o600` when a file is created. Windows files inherit their folder's
+//! Unix does this with mode `0o600` when a file is created, and `0o700` for a folder this crate
+//! creates. Windows files inherit their folder's
 //! access list instead. Under `%LOCALAPPDATA%` that list is private, but a folder that
 //! `CRAFT_AI_DIR` names elsewhere may not be: a new folder under `C:\` lets every signed-in
 //! account read and change what is written there. So on Windows:
@@ -13,7 +14,10 @@
 //!
 //! Files are always new and never reused: an existing file keeps whoever made it as its owner.
 //!
-//! The Win32 calls live in [`win_acl`], the workspace's one named `unsafe` exception.
+//! Other Craft crates that keep files in a person's AI folder (SAM 3 slot locks, the ComfyUI
+//! extra-paths file) use [`create_dir_all`] and [`write_atomic`] so they get the same rules.
+//!
+//! The Win32 calls live in `win_acl`, the workspace's one named `unsafe` exception.
 
 use std::fs::File;
 use std::io;
@@ -41,10 +45,17 @@ pub(crate) fn create_file(path: &Path) -> io::Result<File> {
     }
 }
 
-/// Creates `dir` and any missing parents. On Windows each folder it creates is owner-only from
-/// the moment it exists, and passes that on to what is created inside it. Folders that already
-/// existed are left alone.
-pub(crate) fn create_dir_all(dir: &Path) -> io::Result<()> {
+/// Writes `bytes` to `path` so a reader sees the old file or the new one, never a mix. The file
+/// is private to its owner, and a link planted at the temporary name is replaced, never followed.
+/// Missing parent folders are created as [`create_dir_all`] does.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    crate::fsutil::atomic_write(path, bytes)
+}
+
+/// Creates `dir` and any missing parents. Each folder it creates is owner-only from the moment it
+/// exists (mode `0o700` on Unix; on Windows an owner-only access list that is passed on to what
+/// is created inside). Folders that already existed are left alone.
+pub fn create_dir_all(dir: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
         let mut missing = Vec::new();
@@ -66,7 +77,15 @@ pub(crate) fn create_dir_all(dir: &Path) -> io::Result<()> {
         }
         Ok(())
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         std::fs::create_dir_all(dir)
     }
@@ -76,3 +95,8 @@ pub(crate) fn create_dir_all(dir: &Path) -> io::Result<()> {
 #[cfg(windows)]
 #[path = "owner_only/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[cfg(unix)]
+#[path = "owner_only/unix_tests.rs"]
+mod unix_tests;

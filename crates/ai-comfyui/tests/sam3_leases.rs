@@ -181,6 +181,95 @@ fn the_lock_directory_is_created_on_demand_and_an_unusable_one_fails_cleanly() {
     assert_eq!(s.slot(), None);
 }
 
+/// The lock file names a session uses for `server`, as the session derives them.
+#[cfg(unix)]
+fn lock_name(server: &Server, slot: usize) -> String {
+    let name: String = server
+        .url
+        .trim_end_matches("/v1")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("slot-{name}-{slot}.lock")
+}
+
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::symlink_metadata(path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn the_lock_folder_and_its_files_are_private_to_the_user() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("sam3-locks");
+    let server = hover_server();
+    let _held = prepared(&server, &dir);
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&dir.join(lock_name(&server, 0))), 0o600);
+}
+
+/// A folder others can write is where another account plants links or holds every slot.
+#[cfg(unix)]
+#[test]
+fn a_lock_folder_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("shared");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let server = hover_server();
+    let mut s = session(&server, &dir);
+    let err = s.prepare(&png()).unwrap_err();
+    assert!(err.message.contains("lock folder"), "{}", err.message);
+    assert_eq!(s.slot(), None);
+    assert!(
+        std::fs::read_dir(&dir).unwrap().next().is_none(),
+        "nothing created"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lock_folder_that_is_a_link_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = root.path().join("locks");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let server = hover_server();
+    let mut s = session(&server, &link);
+    let err = s.prepare(&png()).unwrap_err();
+    assert!(err.message.contains("lock folder"), "{}", err.message);
+    assert!(
+        std::fs::read_dir(&real).unwrap().next().is_none(),
+        "nothing created"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_at_a_lock_file_name_is_not_followed() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("sam3-locks");
+    std::fs::create_dir(&dir).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("created-through-the-link");
+    let server = hover_server();
+    std::os::unix::fs::symlink(&target, dir.join(lock_name(&server, 0))).unwrap();
+    let mut s = session(&server, &dir);
+    assert!(s.prepare(&png()).is_err());
+    assert!(
+        !target.exists(),
+        "the lock was opened through the planted link"
+    );
+}
+
 /// Child half of the cross-process test: hold a slot until stdin closes.
 #[test]
 #[ignore = "run only as a child of the cross-process test"]
