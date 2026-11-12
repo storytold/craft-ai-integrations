@@ -156,3 +156,14 @@ fn discovery_follows_pagination_link_headers() {
         "missing page-2 entry (pagination)"
     );
 }
+
+#[test]
+fn discovery_reports_an_incomplete_list_when_pages_remain() {
+    // Six pages: the client reads five and must not pass them off as the whole organisation.
+    let pages: Vec<String> = (0..6)
+        .map(|i| format!(r#"[{{"name":"craft-{i}","description":"x"}}]"#))
+        .collect();
+    let url = serve_json_sequence(pages);
+    let err = craft_ai_mcp::discovery::fetch_from(&url).unwrap_err();
+    assert!(err.contains("incomplete"), "{err}");
+}

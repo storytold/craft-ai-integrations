@@ -31,6 +31,8 @@ pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(600);
 pub const MAX_CALL_TIMEOUT: Duration = Duration::from_secs(3600);
 
 type Connector = dyn Fn(&AppEntry) -> Result<Conn, String> + Send + Sync;
+/// One app's tools, or why they could not be read.
+type ToolList = Result<Arc<Vec<Value>>, String>;
 
 #[derive(Default)]
 struct Slot {
@@ -108,10 +110,13 @@ impl Hub {
         f(conn, tools)
     }
 
-    /// `app`'s tools, read once.
+    /// `app`'s tools, read once and again after the app says they changed.
     fn tools(&self, i: usize) -> Result<Arc<Vec<Value>>, String> {
         if let Some(slot) = self.slots.get(i) {
-            let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if slot.conn.as_mut().is_some_and(Conn::take_tools_changed) {
+                slot.tools = None;
+            }
             if let Some(t) = &slot.tools {
                 return Ok(Arc::clone(t));
             }
@@ -162,13 +167,30 @@ impl Hub {
             Some(a) => vec![self.index(a)?],
             None => (0..self.apps.len()).collect(),
         };
+        // Every app is started at once, so one that hangs in its start does not hold up the
+        // others; the answer waits at most for the slowest one's own deadline.
+        let results: Vec<(usize, ToolList)> = std::thread::scope(|s| {
+            let handles: Vec<_> = which
+                .iter()
+                .map(|&i| (i, s.spawn(move || self.tools(i))))
+                .collect();
+            handles
+                .into_iter()
+                .map(|(i, h)| {
+                    let r = h
+                        .join()
+                        .unwrap_or_else(|_| Err("reading the app's tools failed".to_string()));
+                    (i, r)
+                })
+                .collect()
+        });
         let mut lists = Vec::new();
         let mut unavailable = Vec::new();
-        for i in which {
+        for (i, r) in results {
             let Some(entry) = self.apps.get(i) else {
                 continue;
             };
-            match self.tools(i) {
+            match r {
                 Ok(t) => lists.push((entry.id.as_str(), t)),
                 Err(e) if app.is_some() => return Err(e),
                 Err(e) => unavailable.push(json!({"app": entry.id, "error": e})),

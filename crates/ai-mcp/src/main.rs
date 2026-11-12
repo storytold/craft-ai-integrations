@@ -24,7 +24,7 @@
 
 use std::env;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -79,7 +79,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             state = state.with_apps(Arc::new(craft_ai_mcp::apps::Hub::new(entries, notes)));
         }
         let stdin = std::io::stdin().lock();
-        let stdout = std::io::stdout().lock();
+        let stdout = std::io::stdout();
         return craft_ai_mcp::stdio::serve(&state, stdin, stdout).map_err(|e| e.to_string());
     }
 
@@ -104,7 +104,7 @@ fn write_skills_if_asked() {
         return;
     };
     let dir = PathBuf::from(&dir_str);
-    if is_bionic_skills_dir(&dir) {
+    if craft_ai_mcp::installer::inside_bionic_skills(&dir) {
         eprintln!(
             "refusing to generate skills into Bionic's skills directory ({}) - use a separate staging folder and install via skill.install",
             dir.display()
@@ -115,19 +115,4 @@ fn write_skills_if_asked() {
         Ok(written) => eprintln!("wrote {} skill folders to {}", written.len(), dir.display()),
         Err(e) => eprintln!("failed to write skills to {}: {e}", dir.display()),
     }
-}
-
-/// True when `p` resolves inside Bionic's skills directory (`.lmstudio/skills`).
-fn is_bionic_skills_dir(p: &Path) -> bool {
-    let Ok(canon) = p.canonicalize() else {
-        return false;
-    };
-    let mut comps = canon.components().rev();
-    let last = comps
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().to_lowercase());
-    let parent = comps
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().to_lowercase());
-    last.as_deref() == Some("skills") && parent.as_deref() == Some(".lmstudio")
 }

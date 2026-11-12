@@ -3,6 +3,8 @@
 //! there is no port to reach and nothing for another local program to connect to.
 
 use std::io::{BufRead, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use serde_json::{Value, json};
 
@@ -10,9 +12,35 @@ use crate::mcp::McpState;
 
 /// Largest request line read. Inline images arrive base64-encoded inside one line.
 pub const MAX_LINE: usize = 96 << 20;
+/// Requests answered at once. A long tool call (a filter, a generation) runs beside the others,
+/// so `ping`, `tools/list` and other calls still get their answers; past this many the client is
+/// told to wait.
+pub const MAX_IN_FLIGHT: usize = 16;
 
-/// Answer every request on `input` until it ends. Each reply is one line on `output`.
-pub fn serve(state: &McpState, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+/// Answer every request on `input` until it ends. Each reply is one line on `output`, written
+/// whole; requests are answered in parallel, so replies can come in another order (each carries
+/// its request's id). Returns once every started request has been answered.
+pub fn serve(
+    state: &McpState,
+    input: impl BufRead,
+    output: impl Write + Send,
+) -> std::io::Result<()> {
+    let output = Mutex::new(output);
+    let in_flight = AtomicUsize::new(0);
+    std::thread::scope(|scope| read_requests(state, input, &output, &in_flight, scope))
+}
+
+fn read_requests<'s, W: Write + Send>(
+    state: &'s McpState,
+    input: impl BufRead,
+    output: &'s Mutex<W>,
+    in_flight: &'s AtomicUsize,
+    scope: &'s std::thread::Scope<'s, '_>,
+) -> std::io::Result<()> {
+    let reply = |v: &Value| {
+        let mut out = output.lock().unwrap_or_else(PoisonError::into_inner);
+        write_line(&mut *out, v)
+    };
     let mut input = input.take(0);
     loop {
         let mut line = Vec::new();
@@ -23,33 +51,59 @@ pub fn serve(state: &McpState, input: impl BufRead, mut output: impl Write) -> s
             return Ok(());
         }
         if line.last() != Some(&b'\n') && n > MAX_LINE {
-            // Too long: skip the rest of it, then say so.
+            // Too long: let the line go, skip the rest of it in the reader's own buffer, then
+            // say so.
+            drop(line);
+            input.set_limit(u64::MAX);
             loop {
-                input.set_limit(MAX_LINE as u64);
-                let mut skip = Vec::new();
-                let m = input.read_until(b'\n', &mut skip)?;
-                if m == 0 || skip.last() == Some(&b'\n') {
+                let buf = input.fill_buf()?;
+                if buf.is_empty() {
                     break;
                 }
+                if let Some(i) = buf.iter().position(|b| *b == b'\n') {
+                    input.consume(i + 1);
+                    break;
+                }
+                let len = buf.len();
+                input.consume(len);
             }
-            write_line(
-                &mut output,
-                &parse_error(format!("request larger than {MAX_LINE} bytes")),
-            )?;
+            reply(&parse_error(format!(
+                "request larger than {MAX_LINE} bytes"
+            )))?;
             continue;
         }
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let reply = match serde_json::from_slice::<Value>(&line) {
-            Ok(req @ Value::Object(_)) => state.handle(&req),
-            Ok(_) => Some(json!({"jsonrpc": "2.0", "id": null,
-                "error": {"code": -32600, "message": "a request must be one JSON object"}})),
-            Err(e) => Some(parse_error(e.to_string())),
+        let req = match serde_json::from_slice::<Value>(&line) {
+            Ok(req @ Value::Object(_)) => req,
+            Ok(_) => {
+                reply(&json!({"jsonrpc": "2.0", "id": null,
+                    "error": {"code": -32600, "message": "a request must be one JSON object"}}))?;
+                continue;
+            }
+            Err(e) => {
+                reply(&parse_error(e.to_string()))?;
+                continue;
+            }
         };
-        if let Some(reply) = reply {
-            write_line(&mut output, &reply)?;
+        if in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            if let Some(id) = req.get("id") {
+                reply(
+                    &json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000,
+                    "message": format!("{MAX_IN_FLIGHT} requests are already running; try again when one finishes")}}),
+                )?;
+            }
+            continue;
         }
+        scope.spawn(move || {
+            if let Some(v) = state.handle(&req) {
+                // A client that stopped reading ends the session when its input closes.
+                let _ = reply(&v);
+            }
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+        });
     }
 }
 
@@ -106,9 +160,60 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
             "\n",
         ));
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0]["id"], 1);
-        assert_eq!(out[1]["id"], 2);
+        let mut ids: Vec<i64> = out.iter().filter_map(|v| v["id"].as_i64()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn a_long_call_does_not_hold_up_a_ping() {
+        use crate::apps::child::tests::fake;
+        use crate::apps::{Hub, registry::AppEntry};
+        let app = AppEntry {
+            id: "slowcraft".into(),
+            name: "SlowCraft".into(),
+            command: std::path::PathBuf::from("/fake"),
+            args: vec![],
+        };
+        let hub = Hub::with_connector(
+            vec![app],
+            vec![],
+            Box::new(|_| {
+                Ok(fake(|m, req| {
+                    let r = match m {
+                        "tools/list" => json!({"tools": [{"name": "slow"}]}),
+                        "tools/call" => {
+                            std::thread::sleep(std::time::Duration::from_millis(800));
+                            json!({"content": []})
+                        }
+                        _ => return None,
+                    };
+                    Some(vec![
+                        json!({"jsonrpc": "2.0", "id": req["id"], "result": r}).to_string(),
+                    ])
+                }))
+            }),
+        );
+        let (s, _d) = state();
+        let s = s.with_apps(Arc::new(hub));
+        let input = concat!(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"craft_call_tool","arguments":{"app":"slowcraft","tool":"slow"}}}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+            "\n",
+        );
+        let mut out = Vec::new();
+        serve(&s, input.as_bytes(), &mut out).unwrap();
+        let ids: Vec<i64> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<Value>(l).unwrap()["id"]
+                    .as_i64()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(ids, vec![2, 1], "the ping is answered while the call runs");
     }
 
     #[test]

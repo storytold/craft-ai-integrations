@@ -24,7 +24,7 @@ its tools (see [The gateway to the apps](#the-gateway-to-the-apps)).
 | Module | Responsibility |
 |---|---|
 | `main.rs` | Entry point. `--stdio` serves MCP on stdin/stdout with the app gateway (`--no-apps` leaves it out); without a flag it serves HTTP on `CRAFT_MCP_PORT` (default **12345**) with the AI tools only. Builds the client with `AiClient::standard` (the shared store, and keys from the environment, then the OS keychain). |
-| `stdio.rs` | MCP over stdin/stdout, one JSON-RPC message per line (lines capped at 96 MiB). |
+| `stdio.rs` | MCP over stdin/stdout, one JSON-RPC message per line (lines capped at 96 MiB). Requests are answered in parallel (up to 16), so a long tool call does not hold up `ping` or a search. |
 | `apps/` | The gateway to the Craft apps: `registry.rs` (which apps, from the launcher's `apps.json` or `PATH`), `child.rs` (an MCP client for one app's `<app>-cli mcp`, with deadlines and line caps), `search.rs` (ranking tools by a few words), `mod.rs` (the hub: starts an app on first use, keeps its tool list), `tools.rs` (the four gateway tools). |
 | `server.rs` | Raw-TCP streamable-HTTP transport: one thread per connection, reads a single request (headers + body), dispatches to `McpState::handle`, writes a plain-JSON response with `Connection: close`. No HTTP framework on purpose — keeps the binary tiny and dependency-free. |
 | `mcp.rs` | Protocol layer only. Maps MCP `initialize` / `tools/list` / `ping` / `tools/call` onto the shared catalogue and the router. Knows nothing about sockets or HTTP. Builds JSON Schemas for tool inputs from each feature's declared inputs. |

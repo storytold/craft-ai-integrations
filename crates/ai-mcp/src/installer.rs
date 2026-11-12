@@ -183,10 +183,85 @@ pub fn write_skills(base_dir: &Path, features: &[Feature]) -> Result<Vec<PathBuf
     Ok(written)
 }
 
+/// True when `p` is Bionic's skills folder (`.lmstudio/skills`) or anywhere inside it, whether or
+/// not it exists yet. Links in the part that exists are resolved first; `..` in the rest counts
+/// as leaving a folder.
+pub fn inside_bionic_skills(p: &Path) -> bool {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(d) => d.join(p),
+            Err(_) => return true, // can't tell where it is: refuse
+        }
+    };
+    // Resolve the longest part that exists, then add the rest.
+    let mut existing = abs.as_path();
+    let mut rest = Vec::new();
+    let resolved = loop {
+        if let Ok(c) = existing.canonicalize() {
+            break c;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => break existing.to_path_buf(),
+        }
+    };
+    let mut parts: Vec<String> = resolved
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    for name in rest.iter().rev() {
+        let name = name.to_string_lossy().to_lowercase();
+        match name.as_str() {
+            "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(name),
+        }
+    }
+    parts
+        .windows(2)
+        .any(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn bionic_skills_and_anything_inside_are_recognised_existing_or_not() {
+        let home = tempdir().unwrap();
+        let skills = home.path().join(".lmstudio").join("skills");
+        assert!(inside_bionic_skills(&skills), "missing folder");
+        assert!(
+            inside_bionic_skills(&skills.join("craft-ai-x")),
+            "missing nested"
+        );
+        std::fs::create_dir_all(skills.join("existing")).unwrap();
+        assert!(inside_bionic_skills(&skills), "existing folder");
+        assert!(
+            inside_bionic_skills(&skills.join("existing").join("deeper")),
+            "nested"
+        );
+        assert!(
+            inside_bionic_skills(&home.path().join(".LMStudio").join("Skills")),
+            "case"
+        );
+        assert!(!inside_bionic_skills(&home.path().join("staging")));
+        assert!(
+            !inside_bionic_skills(&skills.join("..").join("other")),
+            "`..` leaves it"
+        );
+        assert!(!inside_bionic_skills(
+            &home.path().join(".lmstudio").join("skills-staging")
+        ));
+    }
 
     #[test]
     fn mcp_server_entry_has_expected_fields() {

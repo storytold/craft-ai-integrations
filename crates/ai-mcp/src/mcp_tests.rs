@@ -204,3 +204,43 @@ fn the_gateway_tools_are_listed_only_with_a_hub() {
             .contains("apps")
     );
 }
+
+#[test]
+fn a_picture_input_requires_its_path_or_its_base64() {
+    let state = McpState::new(test_client());
+    let resp = state.handle(&init_req("tools/list")).unwrap();
+    let tools = resp["result"]["tools"].as_array().unwrap();
+    let fill = tools
+        .iter()
+        .find(|t| t["name"] == "generative-fill")
+        .unwrap();
+    let all_of = fill["inputSchema"]["allOf"].as_array().unwrap();
+    assert!(all_of.contains(
+        &json!({"anyOf": [{"required": ["source_path"]}, {"required": ["source_base64"]}]})
+    ));
+    assert!(
+        all_of.contains(
+            &json!({"anyOf": [{"required": ["mask_path"]}, {"required": ["mask_base64"]}]})
+        )
+    );
+    let gen_img = tools
+        .iter()
+        .find(|t| t["name"] == "generate-image")
+        .unwrap();
+    assert!(gen_img["inputSchema"].get("allOf").is_none());
+}
+
+#[test]
+fn outputs_become_image_audio_or_resource_content() {
+    let img = McpState::media_item(0, "image/png", b"x");
+    assert_eq!(img["type"], "image");
+    let audio = McpState::media_item(1, "audio/wav", b"x");
+    assert_eq!(audio["type"], "audio");
+    let video = McpState::media_item(2, "video/mp4", b"abc");
+    assert_eq!(video["type"], "resource");
+    assert_eq!(video["resource"]["mimeType"], "video/mp4");
+    assert_eq!(
+        video["resource"]["blob"],
+        craft_ai_core::payload::base64_encode(b"abc")
+    );
+}

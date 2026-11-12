@@ -69,10 +69,13 @@ pub fn fetch_from(url: &str) -> Result<Vec<OrgRepo>, String> {
         repos.extend(page);
         current_url = match next {
             Some(u) => u,
-            None => break,
+            None => return Ok(repos),
         };
     }
-    Ok(repos)
+    // Another page remains: a partial list must not pass for the whole org.
+    Err(format!(
+        "the organisation lists more than {MAX_PAGES} pages of repositories; the list is incomplete"
+    ))
 }
 
 /// The `rel="next"` URL from a GitHub `Link` header, if present. A header may list several

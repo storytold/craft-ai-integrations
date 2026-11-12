@@ -174,3 +174,50 @@ fn a_missing_cli_is_an_error_not_a_panic() {
     let err = spawn(&app).unwrap_err();
     assert!(err.contains("could not start NoCraft"), "{err}");
 }
+
+#[test]
+fn a_tool_list_that_never_ends_is_an_error_not_a_partial_list() {
+    let mut c = fake(|m, req| match m {
+        "tools/list" => Some(vec![result(
+            req,
+            json!({"tools": [{"name": "a"}], "nextCursor": "more"}),
+        )]),
+        _ => None,
+    });
+    let err = c.list_tools().unwrap_err();
+    assert!(err.contains("pages"), "{err}");
+}
+
+#[test]
+fn an_app_that_stops_reading_times_out_instead_of_blocking_the_write() {
+    // The server side never reads, so the pipe fills and the write would block.
+    let (client_r, _server_w) = std::io::pipe().unwrap();
+    let (server_r, client_w) = std::io::pipe().unwrap();
+    let mut c = Conn::new(Box::new(client_r), Box::new(client_w));
+    let big = "x".repeat(4 << 20);
+    let started = std::time::Instant::now();
+    let err = c
+        .call_tool("t", json!({"data": big}), Duration::from_millis(300))
+        .unwrap_err();
+    assert!(err.contains("did not answer"), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the deadline covered the write"
+    );
+    drop(server_r);
+}
+
+#[test]
+fn a_tools_changed_notification_is_remembered_once() {
+    let mut c = fake(|m, req| match m {
+        "x" => Some(vec![
+            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}).to_string(),
+            result(req, json!(1)),
+        ]),
+        _ => None,
+    });
+    assert!(!c.take_tools_changed());
+    c.request("x", json!({}), Duration::from_secs(5)).unwrap();
+    assert!(c.take_tools_changed());
+    assert!(!c.take_tools_changed());
+}

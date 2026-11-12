@@ -21,12 +21,26 @@ pub struct Hit {
     pub score: u32,
 }
 
+/// Most characters of a tool's name, title or description that a search looks at.
+const MAX_TEXT_CHARS: usize = 2000;
+
 /// Lower-case words of `s` (letters and digits).
 fn words(s: &str) -> Vec<String> {
     s.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
         .collect()
+}
+
+/// The words of an already lower-cased `s`, without collecting them.
+fn word_iter(s: &str) -> impl Iterator<Item = &str> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+}
+
+/// The first `n` characters of `s`.
+fn head(s: &str, n: usize) -> &str {
+    s.char_indices().nth(n).map_or(s, |(i, _)| &s[..i])
 }
 
 /// The first sentence of `description`, at most [`SUMMARY_CHARS`] characters.
@@ -60,21 +74,22 @@ pub fn score(query: &[String], tool: &Value) -> u32 {
     if query.is_empty() {
         return 1;
     }
-    let name_lower = name.to_lowercase();
-    let name_words = words(&format!("{name} {title}"));
-    let desc_words = words(desc);
+    // Only the start of each text is looked at, so an app's oversized description costs at
+    // most a few kilobytes per tool, whatever it sends.
+    let name_lower = head(name, MAX_TEXT_CHARS).to_lowercase();
+    let names = format!(
+        "{name_lower} {}",
+        head(title, MAX_TEXT_CHARS).to_lowercase()
+    );
+    let desc = head(desc, MAX_TEXT_CHARS).to_lowercase();
     let mut total = 0u32;
     for q in query {
-        let s = if name_words.iter().any(|w| w == q) {
+        let q = q.as_str();
+        let s = if word_iter(&names).any(|w| w == q) {
             3
-        } else if name_lower.contains(q.as_str())
-            || name_words.iter().any(|w| w.starts_with(q.as_str()))
-        {
+        } else if name_lower.contains(q) || word_iter(&names).any(|w| w.starts_with(q)) {
             2
-        } else if desc_words
-            .iter()
-            .any(|w| w == q || w.starts_with(q.as_str()))
-        {
+        } else if word_iter(&desc).any(|w| w.starts_with(q)) {
             1
         } else {
             0
@@ -178,6 +193,16 @@ mod tests {
             hits.iter().map(|h| h.app.as_str()).collect::<Vec<_>>(),
             vec!["wordcraft", "gridcraft"]
         );
+    }
+
+    #[test]
+    fn only_the_start_of_a_long_description_is_searched() {
+        let pad = "word ".repeat(MAX_TEXT_CHARS);
+        let t = vec![json!({"name": "x.tool", "description": format!("early {pad} late")})];
+        assert_eq!(find("early", [("a", t.as_slice())], 10).len(), 1);
+        assert!(find("late", [("a", t.as_slice())], 10).is_empty());
+        assert_eq!(head("äöü", 2), "äö");
+        assert_eq!(head("ab", 5), "ab");
     }
 
     #[test]

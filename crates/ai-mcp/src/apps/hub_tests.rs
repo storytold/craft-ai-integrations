@@ -285,3 +285,47 @@ fn no_match_points_at_the_apps_command_tools() {
     );
     assert!(hit.get("hint").is_none());
 }
+
+#[test]
+fn the_tool_list_is_read_again_after_the_app_says_it_changed() {
+    let lists = Arc::new(AtomicUsize::new(0));
+    let l = lists.clone();
+    let h = Hub::with_connector(
+        vec![entry("wordcraft", "WordCraft")],
+        vec![],
+        Box::new(move |_| {
+            let l = l.clone();
+            Ok(fake(move |m, req| {
+                let r = match m {
+                    "tools/list" => {
+                        let n = l.fetch_add(1, Ordering::SeqCst);
+                        let name = if n == 0 { "doc.old" } else { "doc.new" };
+                        json!({"tools": [{"name": name}]})
+                    }
+                    "tools/call" => {
+                        return Some(vec![
+                            json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+                                .to_string(),
+                            json!({"jsonrpc": "2.0", "id": req["id"], "result": {"content": []}})
+                                .to_string(),
+                        ]);
+                    }
+                    _ => return None,
+                };
+                Some(vec![
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": r}).to_string(),
+                ])
+            }))
+        }),
+    );
+    tools::call(
+        &h,
+        CALL_TOOL,
+        &json!({"app": "wordcraft", "tool": "doc.old"}),
+    )
+    .unwrap();
+    let out =
+        text(&tools::call(&h, FIND_TOOLS, &json!({"query": "doc", "app": "wordcraft"})).unwrap());
+    assert_eq!(out["tools"][0]["tool"], "doc.new");
+    assert_eq!(lists.load(Ordering::SeqCst), 2);
+}

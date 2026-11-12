@@ -33,6 +33,22 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// payload is ~43 MiB in base64) plus JSON overhead, while still bounding any single request.
 const MAX_BODY_BYTES: usize = 96 * 1024 * 1024;
 
+/// Total wall-clock budget for reading one request's body, however the peer paces its bytes.
+const BODY_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Read some bytes before `deadline`. Each read waits at most until the deadline, so a peer that
+/// sends one byte at a time cannot stretch a phase past it.
+fn read_before(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<usize, String> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err("timed out reading the request".into());
+    }
+    stream
+        .set_read_timeout(Some(left))
+        .map_err(|e| format!("read error: {e}"))?;
+    stream.read(buf).map_err(|e| format!("read error: {e}"))
+}
+
 /// One parsed HTTP request (method, path, body).
 #[derive(Debug)]
 struct HttpRequest {
@@ -109,9 +125,9 @@ fn handle_connection(mut stream: TcpStream, state: &McpState) -> Result<(), Stri
         Err(_e) => return send_response(&mut stream, 400, "Bad Request", &Value::Null),
     };
 
-    // Notifications (no `id`) get no response per the JSON-RPC spec; close without writing.
+    // Notifications (no `id`) get no JSON-RPC response; streamable HTTP answers them 202.
     let Some(response) = state.handle(&body) else {
-        return Ok(());
+        return send_status(&mut stream, 202, "Accepted");
     };
     send_response(&mut stream, 200, "OK", &response)
 }
@@ -168,21 +184,19 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         ));
     }
 
-    // Read the remainder of the body, if any.
-    let have = body_so_far.len() as u64;
-    let need = declared.saturating_sub(have);
-    let mut body = body_so_far.to_vec();
-    if need > 0 {
-        let mut chunk = vec![0u8; need as usize];
-        let mut got = 0usize;
-        while got < need as usize {
-            match stream.read(&mut chunk[got..]) {
-                Ok(0) => return Err("connection closed mid-body".into()),
-                Ok(n) => got += n,
-                Err(e) => return Err(format!("read error: {e}")),
-            }
+    // Read the rest of the body straight into one buffer of the declared size, under one deadline.
+    let declared = usize::try_from(declared).map_err(|_| "body too large".to_string())?;
+    let mut body = Vec::with_capacity(declared);
+    body.extend_from_slice(body_so_far.get(..declared).unwrap_or(body_so_far));
+    let deadline = Instant::now() + BODY_READ_TIMEOUT;
+    let mut chunk = [0u8; 64 * 1024];
+    while body.len() < declared {
+        let want = (declared - body.len()).min(chunk.len());
+        let n = read_before(stream, &mut chunk[..want], deadline)?;
+        if n == 0 {
+            return Err("connection closed mid-body".into());
         }
-        body.extend_from_slice(&chunk);
+        body.extend_from_slice(chunk.get(..n).unwrap_or_default());
     }
 
     Ok(HttpRequest {
@@ -199,24 +213,20 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
 /// or pin a thread for an arbitrary time.
 fn read_until_header_end(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
-    let start = Instant::now();
+    let deadline = Instant::now() + HEADER_READ_TIMEOUT;
+    let mut chunk = [0u8; 4096];
     loop {
-        if Instant::now().duration_since(start) > HEADER_READ_TIMEOUT {
-            return Err("timed out waiting for request headers".into());
+        let n = read_before(stream, &mut chunk, deadline)
+            .map_err(|e| format!("waiting for request headers: {e}"))?;
+        if n == 0 {
+            return Err("connection closed before headers complete".into());
         }
-        let mut chunk = vec![0u8; 4096];
-        match stream.read(&mut chunk) {
-            Ok(0) => return Err("connection closed before headers complete".into()),
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > MAX_HEADER_BYTES {
-                    return Err("request headers too large".into());
-                }
-                if has_header_end(&buf) {
-                    break;
-                }
-            }
-            Err(e) => return Err(format!("read error: {e}")),
+        buf.extend_from_slice(chunk.get(..n).unwrap_or_default());
+        if buf.len() > MAX_HEADER_BYTES {
+            return Err("request headers too large".into());
+        }
+        if has_header_end(&buf) {
+            break;
         }
     }
     Ok(buf)
@@ -240,6 +250,15 @@ fn find_header_boundary(buf: &[u8]) -> Option<usize> {
 fn split_header(line: &str) -> Option<(String, String)> {
     let (k, v) = line.split_once(':')?;
     Some((k.trim().to_string(), v.to_string()))
+}
+
+/// Write a status line with no body and close the connection.
+fn send_status(stream: &mut TcpStream, status: u16, reason: &str) -> Result<(), String> {
+    let resp =
+        format!("HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    stream
+        .write_all(resp.as_bytes())
+        .map_err(|e| format!("write error: {e}"))
 }
 
 /// Write a minimal HTTP/1.1 response and close the connection.
@@ -341,5 +360,39 @@ mod tests {
         let mut resp = String::new();
         stream.read_to_string(&mut resp).unwrap();
         assert!(resp.starts_with("HTTP/1.1 405 Method Not Allowed"));
+    }
+
+    #[test]
+    fn a_notification_is_accepted_with_202_and_no_body() {
+        let port = start_server(test_state());
+        let resp = http_request(
+            port,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        );
+        assert!(resp.starts_with("HTTP/1.1 202 Accepted"), "{resp}");
+        assert!(resp.ends_with("\r\n\r\n"), "no body: {resp}");
+    }
+
+    #[test]
+    fn a_body_that_arrives_in_pieces_is_read_whole() {
+        let port = start_server(test_state());
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":7,"method":"ping","params":{{"pad":"{}"}}}}"#,
+            "x".repeat(200_000)
+        );
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let head = format!(
+            "POST /mcp HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        let (a, b) = body.split_at(1000);
+        stream.write_all(a.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        stream.write_all(b.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        assert!(resp.contains(r#""id":7"#), "{resp}");
     }
 }

@@ -223,14 +223,14 @@ fn mask_payload(args: &Value, feature_id: &str) -> Result<Payload, String> {
     ))
 }
 
-/// The media type of `data`, sniffed from its first bytes rather than trusted from a label. Falls
-/// back to PNG when the bytes are unrecognised, so legacy callers that only ever sent PNGs keep
-/// working while real JPEG/GIF/etc. inputs get their true type.
-fn sniff_type(data: &[u8]) -> &'static str {
+/// The media type of `data`, sniffed from its first bytes rather than trusted from a label.
+/// Bytes that are not a recognised type are refused: labelled as an image they would be sent
+/// under an image's consent and to an adapter that trusts the label.
+fn sniff_type(data: &[u8]) -> Result<&'static str, String> {
     let head = data.get(..sniff::HEAD_LEN).unwrap_or(data);
     sniff::media_type(head)
         .map(|(m, _)| m)
-        .unwrap_or("image/png")
+        .ok_or_else(|| "the input is not a recognised image".to_string())
 }
 
 fn read_inline(path: &str) -> Result<Payload, String> {
@@ -250,10 +250,19 @@ fn read_inline(path: &str) -> Result<Payload, String> {
         ));
     }
     let data = std::fs::read(path).map_err(|e| format!("cannot read source file '{path}': {e}"))?;
-    Payload::inline(sniff_type(&data), data).map_err(|e| e.to_string())
+    Payload::inline(sniff_type(&data)?, data).map_err(|e| e.to_string())
 }
 
 fn decode_inline(b64: &str) -> Result<Payload, String> {
+    // Refuse input whose decoded size would pass the inline limit before copying or decoding it:
+    // every 4 base64 characters hold 3 bytes.
+    let encoded = b64.chars().filter(|c| !c.is_ascii_whitespace()).count() as u64;
+    let max = craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES;
+    if encoded / 4 * 3 > max {
+        return Err(format!(
+            "the base64 input decodes to more than the {max} byte inline limit"
+        ));
+    }
     // Strip whitespace (a client may wrap the base64 across lines), then use the strict core
     // decoder so malformed input is rejected rather than silently mangled.
     let compact = b64
@@ -262,7 +271,7 @@ fn decode_inline(b64: &str) -> Result<Payload, String> {
         .collect::<String>();
     let data = craft_ai_core::payload::base64_decode(&compact)
         .ok_or_else(|| "bad base64 for source".to_string())?;
-    Payload::inline(sniff_type(&data), data).map_err(|e| e.to_string())
+    Payload::inline(sniff_type(&data)?, data).map_err(|e| e.to_string())
 }
 
 /// Human-readable lines from a finished job: text outputs verbatim, media outputs summarised.
@@ -291,7 +300,9 @@ fn extract_media(events: &[Event]) -> Vec<Media> {
         .iter()
         .filter_map(|e| match e {
             Event::Output(Output { payload, .. }) => match payload {
-                Payload::Inline { media_type, data } if media_type.kind() == PayloadKind::Image => {
+                // Every inline output but text: images, and video or audio too, so a finished
+                // video job returns its bytes instead of only a size.
+                Payload::Inline { media_type, data } if media_type.kind() != PayloadKind::Text => {
                     Some(Media {
                         mime_type: media_type.as_str().to_string(),
                         data: data.clone(),
@@ -377,5 +388,23 @@ mod tests {
     fn role_for_returns_the_catalogue_role() {
         assert!(role_for("select-subject").is_some());
         assert!(role_for("not-a-tool").is_none());
+    }
+
+    #[test]
+    fn unrecognised_bytes_are_refused_not_labelled_as_an_image() {
+        let b64 = craft_ai_core::payload::base64_encode(b"#!/bin/sh\necho not an image\n");
+        let err = decode_inline(&b64).unwrap_err();
+        assert!(err.contains("not a recognised image"), "{err}");
+        let png = craft_ai_core::payload::base64_encode(b"\x89PNG\x0d\x0a\x1a\x0a");
+        assert!(decode_inline(&png).is_ok());
+    }
+
+    #[test]
+    fn oversized_base64_is_refused_before_decoding() {
+        let max = craft_ai_core::payload::DEFAULT_MAX_INLINE_BYTES as usize;
+        // Not even valid base64: the size check must come first.
+        let big = "!".repeat(max / 3 * 4 + 8);
+        let err = decode_inline(&big).unwrap_err();
+        assert!(err.contains("inline limit"), "{err}");
     }
 }

@@ -16,4 +16,9 @@ MG = [
     ('unknown-tool-forwarded', A + 'mod.rs', '.any(|t| t.get("name").and_then(Value::as_str) == Some(tool))\n        {', '.any(|_| true)\n        {', P, 'lib', 'bad_arguments_are_tool_errors'),
     ('stdio-line-not-capped', 'crates/ai-mcp/src/stdio.rs', r"if line.last() != Some(&b'\n') && n > MAX_LINE {", 'if false {', P, 'lib', 'an_overlong_line_is_refused'),
     ('bridge-grants-consent', 'crates/ai-mcp/src/mcp.rs', 'auto_consent: false,', 'auto_consent: true,', P, 'lib', 'new_never_grants_consent_itself'),
+    ('partial-tool-list-accepted', A + 'child.rs', '        // A partial list would be cached as complete, and calls to the rest refused.\n        Err(', '        return Ok(tools);\n        #[allow(unreachable_code)]\n        Err(', P, 'lib', 'a_tool_list_that_never_ends'),
+    ('changed-tools-kept', A + 'mod.rs', 'slot.tools = None;', '{}', P, 'lib', 'read_again_after_the_app_says'),
+    ('unknown-bytes-labelled-png', 'crates/ai-mcp/src/router.rs', '.ok_or_else(|| "the input is not a recognised image".to_string())', '.or(Some("image/png")).ok_or_else(String::new)', P, 'lib', 'unrecognised_bytes_are_refused'),
+    ('base64-decoded-before-size-check', 'crates/ai-mcp/src/router.rs', 'if encoded / 4 * 3 > max {', 'if false {', P, 'lib', 'oversized_base64_is_refused'),
+    ('nested-skills-folder-allowed', 'crates/ai-mcp/src/installer.rs', '.any(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))', '.last().is_some_and(|w| matches!(w, [a, b] if a == ".lmstudio" && b == "skills"))', P, 'lib', 'bionic_skills_and_anything_inside'),
 ]

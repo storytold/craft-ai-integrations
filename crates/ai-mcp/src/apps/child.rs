@@ -7,7 +7,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel, sync_channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -22,6 +22,11 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Most `tools/list` pages read from one app.
 const MAX_PAGES: usize = 64;
+/// Messages the reader thread keeps for the gateway. When they are not picked up, the reader
+/// waits, and so does the app writing them: a chatty app cannot fill the gateway's memory.
+const QUEUE: usize = 256;
+/// The notification an app sends when its tool list changed.
+const TOOLS_CHANGED: &str = "notifications/tools/list_changed";
 /// The MCP revision the gateway asks the apps for.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -34,11 +39,15 @@ enum Incoming {
 
 /// A live connection to one app's MCP server.
 pub struct Conn {
-    writer: Box<dyn Write + Send>,
+    /// Lines for the writer thread: a write the app does not take never blocks a request past
+    /// its deadline.
+    writer: Sender<Vec<u8>>,
     rx: Receiver<Incoming>,
     next_id: u64,
     child: Option<Child>,
     closed: Option<String>,
+    /// The app said its tool list changed since [`Conn::take_tools_changed`] last asked.
+    tools_changed: bool,
 }
 
 impl std::fmt::Debug for Conn {
@@ -96,7 +105,7 @@ fn read_line_capped(
 impl Conn {
     /// Connect to a server reading `writer` and writing `reader`. Starts a reader thread.
     pub fn new(reader: Box<dyn Read + Send>, writer: Box<dyn Write + Send>) -> Self {
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(QUEUE);
         std::thread::spawn(move || {
             let mut r = BufReader::new(reader);
             loop {
@@ -121,12 +130,51 @@ impl Conn {
                 }
             }
         });
+        let (wtx, wrx) = channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut w = writer;
+            for line in wrx {
+                if w.write_all(&line).and_then(|()| w.flush()).is_err() {
+                    return; // the next send finds the channel closed
+                }
+            }
+        });
         Conn {
-            writer,
+            writer: wtx,
             rx,
             next_id: 1,
             child: None,
             closed: None,
+            tools_changed: false,
+        }
+    }
+
+    /// Whether the app said its tool list changed since the last call (messages already queued
+    /// are looked at too, without waiting).
+    pub fn take_tools_changed(&mut self) -> bool {
+        loop {
+            match self.rx.try_recv() {
+                Ok(Incoming::Message(v)) => self.note(&v),
+                Ok(Incoming::TooLong) => {}
+                Ok(Incoming::Closed(why)) => {
+                    self.closed = Some(why);
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.closed
+                        .get_or_insert_with(|| "the app's MCP connection ended".into());
+                    break;
+                }
+            }
+        }
+        std::mem::take(&mut self.tools_changed)
+    }
+
+    /// Remember a notification the gateway cares about.
+    fn note(&mut self, v: &Value) {
+        if v.get("id").is_none() && v.get("method").and_then(Value::as_str) == Some(TOOLS_CHANGED) {
+            self.tools_changed = true;
         }
     }
 
@@ -138,12 +186,8 @@ impl Conn {
     fn send(&mut self, msg: &Value) -> Result<(), String> {
         let mut line = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
         line.push(b'\n');
-        let sent = self
-            .writer
-            .write_all(&line)
-            .and_then(|()| self.writer.flush());
-        sent.map_err(|e| {
-            let why = format!("writing to the app failed: {e}");
+        self.writer.send(line).map_err(|_| {
+            let why = "writing to the app failed: it stopped reading".to_string();
             self.closed = Some(why.clone());
             why
         })
@@ -208,6 +252,7 @@ impl Conn {
                 continue;
             }
             if v.get("id").and_then(Value::as_u64) != Some(id) {
+                self.note(&v);
                 continue; // a notification, or a late reply to an earlier request
             }
             if let Some(err) = v.get("error") {
@@ -255,10 +300,13 @@ impl Conn {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             if cursor.is_none() {
-                break;
+                return Ok(tools);
             }
         }
-        Ok(tools)
+        // A partial list would be cached as complete, and calls to the rest refused.
+        Err(format!(
+            "the app lists its tools in more than {MAX_PAGES} pages"
+        ))
     }
 
     /// Call one tool. The app's result (its `content`, `isError` and so on) is returned as is.

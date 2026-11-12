@@ -169,6 +169,14 @@ impl McpState {
                     Value::Array(required.into_iter().map(Value::String).collect()),
                 );
             }
+            // A source or mask is given as a path or as base64: one of the two is required.
+            let one_of_each: Vec<Value> = alternatives(&f)
+                .into_iter()
+                .map(|[a, b]| serde_json::json!({"anyOf": [{"required": [a]}, {"required": [b]}]}))
+                .collect();
+            if !one_of_each.is_empty() {
+                schema.insert("allOf".into(), Value::Array(one_of_each));
+            }
 
             let mut tool = Map::new();
             tool.insert("name".into(), Value::String(f.id.clone()));
@@ -227,8 +235,8 @@ impl McpState {
                 for line in &text {
                     items.push(Self::text_item(line));
                 }
-                for m in &media {
-                    items.push(Self::image_item(&m.mime_type, &m.data));
+                for (i, m) in media.iter().enumerate() {
+                    items.push(Self::media_item(i, &m.mime_type, &m.data));
                 }
                 (false, items)
             }
@@ -255,6 +263,23 @@ impl McpState {
         m.insert("type".into(), Value::String("text".into()));
         m.insert("text".into(), Value::String(text.to_string()));
         Value::Object(m)
+    }
+
+    /// One inline output as MCP content: `image` or `audio` for those, otherwise an embedded
+    /// `resource` with the bytes as a blob (video, documents).
+    fn media_item(index: usize, media_type: &str, data: &[u8]) -> Value {
+        if media_type.starts_with("image/") {
+            return Self::image_item(media_type, data);
+        }
+        let blob = craft_ai_core::payload::base64_encode(data);
+        if media_type.starts_with("audio/") {
+            return serde_json::json!({"type": "audio", "data": blob, "mimeType": media_type});
+        }
+        serde_json::json!({"type": "resource", "resource": {
+            "uri": format!("craft-ai://output/{index}"),
+            "mimeType": media_type,
+            "blob": blob,
+        }})
     }
 
     /// A single `image` content item (base64-encoded bytes + original MIME type).
@@ -294,6 +319,18 @@ fn input_schema(f: &craft_ai_features::Feature) -> (Map<String, Value>, Vec<Stri
         }
     }
     (props, required)
+}
+
+/// The input pairs of which a call must give at least one (a path or base64 for each picture).
+fn alternatives(f: &craft_ai_features::Feature) -> Vec<[&'static str; 2]> {
+    let mut out = Vec::new();
+    if f.inputs.contains(&InputRole::Source) {
+        out.push(["source_path", "source_base64"]);
+    }
+    if f.inputs.contains(&InputRole::Mask) {
+        out.push(["mask_path", "mask_base64"]);
+    }
+    out
 }
 
 fn str_prop() -> Value {
