@@ -1,5 +1,6 @@
-"""bo: a recipe only built-in runtimes run (Remove background on InSPyReNet, Burn) is never treated
-as a ComfyUI model: not offered, planned, installed, registered or advised as one.
+"""bo: a recipe only built-in runtimes run (Remove background on InSPyReNet, Burn, and on BEN2 +
+ViTMatte, rten) is never treated as a ComfyUI model: not offered, planned, installed, registered or
+advised as one.
 
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
@@ -11,6 +12,7 @@ CL = 'craft-ai-client'
 
 BO = [
     ('recipe-run-by-comfyui', F + 'catalogue/inspyrenet.rs', 'comfyui: false,', 'comfyui: true,', FE, 'built_in_only', 'runs_inspyrenet_on_burn'),
+    ('ben2-recipe-run-by-comfyui', F + 'catalogue/ben2_vitmatte.rs', 'comfyui: false,', 'comfyui: true,', FE, 'built_in_only', 'runs_ben2_vitmatte_on_rten'),
     ('comfyui-option-for-built-in-recipe', F + 'options.rs', 'for recipe in feature.comfyui_recipes() {', 'for recipe in &feature.locals {', FE, 'built_in_only', 'only_the_built_in_route'),
     ('comfyui-plan-for-built-in-recipe', F + 'plan.rs', '    match feature.comfyui_recipes().next() {', '    match feature.locals.first() {', FE, 'built_in_only', 'planned_and_installed'),
     ('comfyui-plans-for-built-in-recipe', F + 'plan.rs', '        .comfyui_recipes()\n        .map(|recipe| plan_recipe', '        .locals\n        .iter()\n        .map(|recipe| plan_recipe', FE, 'built_in_only', 'planned_and_installed'),

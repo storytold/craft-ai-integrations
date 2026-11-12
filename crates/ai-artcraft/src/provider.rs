@@ -2,8 +2,7 @@
 use crate::http::Http;
 use craft_ai_core::{
     AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
-    Payload, Provider, Request, SecretString, capability::CapabilityId, endpoint::Endpoint,
-    model::CapabilitySpec, payload::Limits,
+    Payload, Provider, Request, SecretString, endpoint::Endpoint, payload::Limits,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,10 +32,16 @@ impl ArtCraftConfig {
 }
 /// Most jobs remembered, finished ones included. Oldest finished jobs are dropped first.
 const KEEP_JOBS: usize = 128;
+/// Polls that may fail to fetch a finished job's result for a passing reason (network, busy
+/// service) before the job is given up as failed, so it stops holding an active-job slot.
+const RESULT_TRIES: u8 = 5;
 
 struct Job {
     remote: String,
     video: bool,
+    inline_image: bool,
+    /// Failed fetches of this finished job's result so far.
+    result_failures: u8,
     snapshot: JobSnapshot,
 }
 /// Holds a slot for a request that has been sent but has no job token yet, so concurrent
@@ -104,27 +109,31 @@ impl ArtCraftProvider {
             max_active: config.max_active_jobs.max(1),
         })
     }
+    /// Models supported by this adapter; listing them does not verify an account.
     pub fn documented_models() -> Vec<ModelInfo> {
-        [
-            ("nano_banana", "Nano Banana (unverified)", "image.generate"),
-            (
-                "seedance_2p0",
-                "Seedance 2.0 (unverified)",
-                "video.generate",
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(id, label, cap)| {
-            Some(
-                ModelInfo::new(ModelId::new(id).ok()?, label).with(
-                    CapabilitySpec::new(CapabilityId::parse(cap).ok()?)
-                        .accepting(InputRole::Prompt, 1)
-                        .requiring(InputRole::Prompt),
-                ),
-            )
-        })
-        .collect()
+        crate::models::documented()
     }
+    /// A finished job whose result could not be fetched. A passing failure is returned so the
+    /// caller polls again, up to [`RESULT_TRIES`]; any other failure, or one too many, ends the job
+    /// here as failed. The remote job is not cancelled (it has already finished); it is only
+    /// forgotten as active, so it no longer counts against `max_active_jobs`.
+    fn result_failed(&self, id: &JobId, error: AiError) -> Result<JobSnapshot, AiError> {
+        let mut jobs = self.lock()?;
+        let Some(job) = jobs.get_mut(id) else {
+            return Err(error);
+        };
+        if job.snapshot.state.is_terminal() {
+            return Ok(JobSnapshot::new(job.snapshot.state.clone()));
+        }
+        job.result_failures = job.result_failures.saturating_add(1);
+        let passing = matches!(error.kind, ErrorKind::Network | ErrorKind::RateLimited);
+        if passing && job.result_failures < RESULT_TRIES {
+            return Err(error);
+        }
+        job.snapshot = JobSnapshot::new(JobState::Failed { error });
+        Ok(job.snapshot.clone())
+    }
+    /// The job registry, or an internal error when a panic left its lock poisoned.
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<JobId, Job>>, AiError> {
         self.jobs
             .lock()
@@ -132,11 +141,16 @@ impl ArtCraftProvider {
     }
 }
 impl Provider for ArtCraftProvider {
+    /// Always refuses: Omni has no free way to test a key, so saved models stay unverified until a
+    /// real job runs. Contacts nothing.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         Err(AiError::unsupported(
             "ArtCraft Omni API has no documented free key test; saved models are unverified until a job runs",
         ))
     }
+    /// Checks the request against the documented model, reserves a job slot, uploads the fill's
+    /// source, mask and reference pictures in that order when it is a fill, then asks Omni to
+    /// generate. Nothing is sent for a refused request.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         let info = Self::documented_models()
             .into_iter()
@@ -153,16 +167,26 @@ impl Provider for ArtCraftProvider {
                 "ArtCraft Omni API options are not mapped yet",
             ));
         }
-        let prompt = request
-            .inputs
-            .iter()
-            .find(|i| i.role == InputRole::Prompt)
-            .and_then(|i| match &i.payload {
-                Payload::Text { text } => Some(text),
-                _ => None,
-            })
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| AiError::invalid("ArtCraft Omni API needs a text prompt"))?;
+        let fill = if request.capability.as_str() == "image.inpaint" {
+            Some(crate::fill::prepare(request)?)
+        } else {
+            None
+        };
+        let prompt = match request.inputs.iter().find(|i| i.role == InputRole::Prompt) {
+            None => None,
+            Some(input) => match &input.payload {
+                Payload::Text { text } => Some(text.as_str()),
+                // A prompt that is not text is a mistake, never an empty prompt.
+                _ => return Err(AiError::invalid("the ArtCraft Omni prompt must be text")),
+            },
+        };
+        // A fill may leave the prompt out: the shared instruction then asks Omni to remove what the
+        // mask covers. Generation always needs words.
+        let prompt = match prompt {
+            Some(text) if fill.is_some() || !text.trim().is_empty() => text,
+            None if fill.is_some() => "",
+            _ => return Err(AiError::invalid("ArtCraft Omni API needs a text prompt")),
+        };
         let video = model.as_str() == "seedance_2p0";
         // Reserve before sending: a paid job that cannot be tracked must never be created.
         let _slot = {
@@ -180,7 +204,28 @@ impl Provider for ArtCraftProvider {
             self.pending.fetch_add(1, Ordering::SeqCst);
             Reservation(&self.pending)
         };
-        let body = json!({"model":model.as_str(),"prompt":prompt,"idempotency_token":uuid::Uuid::new_v4().to_string()});
+        let mut body = json!({"model":model.as_str(),"prompt":prompt,"idempotency_token":uuid::Uuid::new_v4().to_string()});
+        if let Some(fill) = &fill {
+            // shortcut: if a later upload fails, the earlier ones stay on the account as private
+            // intermediate files, because the Omni API (upload, generate, job status) has no call
+            // to delete an upload; ArtCraft's own media-file delete takes a desktop session, not an
+            // API key. Every input is checked before the first upload, so only a service or network
+            // failure mid-way leaves files. Delete the earlier tokens here once Omni documents an
+            // API-key delete.
+            let mut tokens = vec![
+                self.http.upload_png(fill.source)?,
+                self.http.upload_png(&fill.mask)?,
+            ];
+            for reference in &fill.references {
+                tokens.push(self.http.upload_png(reference.data)?);
+            }
+            body["image_media_tokens"] = json!(tokens);
+            body["image_batch_count"] = json!(1);
+            body["prompt"] = json!(craft_ai_media::mask::fill_instruction_with_references(
+                prompt,
+                fill.references.len()
+            ));
+        }
         let response = self.http.post(
             if video {
                 "/v1/omni_api/generate/video"
@@ -230,13 +275,17 @@ impl Provider for ArtCraftProvider {
             Job {
                 remote: remote.to_owned(),
                 video,
+                inline_image: fill.is_some(),
+                result_failures: 0,
                 snapshot: JobSnapshot::new(JobState::Queued),
             },
         );
         Ok(id)
     }
+    /// Asks Omni for the job's state. A finished fill's picture is fetched and handed over once; a
+    /// finished job is not asked about again, and its stored state keeps no picture bytes.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
-        let (remote, video, prior) = {
+        let (remote, video, inline_image, prior) = {
             let jobs = self.lock()?;
             let job = jobs
                 .get(id)
@@ -246,7 +295,12 @@ impl Provider for ArtCraftProvider {
                 stable.events.clear();
                 return Ok(stable);
             }
-            (job.remote.clone(), job.video, job.snapshot.state.clone())
+            (
+                job.remote.clone(),
+                job.video,
+                job.inline_image,
+                job.snapshot.state.clone(),
+            )
         };
         let reply = self
             .http
@@ -285,40 +339,13 @@ impl Provider for ArtCraftProvider {
                     .ok_or_else(|| {
                         AiError::new(ErrorKind::Provider, "ArtCraft job result has no CDN URL")
                     })?;
-                let endpoint = Endpoint::parse(uri).map_err(|_| {
-                    AiError::new(ErrorKind::Provider, "ArtCraft job result URL is invalid")
-                })?;
-                if !endpoint.https || endpoint.is_loopback() || uri.contains('@') {
-                    return Err(AiError::new(
-                        ErrorKind::Provider,
-                        "ArtCraft job result URL is unsafe",
-                    ));
-                }
-                let path = uri.split('?').next().unwrap_or(uri).to_ascii_lowercase();
-                let media = if video {
-                    if path.ends_with(".mp4") {
-                        "video/mp4"
-                    } else if path.ends_with(".webm") {
-                        "video/webm"
-                    } else {
-                        return Err(AiError::unsupported(
-                            "ArtCraft returned an unknown video format",
-                        ));
-                    }
-                } else if path.ends_with(".png") {
-                    "image/png"
-                } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
-                    "image/jpeg"
-                } else if path.ends_with(".webp") {
-                    "image/webp"
-                } else {
-                    return Err(AiError::unsupported(
-                        "ArtCraft returned an unknown image format",
-                    ));
+                let payload = match crate::result::payload(&self.http, uri, video, inline_image) {
+                    Ok(payload) => payload,
+                    Err(error) => return self.result_failed(id, error),
                 };
                 let mut done = JobSnapshot::new(JobState::Succeeded);
                 done.events.push(Event::Output(Output {
-                    payload: Payload::handle(uri, media, None)?,
+                    payload,
                     label: None,
                 }));
                 done
@@ -340,7 +367,13 @@ impl Provider for ArtCraftProvider {
                 snap = job.snapshot.clone();
                 snap.events.clear();
             } else if job.snapshot.state.can_become(&snap.state) {
-                job.snapshot = snap.clone();
+                // Keep the state and usage only: the output was handed over in this answer, and a
+                // later poll of a finished job returns no events, so its bytes are never copied again.
+                job.snapshot = JobSnapshot {
+                    state: snap.state.clone(),
+                    events: Vec::new(),
+                    usage: snap.usage.clone(),
+                };
             } else {
                 snap = job.snapshot.clone();
                 snap.events.clear();

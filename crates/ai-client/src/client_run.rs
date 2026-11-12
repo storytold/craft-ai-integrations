@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use craft_ai_core::payload::Limits;
 use craft_ai_core::{
-    AiError, Connection, ConsentLedger, Disclosure, ErrorKind, ModelId, Provider, Request, Role,
+    AiError, Connection, ConsentLedger, CostEstimate, Disclosure, ErrorKind, ModelId, Provider,
+    Request, Role,
 };
 use craft_ai_native::secrets::secret_for;
 
@@ -33,6 +34,11 @@ impl AiClient {
         self.refuse_unsupported_route(resolved.connection, &resolved.model.id, &request)?;
         let mut disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
         crate::disclosed_size::measure_local_files(&mut disclosure, &request);
+        let estimate = craft_ai_core::cost::estimate(
+            resolved.model.pricing.as_ref(),
+            &request,
+            resolved.connection.billing,
+        );
         Ok(Plan {
             connection: resolved.connection.clone(),
             model: resolved.model.id.clone(),
@@ -40,12 +46,19 @@ impl AiClient {
             disclosure,
             role_id: role.id.clone(),
             role_label: role.label.clone(),
+            estimate,
         })
     }
 
     /// Starts the job. Refuses with [`ErrorKind::ConsentRequired`] if `ledger` does not cover the
     /// plan's disclosure. A plan for another app is an invalid request, refused before key access
     /// or provider and history side effects.
+    ///
+    /// Blocks the calling thread while it pauses between sends the service refused with a rate
+    /// limit (up to the send rule's budget, 30 seconds by default; see
+    /// [`with_retries`](Self::with_retries)). Call it from a worker, or turn the send retry off
+    /// with [`Backoff::NEVER`](craft_ai_core::Backoff::NEVER) before calling it from the
+    /// interface thread.
     pub fn start(&self, plan: &Plan, ledger: &ConsentLedger) -> Result<Job, AiError> {
         if plan.disclosure.app != self.app {
             return Err(AiError::invalid("this plan belongs to a different app"));
@@ -62,12 +75,23 @@ impl AiClient {
         let provider = match self.prepare(plan) {
             Ok(provider) => provider,
             Err(e) => {
-                self.log_refused(plan, None, &e);
+                self.log_refused(plan, plan.estimate.clone(), &e);
                 return Err(e);
             }
         };
-        let estimate = provider.estimate(&plan.model, &plan.request).ok().flatten();
-        match provider.submit(&plan.model, &plan.request) {
+        // The adapter's own figure wins where it gives one; otherwise the plan's, from pricing.
+        let estimate = provider
+            .estimate(&plan.model, &plan.request)
+            .ok()
+            .flatten()
+            .or_else(|| plan.estimate.clone());
+        // Only a rate limit is tried again: see `client_wait.rs` for why a dropped send is not.
+        let submitted = self.submit_retry().run(
+            super::wait::submit_worth_retrying,
+            || provider.submit(&plan.model, &plan.request),
+            std::thread::sleep,
+        );
+        match submitted {
             Ok(id) => {
                 let recorder = self.history.as_ref().map(|file| {
                     Arc::new(history::begin(file, plan, &id, estimate, self.keep_prompts))
@@ -76,6 +100,7 @@ impl AiClient {
                     provider,
                     id,
                     recorder,
+                    poll_retry: self.poll_retry(),
                 })
             }
             Err(e) => {
@@ -123,7 +148,7 @@ impl AiClient {
     }
 
     /// Records a provider-stage refusal only after app scope and consent have passed.
-    fn log_refused(&self, plan: &Plan, estimate: Option<craft_ai_core::CostEstimate>, e: &AiError) {
+    fn log_refused(&self, plan: &Plan, estimate: Option<CostEstimate>, e: &AiError) {
         if let Some(file) = &self.history {
             history::refused(file, plan, estimate, self.keep_prompts, e);
         }

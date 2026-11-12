@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_ai_core::job::{Event, JobSnapshot, JobState};
-use craft_ai_core::{AiError, ErrorKind, JobId, Usage};
+use craft_ai_core::{AiError, Backoff, ErrorKind, JobId, Usage};
 
 use crate::chat::{self, ChatPlan};
 use crate::http::Http;
@@ -138,14 +138,18 @@ pub(crate) struct Registry {
     next: AtomicU64,
     max_active: usize,
     jobs: Mutex<Vec<(JobId, Arc<JobCell>)>>,
+    send_retry: Backoff,
 }
 
 impl Registry {
-    pub fn new(max_active: usize) -> Self {
+    /// A registry that runs at most `max_active` jobs, whose workers retry a refused send by
+    /// `send_retry`.
+    pub fn new(max_active: usize, send_retry: Backoff) -> Self {
         Self {
             next: AtomicU64::new(1),
             max_active: max_active.max(1),
             jobs: Mutex::new(Vec::new()),
+            send_retry,
         }
     }
 
@@ -185,9 +189,10 @@ impl Registry {
             }
         }
         let worker_cell = Arc::clone(&cell);
+        let retry = self.send_retry;
         let spawned = std::thread::Builder::new()
             .name(format!("craft-ai-{id}"))
-            .spawn(move || run(&http, &worker_cell, plan));
+            .spawn(move || run(&http, &worker_cell, plan, retry));
         if spawned.is_err() {
             self.lock().retain(|(j, _)| j != &id);
             return Err(AiError::new(
@@ -199,11 +204,12 @@ impl Registry {
     }
 }
 
-fn run(http: &Http, cell: &JobCell, plan: Plan) {
+/// The worker: runs the job's one request and records success or a scrubbed failure on `cell`.
+fn run(http: &Http, cell: &JobCell, plan: Plan, retry: Backoff) {
     cell.start();
     let outcome = match plan {
-        Plan::Chat(p) => run_chat(http, cell, &p),
-        Plan::Image(p) => run_image(http, cell, &p),
+        Plan::Chat(p) => run_chat(http, cell, &p, retry),
+        Plan::Image(p) => run_image(http, cell, &p, retry),
     };
     match outcome {
         Ok(usage) => cell.succeed(http.trust_cost(usage)),
@@ -211,9 +217,33 @@ fn run(http: &Http, cell: &JobCell, plan: Plan) {
     }
 }
 
-fn run_image(http: &Http, cell: &JobCell, p: &ImagePlan) -> Result<Option<Usage>, AiError> {
-    let resp = http.post(p.path, &p.content_type, &p.body)?;
-    let v = http.read_json(resp)?;
+/// Sends the job's one request, again after a rate limit while the job is not cancelled. A 429
+/// is the server refusing this request, so sending again cannot bill twice; a dropped send is
+/// never repeated.
+fn send(
+    http: &Http,
+    cell: &JobCell,
+    retry: Backoff,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<ureq::http::Response<ureq::Body>, AiError> {
+    retry.run(
+        |e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),
+        || http.post(path, content_type, body),
+        std::thread::sleep,
+    )
+}
+
+/// Sends an image request and turns the reply's pictures into outputs, unless cancelled meanwhile.
+fn run_image(
+    http: &Http,
+    cell: &JobCell,
+    p: &ImagePlan,
+    retry: Backoff,
+) -> Result<Option<Usage>, AiError> {
+    let resp = send(http, cell, retry, p.path, &p.content_type, &p.body)?;
+    let v = http.read_json(resp, crate::http::IMAGES_REPLY)?;
     if cell.is_cancelled() {
         return Ok(None);
     }
@@ -225,15 +255,27 @@ fn run_image(http: &Http, cell: &JobCell, p: &ImagePlan) -> Result<Option<Usage>
 }
 
 /// Posts one chat request, whole or streamed, and turns the reply into events.
-fn run_chat(http: &Http, cell: &JobCell, p: &ChatPlan) -> Result<Option<Usage>, AiError> {
+fn run_chat(
+    http: &Http,
+    cell: &JobCell,
+    p: &ChatPlan,
+    retry: Backoff,
+) -> Result<Option<Usage>, AiError> {
     let body = serde_json::to_vec(&p.body)
         .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode the request"))?;
-    let resp = http.post("/chat/completions", "application/json", &body)?;
+    let resp = send(
+        http,
+        cell,
+        retry,
+        "/chat/completions",
+        "application/json",
+        &body,
+    )?;
     if cell.is_cancelled() {
         return Ok(None);
     }
     if !p.stream {
-        let completion = chat::parse_completion(&http.read_json(resp)?)?;
+        let completion = chat::parse_completion(&http.read_json(resp, crate::http::CHAT_REPLY)?)?;
         for event in chat::events_for(&completion, p.structured)? {
             cell.push(event);
         }

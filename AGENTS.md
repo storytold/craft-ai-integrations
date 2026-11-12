@@ -59,6 +59,13 @@ editing. For a developer suggestion about a model, connection, engine or workflo
 recommendation, a working integration or a user account. Keep credentials and user bindings out
 of proposals and version control.
 
+Every new workspace crate's `Cargo.toml` must explicitly include `[lints] workspace = true`, and
+production crate roots must retain their required crate-level lint attribute.
+
+Named `unsafe` exception (house rule "Never crash"): `crates/ai-native/src/owner_only/win_acl.rs`
+only, for the Win32 calls that give private files an owner-only access list. Do not add `unsafe`
+anywhere else; `crates/ai-native/tests/unsafe_exception.rs` enforces it.
+
 The repository's shared crates own the contracts, adapters, catalogue, consent and client.
 Each Craft app owns its own interface, document conversion and result storage. Check the live
 catalogue, route implementation and app adoption before claiming a provider or model is missing

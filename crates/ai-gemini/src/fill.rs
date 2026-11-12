@@ -11,7 +11,7 @@
 //! is treated as a placeholder to replace, not as content to keep.
 use craft_ai_core::payload::{base64_decode, base64_encode};
 use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request};
-use craft_ai_media::mask::{self, Bounds};
+use craft_ai_media::mask::{self, Bounds, ReferenceRule};
 use serde_json::{Value, json};
 
 /// Image models offered, best default first: (id, label).
@@ -47,6 +47,71 @@ const BOUNDS: Bounds = Bounds {
     max_side: MAX_SIDE,
     max_pixels: MAX_PIXELS,
 };
+
+/// How each reference picture is checked: PNG, JPEG or WebP, at most 10 MB (our own bound). There
+/// is no count: Google's limit differs by model and the service refuses a request with too many,
+/// so that decision is left to it. The request as a whole is held to [`MAX_REQUEST_BYTES`].
+pub(crate) const REFERENCES: ReferenceRule = ReferenceRule {
+    max_bytes: 10 * 1024 * 1024,
+    png_only: false,
+};
+
+/// The most one fill request body may be, as the bytes sent. Google documents a 20 MB total
+/// request size for inline data (text and every file) on the Gemini API; its Interactions pages
+/// state no figure, so the documented one is used here, in decimal megabytes to stay on the safe
+/// side. References within [`REFERENCES`] can pass that many times over before encoding, so this
+/// is what stops a request the service would refuse.
+pub(crate) const MAX_REQUEST_BYTES: usize = 20_000_000;
+
+/// The refusal for a body over [`MAX_REQUEST_BYTES`], the same from [`preflight`] and
+/// [`encoded_body`].
+fn too_large() -> AiError {
+    AiError::invalid(
+        "the source, mask, reference pictures and prompt add up to more than Gemini's 20 MB \
+         request limit; send fewer or smaller reference pictures, or a shorter prompt",
+    )
+}
+
+/// A lower bound on the body's length, read from the input sizes without decoding or encoding
+/// anything: the padded base64 length of the inline source and of every inline reference, each of
+/// which the body carries exactly once. The mask (re-encoded before sending), the prompt and the
+/// fields around them are left out, so the real body is never shorter than this.
+pub(crate) fn lower_bound(request: &Request) -> usize {
+    request
+        .inputs
+        .iter()
+        .filter(|i| matches!(i.role, InputRole::Source | InputRole::Reference))
+        .filter_map(|i| match &i.payload {
+            Payload::Inline { data, .. } => Some(data.len().div_ceil(3).saturating_mul(4)),
+            _ => None,
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// Refuses a fill whose [`lower_bound`] already passes [`MAX_REQUEST_BYTES`], before any picture
+/// is decoded or a base64 copy is made. A few references near their 10 MB limit would otherwise
+/// cost over 100 MB of copies just to be refused. A body that passes here is still measured in
+/// full by [`encoded_body`].
+pub(crate) fn preflight(request: &Request) -> Result<(), AiError> {
+    if lower_bound(request) > MAX_REQUEST_BYTES {
+        return Err(too_large());
+    }
+    Ok(())
+}
+
+/// The request body for one fill as the JSON bytes to send, refused when longer than
+/// [`MAX_REQUEST_BYTES`]. It runs [`preflight`] first, so a body that cannot fit is refused before
+/// it is built. Otherwise the serialised bytes are measured, so base64 padding, the escaping of
+/// the prompt and every field around the pictures all count. Nothing has been sent when it refuses.
+pub(crate) fn encoded_body(model: &str, request: &Request) -> Result<Vec<u8>, AiError> {
+    preflight(request)?;
+    let bytes = serde_json::to_vec(&body(model, request)?)
+        .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
+    if bytes.len() > MAX_REQUEST_BYTES {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
 
 /// Whether `model` may be asked for: one of [`MODELS`], or any well-formed `gemini-…-image…` id so
 /// a newer model works without an update to this crate.
@@ -91,7 +156,8 @@ pub(crate) fn nearest_ratio(w: u32, h: u32) -> (u32, u32) {
 }
 
 /// The output size token: asked for in `image_size`, else enough for the picture sent (its long
-/// side up to 1,024 px is 1K, up to 2,048 px 2K, larger 4K). Lite models only make 1K.
+/// side up to 1,024 px is 1K, up to 2,048 px 2K, larger 4K). Lite models only make 1K; [`body`]
+/// refuses a larger size asked of them before this is reached.
 fn size_token(model: &str, asked: Option<&str>, w: u32, h: u32) -> &'static str {
     if model.contains("lite") {
         return "1K";
@@ -118,30 +184,7 @@ pub(crate) fn shown_mask(data: &[u8]) -> Result<(Vec<u8>, u32, u32), AiError> {
 /// there without whatever stood in it": the background and anything crossing the edge carry on
 /// through it.
 pub fn fill_instruction(prompt: &str) -> String {
-    let prompt = prompt.trim().trim_end_matches('.').trim();
-    let what = if prompt.is_empty() {
-        "Replace the placeholder with what would be there if whatever stood in it had never existed: continue the \
-         background, surfaces, textures and lighting from around it, and carry on anything that crosses its edge (lines, \
-         edges, horizon, patterns, objects partly outside it) the way it would plausibly continue. Do not add a new \
-         object, light or shape that nothing around it suggests."
-            .to_owned()
-    } else {
-        format!(
-            "Replace the placeholder with: {prompt}. Make it belong to the scene: the right size for its place in the \
-             perspective, lit from the same direction, casting and receiving shadows and reflections, and interacting \
-             with whatever touches it. Around the new content, continue the background and anything that crosses the \
-             placeholder's edge."
-        )
-    };
-    format!(
-        "Edit the first image. The second image is a mask the same size: white marks the area of the first image to \
-         fill, black the area to keep. Whatever the white area shows now (it may have been blurred or dimmed out) is \
-         only a placeholder and not part of the scene: replace all of it with sharp, detailed content that has the same \
-         focus, noise and grain as its surroundings. Before editing, study the whole first image: what the scene is, \
-         where the light comes from, the perspective and depth, and what runs up to the placeholder. {what} Keep \
-         everything in the black area, the framing, the scale and the position of every object exactly as they are. \
-         Reply with the edited image only."
-    )
+    mask::fill_instruction(prompt)
 }
 
 /// The Interactions request body for one fill. Everything is checked here, before anything is
@@ -168,29 +211,46 @@ pub(crate) fn body(model: &str, request: &Request) -> Result<Value, AiError> {
             }
         }
     }
+    // Lite models only make 1K pictures; a larger size asked for is refused, not quietly lowered.
+    if model.contains("lite") && matches!(asked_size, Some("2K" | "4K")) {
+        return Err(AiError::unsupported(
+            "this Gemini model makes 1K pictures only; ask for 1K or leave the size out",
+        ));
+    }
     let source = mask::inline(request, BOUNDS, InputRole::Source, "source image")?;
     let media = sniff(source)
         .ok_or_else(|| AiError::invalid("the source image is not a PNG, JPEG or WebP image"))?;
     let (mask, width, height) =
         shown_mask(mask::inline(request, BOUNDS, InputRole::Mask, "mask")?)?;
-    if media == "image/png" {
-        let (w, h) = mask::png_size(source)
-            .ok_or_else(|| AiError::invalid("the source image is not a readable PNG"))?;
-        BOUNDS.check(w, h)?;
-        if (w, h) != (width, height) {
-            return Err(AiError::invalid(
-                "the mask must be the same size as the source image",
-            ));
-        }
+    // Every accepted format is measured, so a JPEG or WebP source meets the same limits and
+    // mask-size rule as a PNG before anything is sent.
+    let (w, h) = craft_ai_media::image_size(source)
+        .ok_or_else(|| AiError::invalid("the source image's size could not be read"))?;
+    BOUNDS.check(w, h)?;
+    if (w, h) != (width, height) {
+        return Err(AiError::invalid(
+            "the mask must be the same size as the source image",
+        ));
     }
+    // References are checked last and sent after the mask, in request order, so the instruction's
+    // "third image onwards" always names them.
+    let references = mask::references(request, BOUNDS, REFERENCES)?;
+    // Each picture is within its own limit here; their total is checked in [`encoded_body`].
+    let instruction = mask::fill_instruction_with_references(prompt, references.len());
+    let mut input = vec![
+        json!({"type": "text", "text": instruction}),
+        json!({"type": "image", "mime_type": media, "data": base64_encode(source)}),
+        json!({"type": "image", "mime_type": "image/png", "data": base64_encode(&mask)}),
+    ];
+    input.extend(
+        references
+            .iter()
+            .map(|r| json!({"type": "image", "mime_type": r.media, "data": base64_encode(r.data)})),
+    );
     let (a, b) = nearest_ratio(width, height);
     Ok(json!({
         "model": model,
-        "input": [
-            {"type": "text", "text": fill_instruction(prompt)},
-            {"type": "image", "mime_type": media, "data": base64_encode(source)},
-            {"type": "image", "mime_type": "image/png", "data": base64_encode(&mask)},
-        ],
+        "input": input,
         "response_format": {
             "type": "image",
             // The Interactions API returns JPEG only ("Supported values: 'image/jpeg'").
@@ -234,10 +294,10 @@ pub(crate) fn read_answer(v: &Value) -> Result<Answer, AiError> {
         };
         let bytes = base64_decode(data)
             .ok_or_else(|| AiError::new(ErrorKind::Provider, "Gemini image data is invalid"))?;
-        let media = sniff(&bytes).ok_or_else(|| {
+        let media = craft_ai_media::decoded_result(&bytes).ok_or_else(|| {
             AiError::new(
                 ErrorKind::Provider,
-                "Gemini returned a picture that is not PNG, JPEG or WebP",
+                "Gemini returned a picture that is not a readable PNG, JPEG or WebP",
             )
         })?;
         return Ok(Answer::Image(media, bytes));
@@ -275,3 +335,8 @@ pub(crate) fn clip(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod preflight_tests;
+#[cfg(test)]
+mod size_tests;

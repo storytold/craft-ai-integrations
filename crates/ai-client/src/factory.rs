@@ -8,14 +8,14 @@
 //! The key arrives here already fetched and is handed straight to the adapter. It is not stored in
 //! the factory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use craft_ai_artcraft::{ArtCraftConfig, ArtCraftProvider};
 use craft_ai_bfl::{BflConfig, BflProvider};
 use craft_ai_comfyui::{ComfyConfig, ComfyProvider, WorkflowLibrary};
-use craft_ai_core::{AiError, Connection, Locality, Provider, SecretString};
+use craft_ai_core::{AiError, Backoff, Connection, Locality, Provider, SecretString};
 use craft_ai_features::GpuVendor;
 use craft_ai_gemini::{GeminiConfig, GeminiProvider};
 use craft_ai_media::{MediaStore, MediaStoreConfig, PersistingProvider};
@@ -25,7 +25,8 @@ use craft_ai_seedance::{SeedanceConfig, SeedanceProvider};
 use craft_ai_vertex::{VertexConfig, VertexProvider};
 
 use crate::route_support::{
-    AddressRule, RouteQuery, RouteSupport, SupportFn, at_address, list_check, vertex_check,
+    AddressRule, RouteQuery, RouteSupport, SupportFn, at_address, gemini_check, list_check,
+    vertex_check,
 };
 
 /// Builds a provider for one connection.
@@ -42,6 +43,9 @@ const OPENAI_FAMILY: &[&str] = &[
     "vllm",
     "openrouter",
 ];
+
+#[path = "factory_send_retry.rs"]
+mod send_retry;
 
 /// Maps provider names to adapters.
 #[derive(Clone)]
@@ -61,6 +65,10 @@ pub struct ProviderFactory {
     media: Option<MediaStoreConfig>,
     /// Passed to every adapter: short for probing, long for real jobs.
     timeouts: Option<(Duration, Duration)>,
+    /// Names whose builder is still this factory's own worker-backed one (Gemini and the OpenAI
+    /// family), which [`set_send_retry`](Self::set_send_retry) may rebuild. Registering or
+    /// unregistering a name takes it off the list, so an app's own builder is never replaced.
+    standard_senders: HashSet<String>,
 }
 
 impl ProviderFactory {
@@ -100,9 +108,12 @@ impl ProviderFactory {
             comfyui_output_dir: None,
             media: None,
             timeouts,
+            standard_senders: HashSet::new(),
         };
         for name in OPENAI_FAMILY {
-            f.register(name, move |c, s| build_openai(c, s, timeouts));
+            f.register(name, move |c, s| {
+                build_openai(c, s, timeouts, Backoff::STANDARD)
+            });
         }
         f.register("artcraft-omni", move |c, s| {
             let base = c
@@ -138,19 +149,7 @@ impl ProviderFactory {
             Ok(Arc::new(BflProvider::new(cfg)?))
         });
         f.register("gemini", move |c, s| {
-            let base = c
-                .endpoint
-                .as_deref()
-                .ok_or_else(|| AiError::invalid("Gemini API address is required"))?;
-            let key = s.ok_or_else(|| {
-                AiError::new(craft_ai_core::ErrorKind::Auth, "Gemini API key is required")
-            })?;
-            let mut cfg = GeminiConfig::new(base, key);
-            if let Some((connect, request)) = timeouts {
-                cfg.connect_timeout = connect;
-                cfg.request_timeout = request;
-            }
-            Ok(Arc::new(GeminiProvider::new(cfg)?))
+            build_gemini(c, s, timeouts, Backoff::STANDARD)
         });
         f.register("seedance", move |c, s| {
             let base = c
@@ -207,6 +206,12 @@ impl ProviderFactory {
             f.comfyui_output_dir.clone(),
             comfy_timeouts,
         );
+        f.standard_senders = OPENAI_FAMILY
+            .iter()
+            .copied()
+            .chain(["gemini"])
+            .map(str::to_owned)
+            .collect();
         f.register_declarative();
         f.register_engines(crate::engines::built_in());
         f.declare_built_in_support();
@@ -228,6 +233,7 @@ impl ProviderFactory {
         // A different build of the adapter is not the one whose cards or limits were declared.
         self.accelerators.remove(&name);
         self.support.remove(&name);
+        self.standard_senders.remove(&name);
         self.builders.insert(name, Arc::new(build));
     }
 
@@ -236,6 +242,7 @@ impl ProviderFactory {
     /// name is then reported as one this app cannot run.
     pub fn unregister(&mut self, name: &str) {
         let name = name.to_ascii_lowercase();
+        self.standard_senders.remove(&name);
         self.builders.remove(&name);
         self.accelerators.remove(&name);
         self.support.remove(&name);
@@ -252,6 +259,7 @@ impl ProviderFactory {
         });
     }
 
+    /// Reads data-described services' settings files from `dir` and registers them again.
     pub fn set_declarative_specs(&mut self, dir: impl Into<std::path::PathBuf>) {
         self.declarative_specs = Some(dir.into());
         self.register_declarative();
@@ -353,8 +361,9 @@ impl ProviderFactory {
             .map_or(RouteSupport::Untested, |check| check(query))
     }
 
-    /// The built-in adapters that serve a fixed list of models say so. Those that take any model
-    /// the service offers, and adapters added later, stay untested.
+    /// The built-in adapters that serve a fixed list of models say so, as does Gemini, whose
+    /// model rule and job are fixed. Those that take any model the service offers, and adapters
+    /// added later, stay untested.
     fn declare_built_in_support(&mut self) {
         let lists: [(&str, Vec<_>, AddressRule); 3] = [
             (
@@ -373,6 +382,11 @@ impl ProviderFactory {
             self.support
                 .insert(name.to_owned(), at_address(allowed, list_check(models)));
         }
+        let gemini: Arc<SupportFn> = Arc::new(gemini_check);
+        self.support.insert(
+            "gemini".to_owned(),
+            at_address(GeminiProvider::address_allowed, gemini),
+        );
         let vertex: Arc<SupportFn> = Arc::new(vertex_check);
         self.support.insert(
             "vertex-express".to_owned(),
@@ -380,6 +394,7 @@ impl ProviderFactory {
         );
     }
 
+    /// True when the factory has a builder for this provider name, in any case.
     pub fn knows(&self, name: &str) -> bool {
         self.builders.contains_key(&name.to_ascii_lowercase())
     }
@@ -399,6 +414,9 @@ impl ProviderFactory {
             .map(Vec::as_slice)
     }
 
+    /// Builds the adapter the connection's provider name maps to, handing it the key, and wraps
+    /// it to copy hosted results to disk when a media directory is set. An unknown name is
+    /// `Unsupported`.
     pub fn build(
         &self,
         connection: &Connection,
@@ -428,12 +446,14 @@ impl ProviderFactory {
 }
 
 impl Default for ProviderFactory {
+    /// [`ProviderFactory::standard`].
     fn default() -> Self {
         Self::standard()
     }
 }
 
 impl std::fmt::Debug for ProviderFactory {
+    /// Lists the provider names it can build, sorted.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut names: Vec<_> = self.builders.keys().collect();
         names.sort();
@@ -441,10 +461,35 @@ impl std::fmt::Debug for ProviderFactory {
     }
 }
 
+/// The Gemini adapter for a connection, with the factory's timeouts and send retry.
+fn build_gemini(
+    connection: &Connection,
+    secret: Option<SecretString>,
+    timeouts: Option<(Duration, Duration)>,
+    send_retry: Backoff,
+) -> Result<Arc<dyn Provider>, AiError> {
+    let base = connection
+        .endpoint
+        .as_deref()
+        .ok_or_else(|| AiError::invalid("Gemini API address is required"))?;
+    let key = secret.ok_or_else(|| {
+        AiError::new(craft_ai_core::ErrorKind::Auth, "Gemini API key is required")
+    })?;
+    let mut cfg = GeminiConfig::new(base, key);
+    if let Some((connect, request)) = timeouts {
+        cfg.connect_timeout = connect;
+        cfg.request_timeout = request;
+    }
+    cfg.send_retry = send_retry;
+    Ok(Arc::new(GeminiProvider::new(cfg)?))
+}
+
+/// An OpenAI-compatible adapter for a connection, with the factory's timeouts and send retry.
 fn build_openai(
     connection: &Connection,
     secret: Option<SecretString>,
     timeouts: Option<(Duration, Duration)>,
+    send_retry: Backoff,
 ) -> Result<Arc<dyn Provider>, AiError> {
     let endpoint = connection.endpoint.as_deref().ok_or_else(|| {
         AiError::invalid(format!(
@@ -455,6 +500,7 @@ fn build_openai(
     let mut config = OpenAiConfig::new(endpoint);
     config.api_key = secret;
     config.key_header = connection.key_header.clone();
+    config.send_retry = send_retry;
     if let Some((connect, request)) = timeouts {
         config.connect_timeout = connect;
         config.request_timeout = request;
@@ -470,6 +516,7 @@ fn build_openai(
 mod tests {
     use super::*;
 
+    /// A local test connection for `provider`, with `endpoint` when given.
     fn conn(provider: &str, endpoint: Option<&str>) -> Connection {
         let mut v = serde_json::json!({
             "id": "c", "label": "Test", "provider": provider,
@@ -481,6 +528,7 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
+    /// The standard factory builds every OpenAI-family name (any case), BFL and Gemini.
     #[test]
     fn standard_knows_the_openai_family_bfl_and_gemini() {
         let f = ProviderFactory::standard();
@@ -497,6 +545,7 @@ mod tests {
         assert!(!f.knows("fal"));
     }
 
+    /// ArtCraft by API key has an adapter; ArtCraft by account sign-in has none.
     #[test]
     fn artcraft_api_key_has_a_real_adapter_but_account_access_does_not() {
         let f = ProviderFactory::standard();
@@ -504,6 +553,7 @@ mod tests {
         assert!(!f.knows("artcraft-account"));
     }
 
+    /// An unknown provider's error names both the provider and the connection.
     #[test]
     fn unknown_provider_names_the_provider_and_connection() {
         let e = ProviderFactory::standard()
@@ -513,6 +563,7 @@ mod tests {
         assert!(e.message.contains("fal") && e.message.contains("Test"));
     }
 
+    /// An OpenAI-family connection with no address cannot be built.
     #[test]
     fn openai_family_needs_an_address() {
         assert!(
@@ -527,6 +578,7 @@ mod tests {
         );
     }
 
+    /// Registering a name again forgets its declared cards, and unregistering removes both.
     #[test]
     fn replacing_an_adapter_forgets_its_declared_cards_and_unregister_removes_both() {
         let mut f = ProviderFactory::standard();
@@ -542,6 +594,7 @@ mod tests {
         f.unregister("never-there"); // not an error
     }
 
+    /// A registered name is known, and Debug lists names only.
     #[test]
     fn register_replaces_and_debug_lists_names_only() {
         let mut f = ProviderFactory::standard();

@@ -287,7 +287,7 @@ P4 = [
     ('input-limit-not-passed-on', CF_PROV, 'crate::input::read_image(&input.payload, self.max_upload_bytes)', 'crate::input::read_image(&input.payload, crate::input::DEFAULT_MAX_UPLOAD_BYTES)', CF, 'media_checks', 'over_the_limit'),
     ('input-web-address-read', CF_IN, 'if url.scheme() != "file" {', 'if false {', CF, 'media_checks', 'only_plain_local'),
     ('input-other-machine-read', CF_IN, 'if !matches!(url.host_str(), None | Some("" | "localhost")) {', 'if false {', CF, 'media_checks', 'only_plain_local'),
-    ('input-folder-read', CF_IN, 'if !meta.is_file() {', 'if false {', CF, 'media_checks', 'only_plain_local'),
+    ('input-folder-read', CF_IN, 'if !file.metadata()?.is_file() {', 'if false {', CF, 'media_checks', 'only_plain_local'),
     ('input-file-size-looked-at-late', CF_IN, 'if meta.len() > max {', 'if false {', CF, 'lib', 'a_file_over_the_limit'),
     ('input-file-read-unbounded', CF_IN, 'reader.take(max.saturating_add(1))', 'reader.take(u64::MAX)', CF, 'lib', 'a_reader_is_read_no_further'),
     ('input-sent-before-all-checked', CF_PROV, UPLOAD_ORDER_OLD, UPLOAD_ORDER_NEW, CF, 'media_checks', 'never_uploaded'),
@@ -296,28 +296,110 @@ P4 = [
 ]
 
 MEDIA = C + 'ai-media/src/store.rs'
+MEDIA_ERRORS = C + 'ai-media/src/store_errors.rs'
 CM = 'craft-ai-media'
-RETRY_GATE = 'if !error.is_retryable() || attempt >= self.config.max_attempts {'
+RETRY = C + 'ai-core/src/retry.rs'
+RETRY_GATE = '|error: &AiError| error.is_retryable() && in_time(),'
+TRY_LIMIT = 'if attempt >= self.max_attempts.clamp(1, 5) {'
+BUDGET = '(elapsed.saturating_add(wait) <= self.budget).then_some(wait)'
 # p10: a busy media host is tried again, a refused link is not, and the pauses are bounded
-# (crates/ai-media). Each mutant runs only the test that should notice it, so none can hang on a
-# real hour-long pause.
+# (crates/ai-media, whose pauses come from the shared rule in crates/ai-core/src/retry.rs). Each
+# mutant runs only the test that should notice it, so none can hang on a real hour-long pause.
 P10 = [
-    ('retry-never', MEDIA, RETRY_GATE, 'if true {', CM, 'retry', 'tried_again_until'),
-    ('retry-everything', MEDIA, RETRY_GATE, 'if attempt >= self.config.max_attempts {', CM, 'retry', 'will_not_get_better'),
-    ('one-try-too-many', MEDIA, RETRY_GATE, 'if !error.is_retryable() || attempt > self.config.max_attempts {', CM, 'retry', 'number_of_tries'),
-    ('tries-clamped-too-high', MEDIA, 'max_attempts: config.max_attempts.clamp(1, 5),', 'max_attempts: config.max_attempts.clamp(1, 50),', CM, 'retry', 'number_of_tries'),
-    ('tries-clamped-too-low', MEDIA, 'max_attempts: config.max_attempts.clamp(1, 5),', 'max_attempts: config.max_attempts.clamp(2, 5),', CM, 'retry', 'number_of_tries'),
-    ('pause-constant', MEDIA, '.saturating_mul(1 << (attempt - 1));', '.saturating_mul(1);', CM, 'retry', 'pause_doubles'),
-    ('pause-none', MEDIA, 'let backoff = self.config.retry_delay.saturating_mul(1 << (attempt - 1));', 'let backoff = Duration::ZERO;', CM, 'retry', 'pause_doubles'),
-    ('retry-after-ignored', MEDIA, '.map_or(backoff, |secs| backoff.max(Duration::from_secs(secs)));', '.map_or(backoff, |_| backoff);', CM, 'retry', 'asks_for_a_long_wait'),
-    ('budget-ignores-the-pause', MEDIA, 'if started.elapsed().saturating_add(wait) > self.config.retry_budget {', 'if started.elapsed() > self.config.retry_budget {', CM, 'retry', 'overrun_the_budget'),
-    ('budget-loosened', MEDIA, 'if started.elapsed().saturating_add(wait) > self.config.retry_budget {', 'if started.elapsed().saturating_add(wait) > self.config.retry_budget.saturating_mul(1000) {', CM, 'retry', 'overrun_the_budget'),
+    ('retry-never', MEDIA, RETRY_GATE, '|_: &AiError| false,', CM, 'retry', 'tried_again_until'),
+    ('retry-everything', MEDIA, RETRY_GATE, '|_: &AiError| true,', CM, 'retry', 'will_not_get_better'),
+    ('one-try-too-many', RETRY, TRY_LIMIT, 'if attempt > self.max_attempts.clamp(1, 5) {', CM, 'retry', 'number_of_tries'),
+    ('tries-clamped-too-high', RETRY, TRY_LIMIT, 'if attempt >= self.max_attempts.clamp(1, 50) {', CM, 'retry', 'number_of_tries'),
+    ('tries-clamped-too-low', RETRY, TRY_LIMIT, 'if attempt >= self.max_attempts.clamp(2, 5) {', CM, 'retry', 'number_of_tries'),
+    ('pause-constant', RETRY, '.saturating_mul(1 << doublings);', '.saturating_mul(1);', CM, 'retry', 'pause_doubles'),
+    ('pause-none', RETRY, 'let backoff = self.first_delay.saturating_mul(1 << doublings);', 'let backoff = Duration::ZERO;', CM, 'retry', 'pause_doubles'),
+    ('retry-after-ignored', RETRY, '.map_or(backoff, |secs| backoff.max(Duration::from_secs(secs)));', '.map_or(backoff, |_| backoff);', CM, 'retry', 'asks_for_a_long_wait'),
+    ('budget-ignores-the-pause', RETRY, BUDGET, '(elapsed <= self.budget).then_some(wait)', CM, 'retry', 'overrun_the_budget'),
+    ('budget-loosened', RETRY, BUDGET, '(elapsed.saturating_add(wait) <= self.budget.saturating_mul(1000)).then_some(wait)', CM, 'retry', 'overrun_the_budget'),
     ('gateway-timeout-not-retried', MEDIA, 'matches!(status, 408 | 500 | 502 | 503 | 504)', 'matches!(status, 408 | 500 | 502 | 503)', CM, 'retry', 'tried_again_until'),
     ('request-timeout-not-retried', MEDIA, 'matches!(status, 408 | 500 | 502 | 503 | 504)', 'matches!(status, 500 | 502 | 503 | 504)', CM, 'retry', 'tried_again_until'),
     ('slow-down-not-retried', MEDIA, 'if status == 429 {', 'if false {', CM, 'retry', 'says_slow_down'),
-    ('retry-after-not-kept', MEDIA, 'let retry_after = error.retry_after_secs;', 'let retry_after: Option<u64> = None;', CM, 'retry', 'last_answer'),
-    ('tries-not-reported', MEDIA, 'if attempts <= 1 {', 'if true {', CM, 'retry', 'number_of_tries'),
-    ('cut-transfer-not-retried', MEDIA, '.map_err(|_| AiError::new(ErrorKind::Network, "media transfer failed"))?;', '.map_err(|_| AiError::new(ErrorKind::Provider, "media transfer failed"))?;', CM, 'retry', 'cut_transfer'),
+    ('retry-after-not-kept', RETRY, 'let retry_after = error.retry_after_secs;', 'let retry_after: Option<u64> = None;', CM, 'retry', 'last_answer'),
+    ('tries-not-reported', RETRY, 'if attempts <= 1 {', 'if true {', CM, 'retry', 'number_of_tries'),
+    ('cut-transfer-not-retried', MEDIA_ERRORS, 'AiError::new(ErrorKind::Network, "media transfer failed")', 'AiError::new(ErrorKind::Provider, "media transfer failed")', CM, 'retry', 'cut_transfer'),
+]
+
+# rx: a cut media download resumes only against a named version and only with a piece that
+# fits, and a clearly expired link is refused before any request (crates/ai-media).
+EXPIRY = C + 'ai-media/src/expiry.rs'
+PARTIAL = C + 'ai-media/src/partial.rs'
+MEDIA_LIB = C + 'ai-media/src/lib.rs'
+RX = [
+    ('weak-etag-used', PARTIAL, 'return text("etag").filter(|e| strong_etag(e)).map(str::to_owned);', 'return text("etag").map(str::to_owned);', CM, 'lib', 'a_weak_etag_is_not_the_version'),
+    ('date-used-beside-an-etag', PARTIAL, 'if headers.contains_key("etag") {', 'if text("etag").filter(|e| strong_etag(e)).is_some() {', CM, 'lib', 'a_weak_etag_is_not_the_version'),
+    ('opaque-etag-ignored', PARTIAL, 'if headers.contains_key("etag") {', 'if text("etag").is_some() {', CM, 'lib', 'an_opaque_etag_rules_out_the_date'),
+    ('malformed-etag-used', PARTIAL, 'b.len() >= 2\n        && b[0] == b\'"\'', 'b.len() >= 2', CM, 'lib', 'a_malformed_etag_is_not_the_version'),
+    ('last-modified-without-a-later-date', PARTIAL, '(date >= at.saturating_add(STRONG_DATE_GAP_SECS)).then(', '(date >= at.saturating_add(1)).then(', CM, 'lib', 'last_modified_needs_a_later_date'),
+    ('piece-start-unchecked', MEDIA, 'Some((start, end, total)) if start == part.written => {', 'Some((_start, end, total)) => {', CM, 'resume', 'a_piece_that_skips_ahead'),
+    ('piece-from-another-address', MEDIA, 'if part.source != partial::address(source) {', 'if false {', CM, 'resume', 'a_piece_from_another_address'),
+    ('short-body-published', MEDIA, 'end.is_some_and(|e| part.written < e) || part.whole.is_some_and(|w| part.written < w);', 'false;', CM, 'resume', 'a_short_piece_is_not_published'),
+    ('long-piece-joined', MEDIA, 'if end.is_some_and(|e| part.written > e) {', 'if false {', CM, 'resume', 'a_piece_longer_than_its_range'),
+    ('budget-counts-transfer', RETRY, 'let mut paused = Duration::ZERO;', 'let mut paused = Duration::from_millis(1);', CM, 'resume', 'does_not_use_the_retry_budget'),
+    ('if-range-not-sent', MEDIA, '\n                    .header("if-range", version);', ';', CM, 'resume', 'with_an_etag_carries_on'),
+    ('resumed-without-a-version', MEDIA, 'if part.validator.is_some() {', 'if true {', CM, 'resume', 'without_a_version_starts_over'),
+    ('piece-limit-unchecked', MEDIA, 'if total.is_some_and(|t| t > self.config.max_bytes) {', 'if false {', CM, 'resume', 'over_the_limit_is_refused'),
+    ('refused-range-final', MEDIA, 'if status == 416 && kept.take().is_some() {', 'if false {', CM, 'resume', 'a_refused_range_starts_over'),
+    ('expired-link-fetched', MEDIA, '&& expiry::clearly_expired(at, expiry::now_unix())', '&& false', CM, 'expiry', 'clearly_expired_signed_link'),
+    ('handle-expiry-ignored', EXPIRY, 'match (own, link_expiry(url)) {', 'match (None::<u64>, link_expiry(url)) {', CM, 'expiry', 'says_it_expired'),
+    ('later-deadline-kept', EXPIRY, '(Some(a), Some(b)) => Some(a.min(b)),', '(Some(a), Some(b)) => Some(a.max(b)),', CM, 'expiry', 'the_earlier_of_two_deadlines'),
+    ('redirect-expiry-unchecked', MEDIA, 'expiry::earliest(handle.expires_at, &url)\n', 'expiry::earliest(handle.expires_at, &url).filter(|_| hops == 0)\n', CM, 'expiry', 'redirect_to_an_expired_link'),
+    ('weekday-unchecked', EXPIRY, 'NaiveDateTime::parse_from_str(s, "%a, %d %b %Y %H:%M:%S GMT")', 'NaiveDateTime::parse_from_str(&s[5..], "%d %b %Y %H:%M:%S GMT")', CM, 'lib', 'http_dates_are_read'),
+    ('other-version-joined', MEDIA, 'if (part.validator.as_deref()).is_none_or(|v| partial::contradicts(v, headers)) {', 'if false {', CM, 'resume', 'a_piece_of_another_version'),
+    ('known-total-forgotten', MEDIA, 'part.whole = total.or(part.whole);', 'part.whole = total;', CM, 'resume', 'a_lost_total_is_still_enforced'),
+    ('total-mismatch-ignored', MEDIA, 'if total.zip(part.whole).is_some_and(|(t, w)| t != w) {', 'if false {', CM, 'resume', 'a_different_total_starts_over'),
+    ('overlong-cut-kept', MEDIA, 'if fits && end.is_none_or(|e| len <= e) {', 'if fits {', CM, 'resume', 'an_overlong_cut_piece_is_not_kept'),
+    ('disk-error-called-cut', MEDIA, '.map_err(CopyFailed::Disk)?;', '.map_err(|_| CopyFailed::Cut(copied))?;', CM, 'lib', 'a_failed_write_is_a_disk_error'),
+    ('signed-query-compared', PARTIAL, '    at.set_query(None);\n', '', CM, 'resume', 'a_freshly_signed_redirect'),
+    ('start-over-costs-a-try', MEDIA, 'Err(Stop::StartOver(_)) if resuming =>', 'Err(Stop::StartOver(_)) if false =>', CM, 'resume', 'a_refused_range_does_not_cost'),
+    ('per-try-time-not-shrunk', MEDIA, '.timeout_global(Some(left));', '.timeout_global(Some(self.config.transfer_timeout));', CM, 'resume', 'whole_save_has_one_time_limit'),
+    ('pause-after-the-deadline', MEDIA, '|error: &AiError| error.is_retryable() && in_time(),', '|error: &AiError| error.is_retryable(),', CM, 'resume', 'whole_save_has_one_time_limit'),
+    ('late-error-not-named', MEDIA, '.map_err(|e| if in_time() { e } else { out_of_time() })', '.map_err(|e| e)', CM, 'resume', 'whole_save_has_one_time_limit'),
+    ('skipped-link-loses-deadline', MEDIA_LIB, 'skipped.expires_at = at;', 'let _ = (skipped, at);', CM, 'expiry', 'past_the_copy_limit_keeps'),
+    ('no-clock-grace', EXPIRY, 'now > expires_at.saturating_add(CLOCK_GRACE_SECS)', 'now > expires_at', CM, 'expiry', 'inside_the_clock_grace'),
+    ('unsigned-expires-read', EXPIRY, 'if param("Signature").is_some()', 'if true', CM, 'lib', 'unsigned_links_have_no_expiry'),
+    ('latest-expiry-wins', EXPIRY, 'found.into_iter().min()', 'found.into_iter().max()', CM, 'lib', 'the_earliest_expiry_wins'),
+    ('expiry-not-attached', MEDIA_LIB, 'kept.expires_at = Some(at);', 'let _ = (kept, at);', CM, 'expiry', 'says_when_the_link_stops'),
+    ('deadline-never-told', MEDIA_LIB, 'if !expiry::clearly_expired(at, expiry::now_unix()) {', 'if false {', CM, 'expiry', 'says_when_the_link_stops'),
+    ('deadline-told-when-past', MEDIA_LIB, 'if !expiry::clearly_expired(at, expiry::now_unix()) {', 'if true {', CM, 'expiry', 'reported_once'),
+]
+
+# ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
+# dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
+WAIT = C + 'ai-client/src/client_wait.rs'
+CLIENT = C + 'ai-client/src/client.rs'
+GEMINI_LIB = C + 'ai-gemini/src/lib.rs'
+OPENAI_JOBS = C + 'ai-openai/src/jobs.rs'
+SEND_GATE = 'error.kind == ErrorKind::RateLimited'
+POLL_GATE = 'Err(error) if error.is_retryable() => {'
+AR = [
+    ('dropped-send-sent-again', WAIT, SEND_GATE, 'true', CL, 'api_retries', 'a_dropped_send_is_not_sent_again'),
+    ('rate-limited-send-not-retried', WAIT, SEND_GATE, 'false', CL, 'api_retries', 'a_rate_limited_send_is_tried_again'),
+    ('failed-poll-ends-the-wait', WAIT, POLL_GATE, 'Err(error) if false => {', CL, 'api_retries', 'a_failed_poll_does_not_end_the_wait'),
+    ('poll-refusal-retried', WAIT, POLL_GATE, 'Err(error) if true => {', CL, 'api_retries', 'a_poll_refusal_is_not_retried'),
+    ('failure-run-not-reset', WAIT, '(failures, paused) = (0, Duration::ZERO);', '', CL, 'api_retries', 'a_success_resets_the_failure_run'),
+    ('poll-never-gives-up', WAIT, 'None => return Err(self.give_up(tried(error, failures))),', 'None => continue,', CL, 'api_retries', 'a_poll_that_keeps_failing'),
+    ('pauses-not-counted', WAIT, 'paused = paused.saturating_add(wait);', '', CL, 'api_retries', 'the_budget_counts_the_pauses'),
+    ('give-up-not-cancelled', WAIT, 'None => return Err(self.give_up(tried(error, failures))),', 'None => return Err(tried(error, failures)),', CL, 'api_retries', 'a_poll_that_keeps_failing'),
+    ('interval-not-the-floor', WAIT, 'wait.max(interval)', 'wait', CL, 'api_retries', 'a_long_interval_still_retries'),
+    ('poll-after-the-timeout', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up(took_too_long()));\n            }\n            let pause = match', '            let pause = match', CL, 'api_retries', 'no_poll_starts_after_the_timeout'),
+    ('zero-timeout-polls', WAIT, '            if Instant::now() >= deadline {\n                return Err(self.give_up(took_too_long()));\n            }\n            let pause = match', '            let pause = match', CL, 'api_retries', 'a_zero_timeout_does_not_poll'),
+    ('pause-not-taken', WAIT, 'std::thread::sleep(pause.min(deadline.saturating_duration_since(now)));', 'let _ = (pause, now);', CL, 'api_retries', 'the_retry_pause_is_taken'),
+    ('give-up-past-timeout-not-cancelled', WAIT, '                        None if Instant::now() >= deadline => {\n                            return Err(self.give_up(took_too_long()));\n                        }\n', '', CL, 'api_retries', 'a_failure_past_the_timeout_cancels'),
+    ('run-pauses-not-counted', RETRY, '            paused = paused.saturating_add(wait);\n', '', M, 'lib', 'run_budget_counts_the_pauses'),
+    ('cancel-during-pause-ignored', RETRY, '            if !worth_retrying(&error) {\n                return Err(tried(error, attempt));\n            }\n            attempt', '            attempt', M, 'lib', 'run_asks_again_after_the_pause'),
+    ('later-factory-ignores-the-rule', CLIENT, '        if self.send_rule_chosen() {\n            self.factory.set_send_retry(self.submit_retry());\n        }\n', '', CL, 'factory_send_retry', 'a_later_factory_takes_the_send_rule'),
+    ('client-send-rule-not-passed', WAIT, '        self.factory.set_send_retry(submit);\n', '', CL, 'factory_send_retry', 'the_clients_send_rule_reaches_the_worker'),
+    ('apps-builder-replaced', FACTORY, '        self.standard_senders.remove(&name);\n        self.builders.insert(name, Arc::new(build));', '        self.builders.insert(name, Arc::new(build));', CL, 'factory_send_retry', 'an_apps_own_builder_is_kept'),
+    ('openai-send-rule-not-applied', FACTORY, '    config.send_retry = send_retry;\n', '', CL, 'factory_send_retry', 'never_turns_the_worker_retry_off'),
+    ('gemini-worker-never-retries', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| false,', 'craft-ai-gemini', 'provider', 'a_rate_limited_send_is_sent_again'),
+    ('gemini-worker-retries-anything', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| true,', 'craft-ai-gemini', 'provider', 'a_server_error_is_not_sent_again'),
+    ('openai-worker-never-retries', OPENAI_JOBS, '|e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),', '|_: &AiError| false,', O, 'provider', 'a_rate_limited_send_is_sent_again'),
+    ('openai-worker-retries-anything', OPENAI_JOBS, '|e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),', '|_: &AiError| true,', O, 'provider', 'an_out_of_credit_send_is_not_sent_again'),
 ]
 
 STORE = C + 'ai-core/src/store.rs'
@@ -481,7 +563,7 @@ CT = [
     ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, T, 'without_the_adapter'),
     ('picker-hides-missing-adapter', CT_PICKER, 'RoleStatus::Unavailable { reason } => Some(reason),', 'RoleStatus::Unavailable { reason } => {\n                    let _ = reason;\n                    None\n                }', CL, T, 'without_the_adapter'),
     ('consent-not-enforced', C + 'ai-client/src/client_run.rs', 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
-    ('request-not-forwarded', C + 'ai-client/src/client_run.rs', 'provider.submit(&plan.model, &plan.request) {', 'provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())) {', CL, T, 'two_apps_run'),
+    ('request-not-forwarded', C + 'ai-client/src/client_run.rs', '|| provider.submit(&plan.model, &plan.request),', '|| provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())),', CL, T, 'two_apps_run'),
     ('cancel-not-forwarded', CT_CLIENT, 'pub fn cancel(&self) -> Result<(), AiError> {\n        self.provider.cancel(&self.id)', 'pub fn cancel(&self) -> Result<(), AiError> {\n        let _ = &self.provider;\n        Ok(())', CL, T, 'cancelling_one'),
     ('old-store-needs-the-new-field', CT_STORE, '#[serde(default, skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', '#[serde(skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', CL, T, 'before_custom_tools'),
     ('removal-keeps-the-launcher-choice', CT_TOOLS, 'store.defaults.retain(|binding| &binding.role != id);', 'let _ = id;', CL, T, 'before_custom_tools'),
@@ -508,6 +590,8 @@ from mutation_built_in_only import BO  # noqa: E402
 from mutation_first_run import FR  # noqa: E402
 from mutation_gemini import GI  # noqa: E402
 from mutation_mcp_gateway import MG  # noqa: E402
+from mutation_keys import KF  # noqa: E402
+from mutation_reply_parse import RP  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -569,7 +653,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES}
+GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'rp': RP}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

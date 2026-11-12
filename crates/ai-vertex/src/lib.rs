@@ -9,7 +9,16 @@ use craft_ai_core::{
     endpoint::Endpoint,
     payload::{Limits, base64_decode},
 };
+use craft_ai_http::json::ReplyError;
 use serde_json::{Value, json};
+
+/// The largest reply read, in bytes: one picture in base64 inside JSON.
+const MAX_REPLY: usize = 48 * 1024 * 1024;
+/// The estimated memory a reply may cost once parsed ([`craft_ai_http::json::parse`]). The
+/// picture's base64 costs about its length, so this leaves room above [`MAX_REPLY`] for the
+/// reply's structure; a reply of many tiny objects, which would cost about a hundred times its
+/// size, is refused instead.
+const MAX_REPLY_PARSED: usize = 64 * 1024 * 1024;
 use std::{
     collections::HashMap,
     io::Read,
@@ -151,17 +160,23 @@ impl VertexProvider {
         response
             .into_body()
             .into_reader()
-            .take(48 * 1024 * 1024 + 1)
+            .take(MAX_REPLY as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| AiError::new(ErrorKind::Network, "Vertex reply ended early"))?;
-        if bytes.len() > 48 * 1024 * 1024 {
+        if bytes.len() > MAX_REPLY {
             return Err(AiError::new(
                 ErrorKind::Provider,
                 "Vertex image reply is too large",
             ));
         }
-        let reply: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| AiError::new(ErrorKind::Provider, "Vertex returned invalid JSON"))?;
+        let reply = craft_ai_http::json::parse(&bytes, MAX_REPLY_PARSED).map_err(|e| match e {
+            ReplyError::TooLarge => {
+                AiError::new(ErrorKind::Provider, "Vertex image reply is too large")
+            }
+            ReplyError::NotJson => {
+                AiError::new(ErrorKind::Provider, "Vertex returned invalid JSON")
+            }
+        })?;
         let parts = reply
             .pointer("/candidates/0/content/parts")
             .and_then(Value::as_array)

@@ -141,6 +141,7 @@ fn only_an_inline_png_is_the_mask() {
         uri: "file:///elsewhere.png".into(),
         media_type: crate::payload::MediaType::new("image/png").unwrap(),
         size_bytes: None,
+        expires_at: None,
     }));
     let png = output(Payload::inline("image/png", vec![1, 2, 3]).unwrap());
     let outputs = vec![jpeg.clone(), handle.clone(), png.clone()];

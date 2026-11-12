@@ -262,7 +262,8 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
         [
             ("OpenAI".to_owned(), GroupState::NotSetUp),
             ("Black Forest Labs".to_owned(), GroupState::NotSetUp),
-            ("Google Gemini".to_owned(), GroupState::NotSetUp)
+            ("Google Gemini".to_owned(), GroupState::NotSetUp),
+            ("ArtCraft Omni API key".to_owned(), GroupState::NotSetUp)
         ]
     );
     assert!(view.groups.iter().all(|g| g.models.is_empty()));
@@ -284,6 +285,12 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
             option: "service:gemini".into()
         })
     );
+    assert_eq!(
+        view.groups[3].setup,
+        Some(SetupLink::New {
+            option: "service:artcraft-omni".into()
+        })
+    );
 
     // Once an OpenAI connection exists it is that connection's group, not a second greyed one.
     let w = World::new(
@@ -302,7 +309,8 @@ fn a_provider_that_is_not_set_up_is_shown_with_a_set_up_link_until_it_is() {
         [
             ("Label oa".to_owned(), GroupState::Ready),
             ("Black Forest Labs".to_owned(), GroupState::NotSetUp),
-            ("Google Gemini".to_owned(), GroupState::NotSetUp)
+            ("Google Gemini".to_owned(), GroupState::NotSetUp),
+            ("ArtCraft Omni API key".to_owned(), GroupState::NotSetUp)
         ]
     );
 }

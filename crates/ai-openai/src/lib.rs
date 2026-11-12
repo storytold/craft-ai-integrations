@@ -60,7 +60,7 @@ use std::time::Duration;
 use craft_ai_core::endpoint::Endpoint;
 use craft_ai_core::payload::Limits;
 use craft_ai_core::{
-    AiError, JobId, JobSnapshot, ModelId, ModelInfo, Provider, Request, SecretString,
+    AiError, Backoff, JobId, JobSnapshot, ModelId, ModelInfo, Provider, Request, SecretString,
 };
 
 use crate::http::Http;
@@ -84,9 +84,14 @@ pub struct OpenAiConfig {
     pub request_timeout: Duration,
     /// Jobs that may run at once on this connection.
     pub max_active_jobs: usize,
+    /// How a job's worker tries its send again after a rate limit (default
+    /// [`Backoff::STANDARD`]). Only a refused send is repeated; [`Backoff::NEVER`] turns it off.
+    pub send_retry: Backoff,
 }
 
 impl OpenAiConfig {
+    /// A config for `base_url` with no key, a 10 s connect and a 600 s request timeout, eight
+    /// jobs at once and the standard send retry.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
@@ -96,6 +101,7 @@ impl OpenAiConfig {
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(600),
             max_active_jobs: 8,
+            send_retry: Backoff::STANDARD,
         }
     }
 
@@ -150,7 +156,7 @@ impl OpenAiProvider {
             http: Arc::new(http),
             models: config.models,
             limits: Limits::default(),
-            registry: Registry::new(config.max_active_jobs),
+            registry: Registry::new(config.max_active_jobs, config.send_retry),
         })
     }
 
@@ -167,7 +173,7 @@ impl Provider for OpenAiProvider {
         if let Some(list) = &self.models {
             return Ok(list.clone());
         }
-        let v = self.http.get_json("/models")?;
+        let v = self.http.get_json("/models", http::MODELS_REPLY)?;
         let openrouter = self.http.is_openrouter();
         let mut found: Vec<ModelInfo> = v
             .get("data")

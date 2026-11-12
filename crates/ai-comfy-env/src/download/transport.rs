@@ -1,7 +1,8 @@
 //! The network side of [`Downloader`]: opening a link, following redirects by hand, and the two
 //! small reads built on it (a size probe and a bounded in-memory body).
 //!
-//! Invariants: every hop passes the shared link rules and the allowed-host list; the token goes
+//! Invariants: every hop passes the shared link rules and the allowed-host list, and the agent's
+//! resolver ([`craft_ai_media::links::GuardedResolver`]) connects only to allowed addresses; the token goes
 //! only to `auth_host`; redirects are never followed by the HTTP client itself; the agent
 //! carries no proxy and each hop takes the proxy its own address decides (none for loopback).
 

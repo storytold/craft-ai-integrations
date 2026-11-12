@@ -17,10 +17,12 @@ use support::{Reply, Server};
 
 const KEY: &str = "AIza-gemini-needle";
 
+/// A short wait between polls, while the worker thread runs.
 fn pause() {
     std::thread::sleep(std::time::Duration::from_millis(2));
 }
 
+/// An encoded PNG of the given size and colour type, with each pixel from `pixel`.
 fn png(
     width: u32,
     height: u32,
@@ -41,6 +43,7 @@ fn png(
     out
 }
 
+/// A plain 8 x 8 picture to fill.
 fn source() -> Vec<u8> {
     png(8, 8, png::ColorType::Rgb, |_, _| vec![10, 20, 30])
 }
@@ -56,10 +59,12 @@ fn mask() -> Vec<u8> {
     })
 }
 
+/// The adapter's default model.
 fn model() -> ModelId {
     ModelId::new(DEFAULT_MODEL).unwrap()
 }
 
+/// A fill of the test source and mask with `prompt`.
 fn fill_request(prompt: &str) -> Request {
     Request::new(CapabilityId::parse("image.inpaint").unwrap())
         .with_input(
@@ -73,14 +78,25 @@ fn fill_request(prompt: &str) -> Request {
         .with_input(InputRole::Prompt, Payload::text(prompt))
 }
 
+/// The real adapter with the fixture key, pointed at the scripted server at `url`.
+/// A provider whose worker never retries, so a scripted 429 is answered at once.
 fn provider(url: &str) -> GeminiProvider {
-    GeminiProvider::new(GeminiConfig::new(url, SecretString::new(KEY))).unwrap()
+    let mut config = GeminiConfig::new(url, SecretString::new(KEY));
+    config.send_retry = craft_ai_core::Backoff::NEVER;
+    GeminiProvider::new(config).unwrap()
 }
 
+/// A real 2 x 2 JPEG: results are decoded in full now, so a signature alone is refused.
 fn result_jpeg() -> Vec<u8> {
-    b"\xff\xd8\xff\xe0 a jpeg".to_vec()
+    let picture = image::RgbImage::from_pixel(2, 2, image::Rgb([200, 40, 40]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    picture
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .unwrap();
+    out.into_inner()
 }
 
+/// A server that checks it was sent a fill and answers with one JPEG picture.
 fn answer_server() -> Server {
     Server::start(|r| {
         assert_eq!(
@@ -98,6 +114,7 @@ fn answer_server() -> Server {
     })
 }
 
+/// A fill sends the picture, then the mask as a second picture, and the key only as a header.
 #[test]
 fn a_fill_sends_the_mask_as_a_second_picture_with_the_key_only_in_a_header() {
     let server = answer_server();
@@ -151,6 +168,7 @@ fn a_fill_sends_the_mask_as_a_second_picture_with_the_key_only_in_a_header() {
     assert_eq!(body["response_format"]["image_size"], "1K");
 }
 
+/// A fill with no prompt asks Gemini to remove what the mask covers.
 #[test]
 fn an_empty_prompt_is_sent_as_a_removal() {
     let server = answer_server();
@@ -165,6 +183,7 @@ fn an_empty_prompt_is_sent_as_a_removal() {
     );
 }
 
+/// A connection test asks for one model listing (free) and offers this crate's image models.
 #[test]
 fn testing_the_connection_lists_models_for_free_and_offers_the_image_models() {
     let server = Server::start(|r| {
@@ -199,6 +218,7 @@ fn testing_the_connection_lists_models_for_free_and_offers_the_image_models() {
     );
 }
 
+/// Runs one fill against a server that always gives `reply`, and returns the job's error.
 fn failure(reply: Reply) -> craft_ai_core::AiError {
     let server = Server::start(move |_| match &reply {
         Reply::Json(s, b) => Reply::Json(*s, b.clone()),
@@ -213,6 +233,7 @@ fn failure(reply: Reply) -> craft_ai_core::AiError {
     }
 }
 
+/// Each failing answer maps to the error kind an app can act on, and no message carries the key.
 #[test]
 fn errors_map_to_kinds_and_never_carry_the_key() {
     let cases = [
@@ -260,6 +281,7 @@ fn errors_map_to_kinds_and_never_carry_the_key() {
     );
 }
 
+/// A server that cannot be reached fails the job with a network error.
 #[test]
 fn a_dead_server_is_a_network_failure_of_the_job() {
     let p = provider(&Server::dead_url());
@@ -269,6 +291,7 @@ fn a_dead_server_is_a_network_failure_of_the_job() {
     );
 }
 
+/// A slow fill can be cancelled, and an unknown job id is refused, as the shared checks expect.
 #[test]
 fn cancel_and_unknown_jobs_behave() {
     let server = Server::start(|_| {
@@ -280,6 +303,7 @@ fn cancel_and_unknown_jobs_behave() {
     run_unknown_job(&p).unwrap();
 }
 
+/// A request the model cannot take is refused in `submit`, before anything reaches the server.
 #[test]
 fn bad_requests_are_refused_before_anything_is_sent() {
     let server = Server::start(|_| Reply::Json(200, "{}".into()));
@@ -337,6 +361,7 @@ fn bad_requests_are_refused_before_anything_is_sent() {
     assert_eq!(server.count(), 0);
 }
 
+/// Only Google's address or a loopback test server is accepted, and Debug never shows the key.
 #[test]
 fn only_the_official_address_or_this_computer_is_accepted_and_debug_hides_the_key() {
     let make =
@@ -360,6 +385,7 @@ fn only_the_official_address_or_this_computer_is_accepted_and_debug_hides_the_ke
     assert!(!format!("{:?}", make(OFFICIAL, KEY).unwrap()).contains(KEY));
 }
 
+/// A redirect from the API address is a failure, and its target is never asked.
 #[test]
 fn redirects_are_not_followed() {
     let server = Server::start(|_| {
@@ -373,4 +399,53 @@ fn redirects_are_not_followed() {
     let done = run_lifecycle_paced(&p, &model(), &fill_request("x"), &pause).unwrap();
     assert!(matches!(done.state, JobState::Failed { .. }));
     assert_eq!(server.count(), 1);
+}
+
+/// The worker sends again after Google refuses with a 429, and the fill then succeeds.
+#[test]
+fn a_rate_limited_send_is_sent_again_by_the_worker() {
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = seen.clone();
+    let server = Server::start(move |_| {
+        if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            return Reply::Json(429, "{}".into());
+        }
+        Reply::Json(
+            200,
+            json!({"steps": [{"type": "model_output", "content": [
+                {"type": "image", "mime_type": "image/jpeg", "data": base64_encode(&result_jpeg())}
+            ]}]})
+            .to_string(),
+        )
+    });
+    let mut config = GeminiConfig::new(&server.url, SecretString::new(KEY));
+    config.send_retry = craft_ai_core::Backoff {
+        max_attempts: 3,
+        first_delay: std::time::Duration::ZERO,
+        budget: std::time::Duration::from_secs(5),
+    };
+    let p = GeminiProvider::new(config).unwrap();
+    let done = run_lifecycle_paced(&p, &model(), &fill_request("x"), &pause).unwrap();
+    assert_eq!(done.state, JobState::Succeeded);
+    assert_eq!(server.recorded().len(), 2);
+}
+
+/// A failure that is not a refusal is never sent again: the request may have been billed.
+#[test]
+fn a_server_error_is_not_sent_again_by_the_worker() {
+    let server = Server::start(|_| Reply::Json(500, "{}".into()));
+    let mut config = GeminiConfig::new(&server.url, SecretString::new(KEY));
+    config.send_retry = craft_ai_core::Backoff {
+        max_attempts: 3,
+        first_delay: std::time::Duration::ZERO,
+        budget: std::time::Duration::from_secs(5),
+    };
+    let p = GeminiProvider::new(config).unwrap();
+    let done = run_lifecycle_paced(&p, &model(), &fill_request("x"), &pause).unwrap();
+    assert!(
+        matches!(done.state, JobState::Failed { .. }),
+        "{:?}",
+        done.state
+    );
+    assert_eq!(server.recorded().len(), 1);
 }

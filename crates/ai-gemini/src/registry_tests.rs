@@ -2,7 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use super::*;
+use crate::registry::MAX_TRACKED;
 
+/// A provider pointed at a closed local port, so nothing can reach a real service.
 fn provider() -> GeminiProvider {
     GeminiProvider::new(GeminiConfig::new(
         "http://127.0.0.1:9/v1beta",
@@ -11,6 +13,7 @@ fn provider() -> GeminiProvider {
     .unwrap()
 }
 
+/// A one-pixel fill request: a white source and a white mask, no prompt.
 fn request() -> Request {
     let mut bytes = Vec::new();
     {
@@ -30,6 +33,7 @@ fn request() -> Request {
         )
 }
 
+/// Fills the registry to [`MAX_TRACKED`] jobs in `state`, none delivered, and returns their ids.
 fn seed(provider: &GeminiProvider, state: JobState) -> Vec<JobId> {
     let mut jobs = lock(&provider.jobs).unwrap();
     (0..MAX_TRACKED)
@@ -41,6 +45,7 @@ fn seed(provider: &GeminiProvider, state: JobState) -> Vec<JobId> {
                     state: state.clone(),
                     events: Vec::new(),
                     terminal_delivered: false,
+                    ended: state.is_terminal().then(Instant::now),
                 },
             );
             id
@@ -48,6 +53,7 @@ fn seed(provider: &GeminiProvider, state: JobState) -> Vec<JobId> {
         .collect()
 }
 
+/// A full registry refuses new fills as `Quota` and keeps every finished result unpolled.
 #[test]
 fn unpolled_terminal_jobs_survive_tracking_pressure() {
     for state in [
@@ -62,7 +68,7 @@ fn unpolled_terminal_jobs_survive_tracking_pressure() {
         let error = p
             .submit(&ModelId::new(DEFAULT_MODEL).unwrap(), &request())
             .unwrap_err();
-        assert_eq!(error.kind, ErrorKind::RateLimited);
+        assert_eq!(error.kind, ErrorKind::Quota);
         assert_eq!(lock(&p.jobs).unwrap().len(), MAX_TRACKED);
         for id in ids {
             assert_eq!(p.poll(&id).unwrap().state, state);

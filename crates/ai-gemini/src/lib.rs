@@ -13,25 +13,35 @@
 //!
 //! A job runs on its own thread so it can be polled and cancelled. Cancelling stops waiting for
 //! the answer; a request already sent may still be billed by Google.
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 mod fill;
+mod registry;
 
 pub use fill::fill_instruction;
+use registry::{Jobs, Slot, lock};
 
 use craft_ai_core::{
-    AiError, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId, ModelInfo, Output,
-    Payload, Provider, Request, SecretString, capability::CapabilityId, endpoint::Endpoint,
-    model::CapabilitySpec, payload::Limits,
+    AiError, Backoff, ErrorKind, Event, InputRole, JobId, JobSnapshot, JobState, ModelId,
+    ModelInfo, Output, Payload, Provider, Request, SecretString, capability::CapabilityId,
+    endpoint::Endpoint, model::CapabilitySpec, payload::Limits,
 };
+use craft_ai_http::json::ReplyError;
 use serde_json::Value;
 use std::{
     collections::HashMap,
     io::Read,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// The official Gemini API address.
@@ -41,12 +51,16 @@ pub const DEFAULT_MODEL: &str = "gemini-nano-banana-2.1";
 
 /// The largest answer read: a 4K picture in base64 inside JSON fits easily.
 const MAX_REPLY: u64 = 48 * 1024 * 1024;
+/// The estimated memory an answer may cost once parsed ([`craft_ai_http::json::parse`]). A
+/// picture's base64 costs about its length, so this leaves room above [`MAX_REPLY`] for the
+/// answer's structure; an answer of many tiny objects, which would cost about a hundred times
+/// its size, is refused instead.
+const MAX_REPLY_PARSED: usize = 64 * 1024 * 1024;
 /// The most of an error answer read, for its message.
 const MAX_ERROR_REPLY: u64 = 64 * 1024;
 /// Requests in flight to Google at once, cancelled ones included (see [`Permit`]), and jobs
 /// remembered in all.
 const MAX_RUNNING: usize = 32;
-const MAX_TRACKED: usize = 256;
 
 #[derive(Clone, Debug)]
 pub struct GeminiConfig {
@@ -55,33 +69,29 @@ pub struct GeminiConfig {
     pub connect_timeout: Duration,
     /// A Pro model at 4K can take well over a minute.
     pub request_timeout: Duration,
+    /// How the worker tries its send again after a rate limit (default [`Backoff::STANDARD`]).
+    /// Only a refused send is repeated; [`Backoff::NEVER`] turns it off.
+    pub send_retry: Backoff,
 }
 impl GeminiConfig {
+    /// A config for `base_url` and `api_key`, with a 10 s connect and a 240 s request timeout.
     pub fn new(base_url: impl Into<String>, api_key: SecretString) -> Self {
         Self {
             base_url: base_url.into(),
             api_key,
             connect_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(240),
+            send_retry: Backoff::STANDARD,
         }
     }
 }
-
-struct Slot {
-    state: JobState,
-    /// Events not yet handed out by a poll.
-    events: Vec<Event>,
-    /// Whether a poll has delivered the terminal state, including failure or cancellation.
-    terminal_delivered: bool,
-}
-
-type Jobs = Arc<Mutex<HashMap<JobId, Slot>>>;
 
 /// A place among the [`MAX_RUNNING`] requests in flight, held by the worker thread for its whole
 /// life. Cancelling ends a job but not its request, so the place is only given back when the worker
 /// exits, or when the worker never starts.
 struct Permit(Arc<AtomicUsize>);
 impl Permit {
+    /// Takes a place, or `None` when [`MAX_RUNNING`] requests are already in flight.
     fn acquire(in_flight: &Arc<AtomicUsize>) -> Option<Self> {
         // Over the limit, dropping the permit takes the count back down. Submits racing at the
         // limit may refuse one too many, never admit one too many.
@@ -90,6 +100,7 @@ impl Permit {
     }
 }
 impl Drop for Permit {
+    /// Gives the place back.
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
@@ -102,19 +113,18 @@ pub struct GeminiProvider {
     jobs: Jobs,
     in_flight: Arc<AtomicUsize>,
     sequence: AtomicU64,
+    send_retry: Backoff,
 }
 impl std::fmt::Debug for GeminiProvider {
+    /// Prints the type name only, so the key can never reach a log.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("GeminiProvider")
     }
 }
 
-fn lock(jobs: &Jobs) -> Result<MutexGuard<'_, HashMap<JobId, Slot>>, AiError> {
-    jobs.lock()
-        .map_err(|_| AiError::new(ErrorKind::Internal, "Gemini job registry unavailable"))
-}
-
 impl GeminiProvider {
+    /// Builds the adapter. Refuses an empty or multi-line key, and any address other than the
+    /// official one or a local test server (see [`address_allowed`](Self::address_allowed)).
     pub fn new(config: GeminiConfig) -> Result<Self, AiError> {
         if config.api_key.is_empty()
             || config
@@ -126,9 +136,8 @@ impl GeminiProvider {
             return Err(AiError::invalid("a single-line Gemini API key is required"));
         }
         let base = config.base_url.trim_end_matches('/');
-        let endpoint =
-            Endpoint::parse(base).map_err(|_| AiError::invalid("invalid Gemini API address"))?;
-        if base.contains(['?', '#']) || (!endpoint.is_loopback() && base != OFFICIAL) {
+        Endpoint::parse(base).map_err(|_| AiError::invalid("invalid Gemini API address"))?;
+        if !Self::address_allowed(base) {
             return Err(AiError::invalid(
                 "the Gemini API must use its official address",
             ));
@@ -148,12 +157,29 @@ impl GeminiProvider {
             base: base.to_owned(),
             key: config.api_key,
             agent,
+            send_retry: config.send_retry,
             jobs: Arc::new(Mutex::new(HashMap::new())),
             in_flight: Arc::new(AtomicUsize::new(0)),
             sequence: AtomicU64::new(0),
         })
     }
 
+    /// Whether [`new`](Self::new) accepts `base_url`: the official address or a test server on this
+    /// computer, with no query or fragment. It reads no key and contacts nothing, so the client's
+    /// support check asks it before anything is built.
+    pub fn address_allowed(base_url: &str) -> bool {
+        let base = base_url.trim_end_matches('/');
+        !base.contains(['?', '#'])
+            && Endpoint::parse(base).is_ok_and(|e| e.is_loopback() || base == OFFICIAL)
+    }
+
+    /// Whether [`submit`](Provider::submit) accepts `model`: a listed model, or any well-formed
+    /// `gemini-…-image…` id, so a newer model works without an update to this crate.
+    pub fn model_allowed(model: &str) -> bool {
+        fill::model_allowed(model)
+    }
+
+    /// This crate's own model list, each offered for Generative fill (see [`fill_spec`]).
     fn catalog() -> Vec<ModelInfo> {
         fill::MODELS
             .iter()
@@ -164,6 +190,8 @@ impl GeminiProvider {
 }
 
 /// Source and mask required; the prompt may be left out or empty (fill from the surroundings).
+/// Any number of reference pictures may follow, none required: the service says how many its model
+/// takes and refuses more, so the spec states no count of its own ([`ANY_NUMBER`]).
 fn fill_spec() -> Option<CapabilitySpec> {
     Some(
         CapabilitySpec::new(CapabilityId::parse("image.inpaint").ok()?)
@@ -171,9 +199,14 @@ fn fill_spec() -> Option<CapabilitySpec> {
             .requiring(InputRole::Source)
             .accepting(InputRole::Mask, 1)
             .requiring(InputRole::Mask)
-            .accepting(InputRole::Prompt, 1),
+            .accepting(InputRole::Prompt, 1)
+            .accepting(InputRole::Reference, ANY_NUMBER),
     )
 }
+
+/// The count a spec gives an input the service limits itself: the largest the shared contract can
+/// hold, so no check here refuses a request the service would take.
+const ANY_NUMBER: u32 = u32::MAX;
 
 /// Reads at most `max` bytes of a body; more is `None`.
 fn read_bounded(body: ureq::Body, max: u64) -> Result<Option<Vec<u8>>, AiError> {
@@ -216,12 +249,15 @@ fn status_error(status: u16, retry_after: Option<u64>, body: &[u8], key: &Secret
         _ => ErrorKind::Provider,
     };
     let detail = if message.is_empty() { reason } else { message };
+    // Scrub the key from the whole message before cutting it short, so a key that straddles
+    // the cut cannot leave a fragment behind.
+    let detail = AiError::redacted(kind, &detail, &[key]).message;
     let text = if detail.is_empty() {
         format!("Gemini answered {status}")
     } else {
         format!("Gemini answered {status}: {}", fill::clip(&detail, 300))
     };
-    let e = AiError::redacted(kind, &text, &[key]);
+    let e = AiError::new(kind, text);
     match retry_after {
         Some(secs) if status == 429 => e.with_retry_after(secs),
         _ => e,
@@ -250,8 +286,15 @@ fn call(
     }
     let bytes = read_bounded(response.into_body(), MAX_REPLY)?
         .ok_or_else(|| AiError::new(ErrorKind::Provider, "Gemini reply is too large"))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| AiError::new(ErrorKind::Provider, "Gemini returned invalid JSON"))
+    craft_ai_http::json::parse(&bytes, MAX_REPLY_PARSED).map_err(|e| match e {
+        ReplyError::TooLarge => AiError::new(ErrorKind::Provider, "Gemini reply is too large"),
+        ReplyError::NotJson => AiError::new(ErrorKind::Provider, "Gemini returned invalid JSON"),
+    })
+}
+
+/// True while the job is known and not yet ended (a cancel ends it).
+fn still_wanted(jobs: &Jobs, job: &JobId) -> bool {
+    lock(jobs).is_ok_and(|jobs| jobs.get(job).is_some_and(|s| !s.state.is_terminal()))
 }
 
 /// One fill, start to finish: the picture, or why there is none.
@@ -275,15 +318,19 @@ fn run_fill(
             ErrorKind::Provider,
             "Gemini returned no image",
         )),
-        fill::Answer::Text(text) => Err(AiError::redacted(
-            ErrorKind::Provider,
-            &format!("Gemini returned no image: {}", fill::clip(&text, 300)),
-            &[key],
-        )),
+        fill::Answer::Text(text) => {
+            // Scrub before cutting, as in `status_error`.
+            let text = AiError::redacted(ErrorKind::Provider, &text, &[key]).message;
+            Err(AiError::new(
+                ErrorKind::Provider,
+                format!("Gemini returned no image: {}", fill::clip(&text, 300)),
+            ))
+        }
     }
 }
 
 impl Provider for GeminiProvider {
+    /// Checks the key with one free model listing, then offers this crate's own model list.
     fn models(&self) -> Result<Vec<ModelInfo>, AiError> {
         // Listing models is free and checks the key; one entry is enough to know it works.
         call(
@@ -296,6 +343,8 @@ impl Provider for GeminiProvider {
         Ok(Self::catalog())
     }
 
+    /// Checks the model, job and inputs, makes room in the registry (see `registry::admit`), and
+    /// starts the fill on its own thread. Refuses before anything is sent.
     fn submit(&self, model: &ModelId, request: &Request) -> Result<JobId, AiError> {
         if !fill::model_allowed(model.as_str()) {
             return Err(AiError::unsupported(format!(
@@ -316,7 +365,7 @@ impl Provider for GeminiProvider {
         if let Some(other) = request.inputs.iter().find(|i| {
             !matches!(
                 i.role,
-                InputRole::Source | InputRole::Mask | InputRole::Prompt
+                InputRole::Source | InputRole::Mask | InputRole::Prompt | InputRole::Reference
             )
         }) {
             return Err(AiError::unsupported(format!(
@@ -334,52 +383,46 @@ impl Provider for GeminiProvider {
         for input in &request.inputs {
             input.payload.check(&Limits::default())?;
         }
-        let body = serde_json::to_vec(&fill::body(model.as_str(), request)?)
-            .map_err(|_| AiError::new(ErrorKind::Internal, "could not encode Gemini request"))?;
-        let id = JobId::new(format!(
-            "gemini-{}",
-            self.sequence.fetch_add(1, Ordering::Relaxed)
-        ))
-        .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
+        // A body that cannot fit is refused from the input sizes alone. The place is taken before
+        // the body is built, so at most MAX_RUNNING bodies and their base64 copies are ever in
+        // memory at once; a refusal while building gives the place back when `permit` drops.
+        fill::preflight(request)?;
         let permit = Permit::acquire(&self.in_flight).ok_or_else(|| {
             AiError::new(
                 ErrorKind::RateLimited,
                 "too many Gemini fills are running; wait for one to finish",
             )
         })?;
+        let body = fill::encoded_body(model.as_str(), request)?;
+        let id = JobId::new(format!(
+            "gemini-{}",
+            self.sequence.fetch_add(1, Ordering::Relaxed)
+        ))
+        .map_err(|_| AiError::new(ErrorKind::Internal, "cannot make Gemini job ID"))?;
         {
             let mut jobs = lock(&self.jobs)?;
-            if jobs.len() >= MAX_TRACKED {
-                // Forget finished jobs whose results were already handed out.
-                jobs.retain(|_, s| !s.terminal_delivered);
-                if jobs.len() >= MAX_TRACKED {
-                    return Err(AiError::new(
-                        ErrorKind::RateLimited,
-                        "too many Gemini results are waiting; check a finished fill first",
-                    ));
-                }
-            }
-            jobs.insert(
-                id.clone(),
-                Slot {
-                    state: JobState::Running { percent: None },
-                    events: Vec::new(),
-                    terminal_delivered: false,
-                },
-            );
+            registry::admit(&mut jobs, Instant::now())?;
+            jobs.insert(id.clone(), Slot::running());
         }
-        let (agent, key, jobs, job) = (
+        let (agent, key, jobs, job, retry) = (
             self.agent.clone(),
             self.key.clone(),
             Arc::clone(&self.jobs),
             id.clone(),
+            self.send_retry,
         );
         let url = format!("{}/interactions", self.base);
         let spawned = std::thread::Builder::new()
             .name("craft-ai-gemini".into())
             .spawn(move || {
                 let _permit = permit;
-                let result = run_fill(&agent, &url, &key, &body);
+                // A 429 is Google refusing the send, so sending again cannot bill twice. Stop
+                // trying once the job is cancelled.
+                let result = retry.run(
+                    |e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),
+                    || run_fill(&agent, &url, &key, &body),
+                    std::thread::sleep,
+                );
                 let Ok(mut jobs) = lock(&jobs) else { return };
                 // A cancelled (or forgotten) job keeps its state; the answer is dropped.
                 let Some(slot) = jobs.get_mut(&job).filter(|s| !s.state.is_terminal()) else {
@@ -387,13 +430,13 @@ impl Provider for GeminiProvider {
                 };
                 match result {
                     Ok(payload) => {
-                        slot.state = JobState::Succeeded;
                         slot.events.push(Event::Output(Output {
                             payload,
                             label: None,
                         }));
+                        slot.finish(JobState::Succeeded, Instant::now());
                     }
-                    Err(error) => slot.state = JobState::Failed { error },
+                    Err(error) => slot.finish(JobState::Failed { error }, Instant::now()),
                 }
             });
         if spawned.is_err() {
@@ -406,6 +449,8 @@ impl Provider for GeminiProvider {
         Ok(id)
     }
 
+    /// Hands out the job's state and any events not yet collected, and marks a terminal state as
+    /// delivered.
     fn poll(&self, id: &JobId) -> Result<JobSnapshot, AiError> {
         let mut jobs = lock(&self.jobs)?;
         let slot = jobs
@@ -417,17 +462,23 @@ impl Provider for GeminiProvider {
         Ok(snapshot)
     }
 
+    /// Stops waiting for the answer and records when the job ended, so its age limit applies. A
+    /// request already sent may still be billed.
     fn cancel(&self, id: &JobId) -> Result<(), AiError> {
         let mut jobs = lock(&self.jobs)?;
         let slot = jobs
             .get_mut(id)
             .ok_or_else(|| AiError::invalid("unknown Gemini job"))?;
         if !slot.state.is_terminal() {
-            slot.state = JobState::Cancelled;
+            slot.finish(JobState::Cancelled, Instant::now());
         }
         Ok(())
     }
 }
 
 #[cfg(test)]
+mod registry_limits_tests;
+#[cfg(test)]
 mod registry_tests;
+#[cfg(test)]
+mod submit_order_tests;

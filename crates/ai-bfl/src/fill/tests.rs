@@ -96,6 +96,7 @@ fn a_transparent_mask_paints_where_it_is_clear() {
     assert_eq!(decode(&bfl_mask(&opaque).unwrap().0).1, vec![255, 0]);
 }
 
+/// Masks that are not PNG, mark nothing, or are too large are refused with a readable reason.
 #[test]
 fn bad_masks_are_refused() {
     let empty = png_of(ColorType::Grayscale, 2, 2, |_, _| vec![0]);
@@ -114,19 +115,24 @@ fn bad_masks_are_refused() {
     assert!(bfl_mask(&huge).unwrap_err().message.contains("8192"));
 }
 
+/// Prompt, pictures, PNG output and every option reach the body, using non-default values.
 #[test]
 fn body_has_prompt_pictures_png_output_and_checked_options() {
     let r = request(source(4, 2), left_half())
         .with_param("steps", json!(30))
         .with_param("guidance", json!(42.5))
         .with_param("seed", json!(7))
-        .with_param("safety_tolerance", json!(2))
-        .with_param("prompt_upsampling", json!(false));
+        .with_param("safety_tolerance", json!(4))
+        .with_param("prompt_upsampling", json!(true));
     let v = body(&r).unwrap();
     assert_eq!(v["prompt"], "a red door");
     assert_eq!(v["output_format"], "png");
     assert_eq!(v["steps"], 30);
     assert_eq!(v["seed"], 7);
+    // Values other than BFL's defaults, so a dropped option cannot pass as the default.
+    assert_eq!(v["guidance"], json!(42.5));
+    assert_eq!(v["safety_tolerance"], 4);
+    assert_eq!(v["prompt_upsampling"], true);
     assert_eq!(
         base64_decode(v["image"].as_str().unwrap()).unwrap(),
         source(4, 2)
@@ -137,6 +143,7 @@ fn body_has_prompt_pictures_png_output_and_checked_options() {
     assert_eq!(body(&jpeg).unwrap()["output_format"], "jpeg");
 }
 
+/// Requests with a missing or wrong input, or a bad option, fail while the body is built.
 #[test]
 fn bad_requests_are_refused_before_sending() {
     let cases = [
@@ -181,11 +188,22 @@ fn bad_requests_are_refused_before_sending() {
     assert_eq!(body(&handle).unwrap_err().kind, ErrorKind::Unsupported);
 }
 
+/// A JPEG source whose header matches the mask is sent unchanged; an unreadable one is refused.
 #[test]
 fn a_jpeg_source_is_sent_as_is() {
-    let jpeg = vec![0xff, 0xd8, 0xff, 0xe0, 1, 2, 3];
+    // A JPEG header stating 4 × 2, the mask's size: SOI, then a baseline frame header.
+    let mut jpeg = vec![
+        0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x04,
+    ];
+    jpeg.extend_from_slice(&[0x03; 12]);
     let v = body(&request(jpeg.clone(), left_half())).unwrap();
     assert_eq!(base64_decode(v["image"].as_str().unwrap()).unwrap(), jpeg);
+    // A JPEG whose size cannot be read is refused rather than sent unchecked.
+    let unreadable = vec![0xff, 0xd8, 0xff, 0xe0, 1, 2, 3];
+    assert_eq!(
+        body(&request(unreadable, left_half())).unwrap_err().kind,
+        ErrorKind::InvalidRequest
+    );
 }
 
 #[test]
