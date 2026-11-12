@@ -4,24 +4,9 @@ use super::*;
 use crate::fsutil;
 use std::fs;
 
-/// `path`'s whole security descriptor as SDDL, which is locale-neutral, read with PowerShell.
+/// `path`'s owner and access list as SDDL, which is locale-neutral, read in-process.
 fn sddl(path: &Path) -> String {
-    let out = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-Acl -LiteralPath $env:CRAFT_ACL_PATH).Sddl",
-        ])
-        .env("CRAFT_ACL_PATH", path)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "Get-Acl failed for {}",
-        path.display()
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    super::win_acl::sddl_of(path).unwrap()
 }
 
 /// The DACL part of `path`'s security descriptor, such as `D:P(A;;FA;;;S-1-5-21-...)(A;;FA;;;SY)`.
@@ -37,9 +22,20 @@ fn me() -> String {
     super::win_acl::user_sid().unwrap()
 }
 
+/// How SDDL writes [`me`]. The machine's built-in Administrator account (RID 500), which CI
+/// runners use, is written with the alias `LA` instead of its full SID.
+fn me_in_sddl() -> String {
+    let sid = me();
+    if sid.starts_with("S-1-5-21-") && sid.ends_with("-500") {
+        "LA".to_owned()
+    } else {
+        sid
+    }
+}
+
 /// The two names a private object grants, sorted like [`trustees`].
 fn expected() -> Vec<String> {
-    let mut t = vec![me(), "SY".to_owned()];
+    let mut t = vec![me_in_sddl(), "SY".to_owned()];
     t.sort();
     t
 }
@@ -48,7 +44,12 @@ fn expected() -> Vec<String> {
 fn owner(path: &Path) -> String {
     let sddl = sddl(path);
     let start = sddl.find("O:").map_or(0, |i| i + 2);
-    let end = sddl[start..].find("G:").map_or(sddl.len(), |i| start + i);
+    // The owner ends where the group or the access list starts.
+    let end = ["G:", "D:"]
+        .iter()
+        .filter_map(|tag| sddl[start..].find(tag))
+        .min()
+        .map_or(sddl.len(), |i| start + i);
     sddl[start..end].to_owned()
 }
 
@@ -89,7 +90,7 @@ fn assert_owner_only(path: &Path) {
         path.display()
     );
     assert_eq!(trustees(&d), expected(), "{}: {d}", path.display());
-    assert_eq!(owner(path), me(), "{}", path.display());
+    assert_eq!(owner(path), me_in_sddl(), "{}", path.display());
     assert!(
         aces(&d).iter().all(|(flags, _)| !flags.contains("ID")),
         "{}: {d}",
@@ -141,7 +142,7 @@ fn new_folders_are_owner_only_and_pass_it_on() {
         let list = dacl(d);
         assert!(list.starts_with("D:P"), "{}: {list}", d.display());
         assert_eq!(trustees(&list), expected(), "{}: {list}", d.display());
-        assert_eq!(owner(d), me(), "{}", d.display());
+        assert_eq!(owner(d), me_in_sddl(), "{}", d.display());
     }
     // A file made any other way inside (history, a backup copy, a lock) inherits only those two.
     let log = inner.join("jobs.jsonl");
