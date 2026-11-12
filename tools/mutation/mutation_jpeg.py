@@ -2,7 +2,9 @@
 
 The counter lives in `craft-ai-core` (`jpeg.rs`); the rten and candle engines and the returned-
 picture check in `craft-ai-media` each call it first. Each case breaks the counter or drops one
-caller's check, and the test that builds a file one fragment over the cap must notice.
+caller's check, and the test that builds a file one fragment over the cap must notice. The
+decoder tests also put a stray byte before the fragments, which the decoder skips; the old
+header walk stopped there and under-counted.
 """
 
 CORE = 'crates/ai-core/src/jpeg.rs'
@@ -20,17 +22,13 @@ JX = [
      'extended_xmp_fragments(data) >= MAX_XMP_FRAGMENTS',
      'craft-ai-core', 'lib', 'the_cap_is_inclusive'),
     ('jpeg-fragments-not-counted', CORE,
-     "if marker == 0xE1 && body.is_some_and(|b| b.starts_with(EXTENDED_XMP_PREFIX)) {",
-     "if marker == 0xE2 && body.is_some_and(|b| b.starts_with(EXTENDED_XMP_PREFIX)) {",
+     '.filter(|w| *w == EXTENDED_XMP_PREFIX)',
+     '.filter(|w| w.starts_with(b"http://ns.adobe.com/xap/"))',
      'craft-ai-core', 'lib', 'counts_each_fragment'),
-    ('jpeg-any-app1-counted', CORE,
-     "if marker == 0xE1 && body.is_some_and(|b| b.starts_with(EXTENDED_XMP_PREFIX)) {",
-     "if marker == 0xE1 {",
-     'craft-ai-core', 'lib', 'other_app1_segments'),
-    ('jpeg-scan-data-counted', CORE,
-     'Some(0xDA) | None => break,',
-     'None => break,',
-     'craft-ai-core', 'lib', 'counts_each_fragment'),
+    ('jpeg-count-stops-at-a-stray-byte', CORE,
+     '.filter(|w| *w == EXTENDED_XMP_PREFIX)',
+     '.take_while(|w| w.first() != Some(&0x42))\n        .filter(|w| *w == EXTENDED_XMP_PREFIX)',
+     'craft-ai-core', 'lib', 'after_stray_bytes'),
     ('rten-cap-not-checked', RTEN,
      'if too_many_xmp_fragments(data) {',
      'if false {',

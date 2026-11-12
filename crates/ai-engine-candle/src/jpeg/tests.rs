@@ -149,7 +149,24 @@ fn a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding() {
     };
     let fine = with_fragments(MAX_XMP_FRAGMENTS as u32);
     assert_eq!(decode_jpeg(&fine).unwrap().width, 16);
+    assert_eq!(decode_jpeg(&with_stray_byte(fine)).unwrap().width, 16);
     let hostile = with_fragments(MAX_XMP_FRAGMENTS as u32 + 1);
     let e = decode_jpeg(&hostile).err().unwrap();
     assert!(e.message.contains("could not be read"), "{}", e.message);
+    let e = decode_jpeg(&with_stray_byte(hostile)).err().unwrap();
+    assert!(e.message.contains("could not be read"), "{}", e.message);
+}
+
+/// The same file with one stray byte before its second Extended XMP fragment. The decoder skips
+/// it and keeps reading fragments, so a guard must count past it.
+fn with_stray_byte(mut jpeg: Vec<u8>) -> Vec<u8> {
+    let marker = |from: usize, jpeg: &[u8]| {
+        from + jpeg[from..]
+            .windows(2)
+            .position(|w| w == [0xFF, 0xE1])
+            .unwrap()
+    };
+    let second = marker(marker(0, &jpeg) + 2, &jpeg);
+    jpeg.insert(second, 0x42);
+    jpeg
 }
