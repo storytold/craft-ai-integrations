@@ -28,15 +28,30 @@ pub(super) fn validate(
 }
 
 /// Whether two paths already identify one file, including symbolic links and hardlinks. Equal
-/// absolute names also collide before the output exists. Both handles stay open during comparison
+/// names also collide before the output exists, once each parent folder is resolved. Both handles stay open during comparison
 /// so an existing file's identity stays valid; a failure to read that identity is never "different".
 fn same_file(a: &Path, b: &Path) -> std::io::Result<bool> {
-    if std::path::absolute(a)? == std::path::absolute(b)? {
+    if resolved_name(a)? == resolved_name(b)? {
         return Ok(true);
     }
     let a = existing_handle(a)?;
     let b = existing_handle(b)?;
     Ok(matches!((a, b), (Some(a), Some(b)) if a == b))
+}
+
+/// `path` as an absolute name with its parent folder resolved, so a linked folder or `..` in the
+/// parent gives the same name as the direct path. A parent that does not exist yet is left as
+/// written: nothing can be linked through it.
+fn resolved_name(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(name)) => match parent.canonicalize() {
+            Ok(parent) => Ok(parent.join(name)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
+            Err(error) => Err(error),
+        },
+        _ => Ok(absolute),
+    }
 }
 
 /// A missing output may be created later. Every other failure to open an existing file or read

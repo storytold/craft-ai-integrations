@@ -28,6 +28,8 @@
 
 #[path = "live_openai/output_paths.rs"]
 mod output_paths;
+#[path = "live_openai/record_file.rs"]
+mod record_file;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -231,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = &record_to {
         let line = RunRecord::new(&plan, &done, started, clock.elapsed(), &[&say.key])
             .to_json_line(&[&say.key])?;
-        append_line(path, &line)?;
+        record_file::append_line(path, &line)?;
         say.line(format!("run recorded in {}", path.display()));
     }
     say.line(format!("job ended: {:?}", short(&done.state)));
@@ -278,16 +280,6 @@ fn take_flag(
     let value = args.remove(at + 1);
     args.remove(at);
     Ok(Some(value))
-}
-
-/// Appends one line, so several runs collect in one file.
-fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    writeln!(file, "{line}")
 }
 
 fn short(state: &JobState) -> String {

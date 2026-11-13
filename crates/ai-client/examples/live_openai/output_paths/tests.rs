@@ -126,3 +126,15 @@ fn an_unreadable_output_identity_is_refused() {
     assert!(validate(&path, None, Some(&output)).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
+
+/// A missing record and image named through different parent paths (`sub/..` here; a linked
+/// folder behaves the same) are one file once the parent folder is resolved.
+#[test]
+fn outputs_named_through_different_parents_collide() {
+    let (dir, path, before) = store();
+    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    let record = dir.path().join("sub").join("..").join("out.bin");
+    let image = dir.path().join("out.bin");
+    assert!(validate(&path, Some(&record), Some(&image)).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
