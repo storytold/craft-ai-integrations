@@ -223,7 +223,11 @@ fn the_extra_paths_file_is_not_written_through_a_planted_link() {
     let outside = tempfile::tempdir().unwrap();
     let target = outside.path().join("written-through-the-link");
     let file = out.path().join("comfy_extra_paths.yaml");
-    let planted = out.path().join("comfy_extra_paths.yaml.tmp");
+    // The name `owner_only::write_atomic` writes first, as `ai-native`'s `fsutil` derives it.
+    let planted = out.path().join(format!(
+        ".comfy_extra_paths.yaml.tmp-{}",
+        std::process::id()
+    ));
     #[cfg(unix)]
     let linked = std::os::unix::fs::symlink(&target, &planted);
     #[cfg(windows)]

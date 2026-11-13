@@ -220,6 +220,25 @@ fn the_lock_folder_and_its_files_are_private_to_the_user() {
     assert_eq!(mode(&dir.join(lock_name(&server, 0))), 0o600);
 }
 
+/// A lock file left readable by others (an older version made them that way) lets another
+/// account hold the slot, so it is made private before it is used.
+#[cfg(unix)]
+#[test]
+fn an_existing_lock_file_others_can_open_is_made_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("sam3-locks");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let server = hover_server();
+    let lock = dir.join(lock_name(&server, 0));
+    std::fs::write(&lock, b"").unwrap();
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let held = prepared(&server, &dir);
+    assert_eq!(held.slot(), Some(0));
+    assert_eq!(mode(&lock), 0o600);
+}
+
 /// A folder others can write is where another account plants links or holds every slot.
 #[cfg(unix)]
 #[test]

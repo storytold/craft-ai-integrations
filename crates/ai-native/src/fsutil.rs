@@ -4,12 +4,18 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::owner_only;
 
 /// How long to wait for another process to finish writing before giving up.
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The temp name is per process, so two threads writing one destination at once would remove
+/// and rename each other's temp file. Atomic writes in this process take turns instead; the files
+/// are small settings and history files, so the wait is short.
+static WRITE_TURN: Mutex<()> = Mutex::new(());
 
 /// Reads a whole file, refusing anything larger than `max` bytes. `Ok(None)` if it is absent.
 pub(crate) fn read_capped(path: &Path, max: usize) -> io::Result<Option<Vec<u8>>> {
@@ -62,6 +68,10 @@ fn atomic_write_with(
     path: &Path,
     fill: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> io::Result<()> {
+    // A thread that panicked mid-write leaves nothing this lock protects in a bad state.
+    let _turn = WRITE_TURN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_parent(path)?;
     let name = file_name_or_default(path);
     let tmp = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
@@ -158,6 +168,25 @@ mod tests {
             .filter(|n| n.contains(".tmp-"))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// Threads writing one destination at once all succeed, and the file holds one whole write.
+    #[test]
+    fn concurrent_writes_to_one_file_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f.json");
+        let writers: Vec<_> = (0..8u8)
+            .map(|i| {
+                let p = p.clone();
+                std::thread::spawn(move || (0..40).try_for_each(|_| atomic_write(&p, &[i; 4096])))
+            })
+            .collect();
+        for w in writers {
+            w.join().unwrap().unwrap();
+        }
+        let saved = fs::read(&p).unwrap();
+        assert_eq!(saved.len(), 4096);
+        assert!(saved.iter().all(|b| *b == saved[0]), "a mix of two writes");
     }
 
     #[test]

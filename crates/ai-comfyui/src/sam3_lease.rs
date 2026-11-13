@@ -13,8 +13,9 @@
 //! shared temp folder another account could create first, and is created private. On Unix a
 //! folder this user does not own, that others can write, or that is a link is refused; on Windows
 //! the same goes for a folder whose access list lets another account in. Lock files are never
-//! opened through a link. Different accounts sharing one ComfyUI therefore do not
-//! coordinate slots: that is the trust boundary, not a gap.
+//! opened through a link, and on Unix one left readable by others is made private. Different
+//! accounts sharing one ComfyUI therefore do not coordinate slots: that is the trust boundary, not
+//! a gap.
 use craft_ai_core::{AiError, ErrorKind};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
@@ -114,7 +115,9 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Opens (creating if needed) one slot's lock file, never through a link.
+/// Opens (creating if needed) one slot's lock file, never through a link. On Unix a file left with
+/// a wider mode (an older version, or made by hand) is made private, because anyone who can open
+/// it can hold its lock and so the slot; one owned by another account is refused.
 fn open_lock(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).write(true);
@@ -129,7 +132,23 @@ fn open_lock(path: &Path) -> io::Result<File> {
         // FILE_FLAG_OPEN_REPARSE_POINT: a link at the name is opened as itself, not followed.
         options.custom_flags(0x0020_0000);
     }
-    options.open(path)
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // The open handle, so this checks the file that was opened and follows no link.
+        let meta = file.metadata()?;
+        if meta.uid() != rustix::process::geteuid().as_raw() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "a SAM 3 lock file belongs to another account",
+            ));
+        }
+        if meta.mode() & 0o077 != 0 {
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(file)
 }
 
 fn failed(message: &str) -> AiError {
