@@ -12,7 +12,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from server import _host_allowed, handler_for, make_server, open_image
+from server import _host_allowed, _webp_size, handler_for, make_server, open_image
 
 try:
     from PIL import Image
@@ -187,6 +187,31 @@ class ImageTests(unittest.TestCase):
         forged = raw[:ihdr] + chunk + crc + raw[ihdr + 21:]
         with self.assertRaisesRegex(ValueError, "dimensions"):
             open_image(forged, "image/png")
+
+    def test_webp_size_is_read_from_every_header_kind(self):
+        kinds = {
+            "lossy (VP8)": (Image.new("RGB", (5, 7)), {}),
+            "lossless (VP8L)": (Image.new("RGB", (6, 9)), {"lossless": True}),
+            "extended (VP8X)": (Image.new("RGBA", (11, 4)), {"exif": b"Exif\0\0"}),
+        }
+        for name, (image, options) in kinds.items():
+            with self.subTest(kind=name):
+                out = io.BytesIO()
+                image.save(out, format="WEBP", **options)
+                self.assertEqual(_webp_size(out.getvalue()), image.size)
+                self.assertEqual(open_image(out.getvalue(), "image/webp").size, image.size)
+
+    def test_webp_pixel_limit_is_checked_before_pillow_opens_it(self):
+        # Pillow builds the WebP decoder, and its canvas, inside Image.open. A header that
+        # claims 10000 x 10000 pixels must be refused from the header alone.
+        vp8x = b"VP8X" + (10).to_bytes(4, "little") + b"\0" * 4 + (9999).to_bytes(3, "little") * 2
+        forged = b"RIFF" + (4 + len(vp8x)).to_bytes(4, "little") + b"WEBP" + vp8x
+        with self.assertRaisesRegex(ValueError, "dimensions"):
+            open_image(forged, "image/webp")
+        for raw in (b"RIFF\0\0\0\0WEBPVP8Z" + b"\0" * 20, b"RIFF\0\0\0\0WEBP", b"GIF89a" * 5):
+            with self.subTest(head=raw[:16]):
+                with self.assertRaises(ValueError):
+                    open_image(raw, "image/webp")
 
     def test_rejected_picture_is_a_bad_request_not_a_failure(self):
         server = make_server(0, handler_for(lambda raw, _prompt, mime: {

@@ -32,6 +32,40 @@ class ImageRejected(ValueError):
     """The bytes are not a usable picture of the declared type."""
 
 
+def _check_pixels(width, height):
+    if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
+        raise ImageRejected("image dimensions exceed local detection limit")
+
+
+def _webp_size(raw):
+    """Canvas width and height from a WebP file's first chunk, without decoding anything.
+
+    Layout from the WebP container specification: a RIFF header, then VP8 (lossy), VP8L
+    (lossless) or VP8X (extended, which gives the canvas of every frame). Anything else is
+    not a WebP picture this bridge accepts.
+    """
+    if len(raw) < 30 or raw[0:4] != b"RIFF" or raw[8:12] != b"WEBP":
+        raise ImageRejected("image does not match its declared type")
+    chunk = raw[12:16]
+    if chunk == b"VP8X":
+        width = 1 + int.from_bytes(raw[24:27], "little")
+        height = 1 + int.from_bytes(raw[27:30], "little")
+    elif chunk == b"VP8 ":
+        if raw[23:26] != b"\x9d\x01\x2a":
+            raise ImageRejected("image does not match its declared type")
+        width = int.from_bytes(raw[26:28], "little") & 0x3FFF
+        height = int.from_bytes(raw[28:30], "little") & 0x3FFF
+    elif chunk == b"VP8L":
+        if raw[20] != 0x2F:
+            raise ImageRejected("image does not match its declared type")
+        bits = int.from_bytes(raw[21:25], "little")
+        width = 1 + (bits & 0x3FFF)
+        height = 1 + ((bits >> 14) & 0x3FFF)
+    else:
+        raise ImageRejected("image does not match its declared type")
+    return width, height
+
+
 def open_image(raw, mime_type):
     """Decode `raw` as exactly the declared type, or raise ImageRejected."""
     from PIL import Image, UnidentifiedImageError
@@ -39,15 +73,17 @@ def open_image(raw, mime_type):
     expected = PIL_FORMATS.get(mime_type)
     if expected is None:
         raise ImageRejected("unsupported image type")
+    if expected == "WEBP":
+        # Pillow builds the WebP decoder and its canvas inside Image.open, so the size is read
+        # from the header first. PNG and JPEG open lazily and are checked below.
+        _check_pixels(*_webp_size(raw))
     try:
         image = Image.open(io.BytesIO(raw), formats=[expected])
     except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as err:
         raise ImageRejected("image does not match its declared type") from err
     if image.format != expected:
         raise ImageRejected("image does not match its declared type")
-    width, height = image.size
-    if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
-        raise ImageRejected("image dimensions exceed local detection limit")
+    _check_pixels(*image.size)
     try:
         image.load()
     except (OSError, SyntaxError, Image.DecompressionBombError) as err:
