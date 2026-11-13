@@ -19,7 +19,7 @@ mod weights;
 use std::path::Path;
 
 use burn::prelude::*;
-use burn::tensor::TensorData;
+use burn::tensor::{StreamId, TensorData};
 use craft_ai_core::{
     AiError, CapabilityId, CapabilitySpec, ErrorKind, InputRole, ModelId, ModelInfo, Output,
     Payload, Request,
@@ -81,7 +81,8 @@ impl Default for InspyrenetRunner {
     }
 }
 
-/// Runs `work` on a thread with [`STACK`] bytes of stack. A panic in it (Burn and the graphics
+/// Runs `work` on a thread with [`STACK`] bytes of stack, on the caller's GPU stream (`stream`):
+/// a new thread would otherwise get a stream of its own. A panic in it (Burn and the graphics
 /// layer panic on what they cannot handle) comes back as an error a person can read.
 fn on_big_stack<T: Send>(work: impl FnOnce() -> Result<T, AiError> + Send) -> Result<T, AiError> {
     let stopped = || {
@@ -90,11 +91,12 @@ fn on_big_stack<T: Send>(work: impl FnOnce() -> Result<T, AiError> + Send) -> Re
             "The background remover stopped unexpectedly. Try again, or choose another in Set up AI.",
         )
     };
+    let stream = StreamId::current();
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .name("craft-ai-inspyrenet".into())
             .stack_size(STACK)
-            .spawn_scoped(scope, work)
+            .spawn_scoped(scope, move || stream.executes(work))
             .map_err(|_| stopped())?;
         worker.join().unwrap_or_else(|_| Err(stopped()))
     })
@@ -122,8 +124,16 @@ impl ModelRunner for InspyrenetRunner {
         &CARDS
     }
 
-    /// Reads the checkpoint (`inspyrenet.safetensors`) or, in tests, a saved copy (`.bpk`).
+    /// Reads the checkpoint (`inspyrenet.safetensors`) or, in tests, a saved copy (`.bpk`). The
+    /// model keeps one GPU stream for all its runs (`stream`).
     fn load(&self, weights: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
+        crate::stream::load_on_own_stream(|| self.load_here(weights))
+    }
+}
+
+impl InspyrenetRunner {
+    /// Loads the network on the calling thread's stream.
+    fn load_here(&self, weights: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
         if !weights.is_file() {
             return Err(AiError::unsupported(
                 "The InSPyReNet checkpoint is missing. Open Set up AI to download it.",

@@ -150,6 +150,14 @@ On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
   catalogue's built-in route with the real file, then two app ids ask `AiClient` for Remove
   background only and each gets one grayscale mask at the picture's size (a 2848 × 4272 PNG). A
   file that is not the checkpoint is refused in words that point to Set up AI.
+- **Memory over many runs**: each loaded model keeps one GPU stream for all its runs
+  (`src/stream.rs`). CubeCL otherwise gives every new thread its own stream and never reuses one,
+  and the provider starts a thread for each job, so the memory of earlier runs was never reused.
+  The real-photo test runs each job on a new thread as the provider does
+  (`CRAFT_TEST_INSPYRENET_RUNS=12`, a 2848 × 4272 JPEG, RTX 3090 Ti, release): before, the card's
+  memory rose from 7.5 to 22.8 GB, its limit, and runs slowed from 6 s to 18 s; now it stays at
+  10.6 GB from the first run and every run takes 5.5 to 7.2 s. SAM 2.1 loads the same way; it was
+  not measured.
 - Not measured cleanly: the time per picture. During these runs another program held about 20 GB of
   the card's memory and the PhotoCraft port slowed down just as much (about 20 s a picture instead
   of about 2.5 s). No run on macOS or Linux, and no real app has mounted it yet.
@@ -159,7 +167,7 @@ On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
 python tools/burn/inspyrenet_reference.py <inspyrenet.safetensors> <inspyrenet-ref-384.safetensors>
 # Then the parity and weight tests, release
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_REFERENCE=<inspyrenet-ref-384.safetensors>   cargo test --release -p craft-ai-engine-burn -j 8 --lib inspyrenet -- --include-ignored --nocapture
-# One photo through the runner, the mask written out
+# One photo through the runner, the mask written out (CRAFT_TEST_INSPYRENET_RUNS=12 repeats it, each run on a new thread)
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo> CRAFT_TEST_INSPYRENET_OUT=<mask.png>   cargo test --release -p craft-ai-engine-burn -j 8 --lib removes_the_background -- --ignored --nocapture
 # Two apps through the shared client, from the catalogue's route
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo.png>   cargo test --release -p craft-ai-client --features burn --test burn_matte -- --ignored --nocapture
