@@ -10,6 +10,7 @@ rust-version = "1.90"
 repository = "https://github.com/storytold/craft-ai-integrations"
 
 [workspace.dependencies]
+craft-ai-agents = { path = "crates/ai-agents" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-ai-http = { path = "crates/ai-http" }
 serde = { version = "1", features = ["derive"] }
