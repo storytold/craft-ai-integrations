@@ -22,6 +22,7 @@ MG = [
     ('failed-write-not-reported', A + 'child.rs', '                    let _ = write_failed\n                        .send(Incoming::Closed(format!("writing to the app failed: {e}")));\n', '                    let _ = &write_failed;\n', P, 'lib', 'a_failed_write_ends_the_waiting_request'),
     ('stopped-app-keeps-cached-tools', A + 'mod.rs', 'if changed || conn.as_ref().is_some_and(|c| c.closed().is_some()) {', 'if changed {', P, 'lib', 'an_app_that_stopped_has_its_tools_read_again'),
     ('switch-not-asked', A + 'mod.rs', '        if (self.switch)() {', '        if true {', P, 'lib', 'the_launchers_switch_is_asked'),
+    ('broken-list-switches-on', L, 'matches!(load(dir), Ok(Some(_)))', 'dir.join(APPS_FILE).is_file()', Q, 'lib', 'a_list_that_cant_be_read_turns_agents_off'),
     ('any-app-allowed', L, 'apps.iter().any(|a| a.id == app_id)', '!apps.is_empty()', Q, 'lib', 'allowed_only_while_the_list_names_it'),
     ('queued-call-runs-after-switch-off', A + 'mod.rs', '        let run = |conn: &mut Option<Conn>| {\n            if !(self.switch)() {', '        let run = |conn: &mut Option<Conn>| {\n            if false {', P, 'lib', 'a_call_waiting_for_the_app_never_starts'),
     ('list-waits-on-a-call', A + 'mod.rs', 'let running = self.hold(s, false, |c| {', 'let running = self.hold(s, true, |c| {', P, 'lib', 'a_long_call_does_not_hold_up'),

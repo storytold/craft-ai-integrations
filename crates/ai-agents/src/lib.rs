@@ -20,6 +20,15 @@
 //! Small on purpose (`serde`, `serde_json`, `dirs`), so every app can depend on it. Nothing here
 //! panics on a bad file: a list that can't be read counts as the switch being off.
 
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -215,9 +224,10 @@ pub fn remove(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// Whether there is an app list in `dir`: the switch is on.
+/// Whether there is an app list in `dir` that can be read: the switch is on. A list that is
+/// missing, broken or of another version counts as off, as it does for [`allowed_in`].
 pub fn switched_on_in(dir: &Path) -> bool {
-    dir.join(APPS_FILE).is_file()
+    matches!(load(dir), Ok(Some(_)))
 }
 
 /// Whether the launcher's switch is on ([`switched_on_in`] the [`agents_dir`]).
@@ -300,6 +310,27 @@ mod tests {
         std::fs::create_dir(dir.path().join(APPS_FILE)).unwrap();
         assert!(
             !allowed_in(dir.path(), "photocraft"),
+            "a folder in its place counts as off"
+        );
+    }
+
+    #[test]
+    fn a_list_that_cant_be_read_turns_agents_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(APPS_FILE);
+        write(dir.path(), &[entry("photocraft")]).unwrap();
+        assert!(switched_on_in(dir.path()));
+        std::fs::write(&file, b"not json").unwrap();
+        assert!(!switched_on_in(dir.path()), "a broken list counts as off");
+        std::fs::write(&file, br#"{"version":999,"apps":[]}"#).unwrap();
+        assert!(
+            !switched_on_in(dir.path()),
+            "a list of another version counts as off"
+        );
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(
+            !switched_on_in(dir.path()),
             "a folder in its place counts as off"
         );
     }
