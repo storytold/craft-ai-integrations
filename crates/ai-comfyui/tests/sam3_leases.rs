@@ -280,19 +280,23 @@ fn a_lock_folder_that_is_a_link_is_refused() {
 #[cfg(unix)]
 #[test]
 fn a_link_at_a_lock_file_name_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("sam3-locks");
     std::fs::create_dir(&dir).unwrap();
     let outside = tempfile::tempdir().unwrap();
-    let target = outside.path().join("created-through-the-link");
     let server = hover_server();
-    std::os::unix::fs::symlink(&target, dir.join(lock_name(&server, 0))).unwrap();
+    // A link to a file that exists. Followed, it would be locked and made private.
+    let existing = outside.path().join("locked-through-the-link");
+    std::fs::write(&existing, b"").unwrap();
+    std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::os::unix::fs::symlink(&existing, dir.join(lock_name(&server, 0))).unwrap();
     let mut s = session(&server, &dir);
-    assert!(s.prepare(&png()).is_err());
     assert!(
-        !target.exists(),
-        "the lock was opened through the planted link"
+        s.prepare(&png()).is_err(),
+        "a slot was taken through the link"
     );
+    assert_eq!(mode(&existing), 0o644, "the linked file was changed");
 }
 
 /// A folder that already existed (one `CRAFT_AI_DIR` names) and lets every account in is where

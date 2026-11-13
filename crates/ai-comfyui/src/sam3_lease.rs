@@ -115,12 +115,29 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Opens (creating if needed) one slot's lock file, never through a link. On Unix a file left with
-/// a wider mode (an older version, or made by hand) is made private, because anyone who can open
-/// it can hold its lock and so the slot; one owned by another account is refused.
+/// Opens one slot's lock file, never through a link. A missing file is created new and private
+/// (mode 0600 on Unix, the folder's private access list on Windows). On Unix a file that already
+/// existed with a wider mode (an older version, or made by hand) is made private, because anyone
+/// who can open it can hold its lock and so the slot; one owned by another account is refused.
+/// Only an existing file is repaired, so a new file must be private from the moment it exists.
 fn open_lock(path: &Path) -> io::Result<File> {
+    match lock_options(false).open(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            match lock_options(true).open(path) {
+                // Another process created it in between: open theirs like any existing file.
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    check_existing(lock_options(false).open(path)?)
+                }
+                other => other,
+            }
+        }
+        other => check_existing(other?),
+    }
+}
+
+fn lock_options(create: bool) -> OpenOptions {
     let mut options = OpenOptions::new();
-    options.create(true).truncate(false).write(true);
+    options.write(true).create_new(create);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -132,7 +149,11 @@ fn open_lock(path: &Path) -> io::Result<File> {
         // FILE_FLAG_OPEN_REPARSE_POINT: a link at the name is opened as itself, not followed.
         options.custom_flags(0x0020_0000);
     }
-    let file = options.open(path)?;
+    options
+}
+
+/// On Unix, refuses a lock file owned by another account and makes one others can open private.
+fn check_existing(file: File) -> io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
