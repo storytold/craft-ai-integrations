@@ -248,7 +248,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Payload::Inline { media_type, data } => {
                     say.line(format!("output: {} bytes of {media_type}", data.len()));
                     if let Some(out) = args.get(1) {
-                        std::fs::write(out, data)?;
+                        output_paths::write_image(
+                            real.path(),
+                            record_to.as_deref(),
+                            Path::new(out),
+                            data,
+                        )?;
                         wrote.push(PathBuf::from(out));
                         say.line(format!("saved to {out}"));
                     }

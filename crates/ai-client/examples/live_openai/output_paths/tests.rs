@@ -97,10 +97,10 @@ fn the_same_new_record_and_image_path_is_refused() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
-/// A Windows file another operation holds without sharing cannot be proved safe to write.
+/// Windows can read identity metadata without data sharing, but a locked output cannot be written.
 #[cfg(windows)]
 #[test]
-fn an_unreadable_output_identity_is_refused() {
+fn a_locked_output_with_readable_identity_cannot_be_written() {
     use std::os::windows::fs::OpenOptionsExt;
     let (dir, path, before) = store();
     let output = dir.path().join("locked-output");
@@ -110,8 +110,12 @@ fn an_unreadable_output_identity_is_refused() {
         .share_mode(0)
         .open(&output)
         .unwrap();
-    assert!(validate(&path, Some(&output), None).is_err());
-    assert!(validate(&path, None, Some(&output)).is_err());
+    // same-file requests metadata access only, so this is not an identity-read error.
+    assert!(same_file::Handle::from_path(&output).is_ok());
+    assert!(validate(&path, Some(&output), None).is_ok());
+    assert!(super::write_image(&path, None, &output, b"replacement").is_err());
+    drop(_held);
+    assert_eq!(std::fs::read(&output).unwrap(), b"other operation");
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
@@ -136,5 +140,36 @@ fn outputs_named_through_different_parents_collide() {
     let record = dir.path().join("sub").join("..").join("out.bin");
     let image = dir.path().join("out.bin");
     assert!(validate(&path, Some(&record), Some(&image)).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// Creating the record can reveal an alias that was not an existing file during preflight.
+/// Rechecking at the image write preserves the record (including case-only aliases on Windows).
+#[test]
+fn an_image_write_rechecks_a_new_record_alias() {
+    let (dir, path, before) = store();
+    let record = dir.path().join("runs.jsonl");
+    let image = dir.path().join("RUNS.JSONL");
+    validate(&path, Some(&record), Some(&image)).unwrap();
+    std::fs::write(&record, b"record evidence\n").unwrap();
+    // Case-sensitive volumes need a hardlink to exercise the same newly revealed identity.
+    if !image.exists() {
+        std::fs::hard_link(&record, &image).unwrap();
+    }
+    assert!(super::write_image(&path, Some(&record), &image, b"image bytes").is_err());
+    assert_eq!(std::fs::read(&record).unwrap(), b"record evidence\n");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// Rechecking must still allow independent image output and preserve the record and store.
+#[test]
+fn an_image_write_keeps_distinct_record_and_store() {
+    let (dir, path, before) = store();
+    let record = dir.path().join("runs.jsonl");
+    let image = dir.path().join("picture.png");
+    std::fs::write(&record, b"record evidence\n").unwrap();
+    super::write_image(&path, Some(&record), &image, b"image bytes").unwrap();
+    assert_eq!(std::fs::read(&image).unwrap(), b"image bytes");
+    assert_eq!(std::fs::read(&record).unwrap(), b"record evidence\n");
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }

@@ -27,6 +27,19 @@ pub(super) fn validate(
     Ok(())
 }
 
+/// Writes an image after the record may have been created.
+pub(super) fn write_image(
+    store: &Path,
+    record: Option<&Path>,
+    image: &Path,
+    bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Creating the record can reveal a case-only or linked alias absent at preflight.
+    validate(store, record, Some(image))?;
+    std::fs::write(image, bytes)?;
+    Ok(())
+}
+
 /// Whether two paths already identify one file, including symbolic links and hardlinks. Equal
 /// names also collide before the output exists, once each parent folder is resolved. Both handles stay open during comparison
 /// so an existing file's identity stays valid; a failure to read that identity is never "different".
