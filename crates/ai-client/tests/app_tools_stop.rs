@@ -322,3 +322,16 @@ fn a_zero_wait_starts_nothing() -> TestResult {
     assert_eq!(w.cancels.load(Ordering::SeqCst), 0, "a job was started");
     Ok(())
 }
+
+/// `Duration::MAX`, the usual way to say "no limit", waits for the job instead of panicking after
+/// it was started, and leaves nothing in the list a Stop reaches.
+#[test]
+fn a_wait_with_no_limit_runs_the_job_to_the_end() -> TestResult {
+    let w = world(Mode::Text, true)?;
+    let canceller = w.tools.canceller();
+    let (plan, ledger) = planned(&w.tools)?;
+    let outputs = w.tools.run_for(&plan, &ledger, Duration::MAX)?;
+    assert_eq!(outputs[0].payload, Payload::text("Hello, world"));
+    assert_eq!(canceller.waiting(), 0, "a finished job is still listed");
+    Ok(())
+}

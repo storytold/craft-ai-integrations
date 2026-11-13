@@ -110,6 +110,18 @@ fn stop(job: &Job) -> bool {
     }
 }
 
+/// One job's place in the running list, given up when dropped.
+struct Listed<'a> {
+    running: &'a Running,
+    number: u64,
+}
+
+impl Drop for Listed<'_> {
+    fn drop(&mut self) {
+        lock(self.running).retain(|(n, _)| *n != self.number);
+    }
+}
+
 /// The lock on the running jobs, with a poisoned lock recovered.
 fn lock(running: &Running) -> MutexGuard<'_, Vec<(u64, Job)>> {
     running.lock().unwrap_or_else(PoisonError::into_inner)
@@ -261,8 +273,15 @@ impl AppTools {
             Locality::Remote => REMOTE_STEP,
             Locality::Local => STEP,
         };
-        let done = job.wait(step, limit);
-        lock(&self.running).retain(|(n, _)| *n != number);
+        let done = {
+            // Removes this job from the list even if the wait unwinds, so the app's Stop
+            // never stays on for a job nobody is waiting for.
+            let _listed = Listed {
+                running: &self.running,
+                number,
+            };
+            job.wait(step, limit)
+        };
         // `Job::wait` asks the job to stop at a timeout, but not after a poll that cannot pass, and
         // it does not say whether the stop worked. Ask again and report a job that will not stop.
         let done = done.map_err(|e| {

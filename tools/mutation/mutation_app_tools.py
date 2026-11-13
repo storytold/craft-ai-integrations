@@ -23,8 +23,8 @@ AT = [
     ('failed-job-reported-as-success', A, 'JobState::Failed { error } => Err(error.message),', 'JobState::Failed { error } => {\n                let _ = error;\n                Ok(Vec::new())\n            }', CL, T, 'a_failed_job'),
     ('running-job-not-recorded', A, 'lock(&self.running).push((number, job.clone()));', 'let _ = number;', CL, T, 'cancel_reaches_the_running_job'),
     ('cancel-reaches-only-the-first-job', A, 'for job in jobs {', 'for job in jobs.into_iter().take(1) {', CL, T, 'one_cancel_reaches'),
-    ('finished-job-forgets-every-job', A, 'lock(&self.running).retain(|(n, _)| *n != number);', 'lock(&self.running).clear();', CL, T, 'a_finished_job_removes'),
-    ('own-limit-ignored', A, 'let done = job.wait(step, limit);', 'let done = job.wait(step, LIMIT);', CL, T, 'outlasts_the_wait'),
+    ('finished-job-forgets-every-job', A, 'lock(self.running).retain(|(n, _)| *n != self.number);', 'lock(self.running).clear();', CL, T, 'a_finished_job_removes'),
+    ('own-limit-ignored', A, 'job.wait(step, limit)', 'job.wait(step, LIMIT)', CL, T, 'outlasts_the_wait'),
     ('text-reply-dropped', A, 'Event::TextDelta { text: part } => text.push_str(&part),', 'Event::TextDelta { .. } => {}', CL, 'app_tools_stop', 'a_text_reply'),
     ('refused-stop-reported-as-stopped', A, 'Err(_) => job.poll().is_ok_and(|snap| snap.state.is_terminal()),', 'Err(_) => true,', CL, 'app_tools_stop', 'will_not_stop'),
     ('refused-cancel-hidden', A, '            if job.cancel().is_err() {\n                refused = refused.saturating_add(1);\n            }', '            let _ = job.cancel();', CL, 'app_tools_stop', 'a_refused_cancel'),
@@ -32,6 +32,7 @@ AT = [
     ('cancel-reads-the-result-away', A, '            if job.cancel().is_err() {', '            if !stop(&job) {', CL, 'app_tools_stop', 'as_the_job_finishes'),
     ('zero-wait-starts-a-job', A, '        if limit.is_zero() {', '        if limit.is_zero() && false {', CL, 'app_tools_stop', 'zero_wait'),
     ('online-job-asked-every-step', A, 'Locality::Remote => REMOTE_STEP,', 'Locality::Remote => STEP,', CL, 'app_tools_stop', 'online_job'),
+    ('no-limit-overflows', 'crates/ai-client/src/client_wait.rs', 'now.checked_add(timeout.min(LONGEST_WAIT)).unwrap_or(now)', 'now + timeout', CL, 'app_tools_stop', 'no_limit'),
     ('unreadable-store-is-an-unknown-tool', A, '.map_err(|e| e.to_string())\n    }', '.or_else(|_| Ok(Vec::new()))\n    }', CL, 'app_tools_stop', 'unreadable_store'),
 ]
 

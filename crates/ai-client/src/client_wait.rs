@@ -60,6 +60,17 @@ impl AiClient {
     }
 }
 
+/// The longest wait a deadline is set for. `Duration::MAX` is the usual way to say "no limit",
+/// and adding it to an `Instant` overflows, so a longer `timeout` waits this long instead.
+const LONGEST_WAIT: Duration = Duration::from_secs(10 * 365 * 24 * 60 * 60);
+
+/// `now + timeout`, with a timeout too long to add treated as [`LONGEST_WAIT`]. If even that
+/// cannot be added the deadline is `now`, so the wait gives up and cancels the job rather than
+/// panicking with the job already started.
+pub(crate) fn deadline_after(now: Instant, timeout: Duration) -> Instant {
+    now.checked_add(timeout.min(LONGEST_WAIT)).unwrap_or(now)
+}
+
 /// True for the one sending failure that is safe to try again: the provider refused it.
 pub(crate) fn submit_worth_retrying(error: &AiError) -> bool {
     error.kind == ErrorKind::RateLimited
@@ -70,7 +81,7 @@ impl Job {
     /// retryable poll failure pauses and tries again (see the module notes). For scripts and
     /// tests; an app with its own job system polls instead.
     pub fn wait(&self, interval: Duration, timeout: Duration) -> Result<Finished, AiError> {
-        let deadline = Instant::now() + timeout;
+        let deadline = deadline_after(Instant::now(), timeout);
         let mut events = Vec::new();
         let mut failures = 0u8;
         let mut paused = Duration::ZERO;
