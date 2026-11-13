@@ -1993,6 +1993,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-agents"
+version = "0.1.0"
+dependencies = [
+ "dirs 7.0.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "craft-ai-artcraft"
 version = "0.1.0"
 dependencies = [
@@ -2226,6 +2236,17 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq 3.5.1",
+]
+
+[[package]]
+name = "craft-ai-mcp"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-agents",
+ "dirs 7.0.0",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
