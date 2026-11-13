@@ -348,13 +348,21 @@ fn merge(m: &PatchMerging, x: Tensor<4>) -> Tensor<4> {
 mod tests {
     use super::*;
 
+    /// The processor device, which every build has. `Device::flex()` needs burn's `flex`
+    /// backend, which only the optional `prepare` feature brings in (through `burn-onnx`). Burn
+    /// marks this backend deprecated; the engine keeps it on purpose (see `backend.rs`).
+    #[allow(deprecated)]
+    fn cpu() -> Device {
+        burn::backend::ndarray::NdArrayDevice::Cpu.into()
+    }
+
     fn max_diff<const D: usize>(a: Tensor<D>, b: Tensor<D>) -> f32 {
         (a - b).abs().max().into_scalar::<f32>()
     }
 
     #[test]
     fn windows_and_rolls_are_exact_inverses() {
-        let dev = Device::flex();
+        let dev = cpu();
         let x = Tensor::<4>::random([1, 36, 48, 8], burn::tensor::Distribution::Default, &dev);
         assert_eq!(
             max_diff(x.clone(), reverse(partition(x.clone(), 12), 12, 1, 36, 48)),
@@ -373,7 +381,7 @@ mod tests {
 
     #[test]
     fn merge_takes_neighbours_in_pytorch_order() {
-        let dev = Device::flex();
+        let dev = cpu();
         // A 2 × 2 grid of one channel holding 0, 1 (top row) and 2, 3 (bottom row).
         let x = Tensor::<4>::from_data(
             TensorData::new(vec![0.0f32, 1.0, 2.0, 3.0], [1, 2, 2, 1]),
@@ -393,7 +401,7 @@ mod tests {
     #[test]
     fn shift_mask_regions_match_the_reference_slices() {
         // 24 × 24 with window 12, shift 6: the last window row and column hold three regions.
-        let m = shift_mask(12, 24, 24, &Device::flex())
+        let m = shift_mask(12, 24, 24, &cpu())
             .into_data()
             .try_to_vec::<f32>()
             .unwrap();
