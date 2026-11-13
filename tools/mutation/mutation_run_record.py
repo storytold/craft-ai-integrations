@@ -16,7 +16,7 @@ RR = [
     ('image-can-name-store', P, '&& same_file(image, store)?', '&& false && same_file(image, store)?', CL, PT, 'an_image_cannot_replace'),
     ('hardlink-identity-ignored', P, 'Ok(matches!((a, b), (Some(a), Some(b)) if a == b))', 'Ok(false)', CL, PT, 'a_record_hardlink_to_the_shared_store'),
     ('record-image-alias-allowed', P, '&& same_file(record, image)?', '&& false && same_file(record, image)?', CL, PT, 'record_and_image_hardlinks'),
-    ('identity-error-treated-as-different', P, 'Err(error) => Err(error),', 'Err(_) => Ok(None),', CL, PT, 'an_unreadable_output_identity'),
+    ('identity-error-treated-as-different', P, 'Ok(None),\n        Err(error) => Err(error),', 'Ok(None),\n        Err(_) => Ok(None),', CL, PT, 'an_unreadable_output_identity'),
     ('key-check-off', R, '.any(|s| !s.is_empty() && (line.contains(s) || line.contains(&json_escaped(s))))', '.any(|_: &&str| false)', CL, T, 'refused_even_when_escaped'),
     ('empty-secret-refuses-everything', R, '!s.is_empty() && (line.contains(s)', '(line.contains(s)', CL, T, 'refused_even_when_escaped'),
     ('link-address-kept', R, 'media_type: h.media_type.as_str().to_owned(),\n                size_bytes', 'media_type: h.uri.clone(),\n                size_bytes', CL, T, 'never_a_link'),

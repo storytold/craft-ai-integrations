@@ -15,6 +15,8 @@ data, consent and jobs. It does not own any app's interface. Each app decides ho
 | Engines | `ai-engine`, `ai-engine-candle`, `ai-engine-rten`, `ai-engine-burn`, `ai-burn-setup` | Models run on this computer: the runner contract, registry and shared provider (`ai-engine`), and one crate per engine that registers its models (`ai-engine-candle`, `ai-engine-rten` and `ai-engine-burn`, behind `ai-client`'s `candle`, `rten` and `burn` features). `ai-burn-setup` prepares the saved weights Burn reads, once on this computer. A new model or engine never touches an app. |
 | Local runtime | `ai-comfy-env`, `ai-media` | Finding an existing ComfyUI, model sources and checksummed downloads, node packs, and durable media transfer. |
 | Widgets | `ai-egui` | Theme-neutral egui 0.37 widgets (status, consent, progress, connection panel, history, model picker) for apps that have no chrome of their own. See the consumer recipe below. |
+| External interfaces | `ai-agents` | The switch that lets AI agents use the Craft apps: the launcher's app list, read and written in one place for the launcher, the gateway and every app. |
+| External interfaces | `ai-mcp` | The MCP gateway to the Craft apps: one stdio MCP server that starts each installed app's `<app>-cli mcp` on demand and offers four tools to find and run their tools. No AI layer dependencies. |
 
 Crates keep the flat `crates/` folder on purpose. The exact planning checkouts reproduced no app
 dependency on `craft-ai-egui`; recheck any current path consumer before moving a crate.
