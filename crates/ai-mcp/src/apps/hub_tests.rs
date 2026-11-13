@@ -560,3 +560,97 @@ fn a_call_waiting_for_the_app_never_starts_once_agents_are_turned_off() {
         "the app's server is stopped after A"
     );
 }
+
+/// Turning agents off while something holds an app's connection for a moment (listing or
+/// searching) stops that app's server as soon as it lets go, not at the app's next request
+/// (storytold/craft-ai-integrations#197 review).
+#[test]
+fn an_app_held_for_a_moment_is_stopped_when_it_is_let_go() {
+    use std::sync::atomic::AtomicBool;
+    let on = Arc::new(AtomicBool::new(true));
+    let switch = on.clone();
+    let h = hub(Arc::new(AtomicUsize::new(0)))
+        .with_switch(Box::new(move || switch.load(Ordering::SeqCst)));
+    h.find_tools("blur", Some("photocraft"), 10).unwrap();
+    let slot = &h.slots[0];
+    let held = h.hold(slot, false, |conn| {
+        on.store(false, Ordering::SeqCst);
+        assert!(h.check_switch().is_err());
+        conn.as_ref().is_some_and(|c| c.closed().is_none())
+    });
+    assert_eq!(held, Some(true), "still running while it was held");
+    assert!(
+        lock(&slot.conn).is_none(),
+        "the server is stopped once the holder let go"
+    );
+    on.store(true, Ordering::SeqCst);
+    h.find_tools("blur", Some("photocraft"), 10).unwrap();
+    assert!(
+        lock(&slot.conn).is_some(),
+        "a stop left over from before doesn't stop the app started anew"
+    );
+    h.hold(slot, false, |_| ());
+    assert!(lock(&slot.conn).is_some());
+}
+
+/// A call that finds its app's server gone once it gets the app starts it anew and reads the
+/// new server's tool list before running: describing a tool during that call answers from it at
+/// once instead of waiting for the call (storytold/craft-ai-integrations#197 review).
+#[test]
+fn a_call_that_restarts_its_app_does_not_hold_up_describing() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (counted, starts) = (calls.clone(), Arc::new(AtomicUsize::new(0)));
+    let h = Arc::new(Hub::with_connector(
+        vec![entry("photocraft", "PhotoCraft")],
+        vec![],
+        Box::new(move |_| {
+            if starts.fetch_add(1, Ordering::SeqCst) == 0 {
+                // Lists its tools, then never answers a call: that call times out and the
+                // server is stopped.
+                Ok(fake(|m, req| {
+                    (m == "tools/list").then(|| {
+                        vec![json!({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [{"name": "layer.new"}]}}).to_string()]
+                    })
+                }))
+            } else {
+                Ok(slow_conn(
+                    entered_tx.clone(),
+                    release_rx.clone(),
+                    counted.clone(),
+                ))
+            }
+        }),
+    ));
+    let call = |h: &Arc<Hub>, secs| {
+        let h = h.clone();
+        std::thread::spawn(move || {
+            h.call_tool(
+                "photocraft",
+                "layer.new",
+                json!({}),
+                Duration::from_secs(secs),
+            )
+        })
+    };
+    let a = call(&h, 1);
+    // A holds the app; B finds the tool in the list read before and waits for the app.
+    std::thread::sleep(Duration::from_millis(300));
+    let b = call(&h, 20);
+    assert!(a.join().unwrap().is_err(), "A timed out");
+    // B got the app, found the server gone and started it anew.
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let start = std::time::Instant::now();
+    assert!(h.describe_tool("photocraft", "layer.new").is_ok());
+    assert_eq!(h.list_apps()["apps"][0]["tools"], 1);
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "waited {:?} on the running call",
+        start.elapsed()
+    );
+    release_tx.send(()).unwrap();
+    assert!(b.join().unwrap().is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}

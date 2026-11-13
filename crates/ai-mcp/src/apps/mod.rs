@@ -10,6 +10,7 @@ pub mod child;
 pub mod registry;
 pub mod search;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
@@ -41,11 +42,15 @@ type ToolList = Result<Arc<Vec<Value>>, String>;
 
 /// One app's connection and its tool list, under separate locks: a call holds the connection
 /// for as long as it runs (up to [`MAX_CALL_TIMEOUT`]), and listing the apps, searching and
-/// describing a tool must not wait for it. Lock order: `conn`, then `tools`.
+/// describing a tool must not wait for it. Lock order: `conn`, then `tools`. `conn` is only
+/// taken through [`Hub::hold`].
 #[derive(Default)]
 struct Slot {
     conn: Mutex<Option<Conn>>,
     tools: Mutex<Option<Arc<Vec<Value>>>>,
+    /// Agents were turned off while someone held `conn`: [`Hub::check_switch`] could not stop the
+    /// app's server then, so the holder does it when it lets go.
+    stop: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -101,18 +106,50 @@ impl Hub {
     }
 
     /// `Err` while the person has turned agents off. Every app server this gateway started is
-    /// stopped then, so nothing keeps running on the apps after the switch goes off; one busy with
-    /// a call is stopped when that call ends ([`Self::with_conn`]), without this answer waiting.
+    /// stopped then, so nothing keeps running on the apps after the switch goes off. One whose
+    /// connection is held (a call, or a moment's look from listing or searching) is stopped by
+    /// its holder when it lets go ([`Self::hold`]), without this answer waiting.
     pub fn check_switch(&self) -> Result<(), String> {
         if (self.switch)() {
             return Ok(());
         }
         for slot in &self.slots {
+            // Flag first, then try: a holder that lets go after this sees the flag.
+            slot.stop.store(true, Ordering::SeqCst);
             if let Some(mut conn) = try_lock(&slot.conn) {
                 slot.close(&mut conn);
+                slot.stop.store(false, Ordering::SeqCst);
             }
         }
         Err(SWITCHED_OFF.into())
+    }
+
+    /// Run `f` holding `slot`'s connection: waiting for it with `wait`, otherwise only if it is
+    /// free (`None` while someone else holds it). After letting it go, stop the app's server if
+    /// agents were turned off meanwhile and [`Self::check_switch`] left that to this holder.
+    fn hold<R>(
+        &self,
+        slot: &Slot,
+        wait: bool,
+        f: impl FnOnce(&mut Option<Conn>) -> R,
+    ) -> Option<R> {
+        let mut conn = if wait {
+            lock(&slot.conn)
+        } else {
+            try_lock(&slot.conn)?
+        };
+        let out = f(&mut conn);
+        drop(conn);
+        // If someone else holds it now, they see the flag when they let go.
+        if slot.stop.load(Ordering::SeqCst)
+            && let Some(mut conn) = try_lock(&slot.conn)
+        {
+            slot.stop.store(false, Ordering::SeqCst);
+            if !(self.switch)() {
+                slot.close(&mut conn);
+            }
+        }
+        Some(out)
     }
 
     /// A hub with its own way to connect to an app (tests).
@@ -143,36 +180,53 @@ impl Hub {
         })
     }
 
-    /// Run `f` on `app`'s connection, starting it (or replacing a dead one) first. The switch is
+    /// Run `f` on `app`'s connection and its tool list, starting it (or replacing a dead one) and
+    /// reading the list first when it isn't known, so the list is never missing while a caller
+    /// holds the app: listing, searching and describing never wait for a call. The switch is
     /// asked again once the connection is this caller's: a call that waited for the app while
     /// agents were turned off never starts. One that was running when they were turned off
     /// finishes, then the app's server is stopped.
     fn with_conn<R>(
         &self,
         i: usize,
-        f: impl FnOnce(&mut Conn, &Mutex<Option<Arc<Vec<Value>>>>) -> Result<R, String>,
+        f: impl FnOnce(&mut Conn, &Arc<Vec<Value>>) -> Result<R, String>,
     ) -> Result<R, String> {
         let (Some(app), Some(slot)) = (self.apps.get(i), self.slots.get(i)) else {
             return Err("no such app".into());
         };
-        let mut conn = lock(&slot.conn);
-        if !(self.switch)() {
-            slot.close(&mut conn);
-            return Err(SWITCHED_OFF.into());
-        }
-        if conn.as_ref().is_none_or(|c| c.closed().is_some()) {
-            // A new process may offer other tools than the one it replaces.
-            slot.close(&mut conn);
-            *conn = Some((self.connect)(app)?);
-        }
-        let Some(c) = conn.as_mut() else {
-            return Err(format!("{} is not connected", app.name));
+        let run = |conn: &mut Option<Conn>| {
+            if !(self.switch)() {
+                slot.close(conn);
+                return Err(SWITCHED_OFF.into());
+            }
+            if conn.as_mut().is_some_and(Conn::take_tools_changed) {
+                *lock(&slot.tools) = None;
+            }
+            if conn.as_ref().is_none_or(|c| c.closed().is_some()) {
+                // A new process may offer other tools than the one it replaces.
+                slot.close(conn);
+                *conn = Some((self.connect)(app)?);
+            }
+            let Some(c) = conn.as_mut() else {
+                return Err(format!("{} is not connected", app.name));
+            };
+            let known = lock(&slot.tools).clone();
+            let list = match known {
+                Some(list) => list,
+                None => {
+                    let list = Arc::new(c.list_tools()?);
+                    *lock(&slot.tools) = Some(Arc::clone(&list));
+                    list
+                }
+            };
+            let out = f(c, &list);
+            if !(self.switch)() {
+                slot.close(conn);
+            }
+            out
         };
-        let out = f(c, &slot.tools);
-        if !(self.switch)() {
-            slot.close(&mut conn);
-        }
-        out
+        self.hold(slot, true, run)
+            .unwrap_or_else(|| Err(format!("{} is not connected", app.name)))
     }
 
     /// `app`'s tools, read once and again after the app says they changed. While a call holds
@@ -182,22 +236,18 @@ impl Hub {
         let Some(slot) = self.slots.get(i) else {
             return Err("no such app".into());
         };
-        if let Some(mut conn) = try_lock(&slot.conn) {
+        self.hold(slot, false, |conn| {
             let changed = conn.as_mut().is_some_and(Conn::take_tools_changed);
             // An app that changed its tools, or that stopped, gets its list read again: the next
             // use starts it anew, and a restarted app may offer other tools.
             if changed || conn.as_ref().is_some_and(|c| c.closed().is_some()) {
                 *lock(&slot.tools) = None;
             }
-        }
+        });
         if let Some(t) = lock(&slot.tools).as_ref() {
             return Ok(Arc::clone(t));
         }
-        self.with_conn(i, |conn, cache| {
-            let list = Arc::new(conn.list_tools()?);
-            *lock(cache) = Some(Arc::clone(&list));
-            Ok(list)
-        })
+        self.with_conn(i, |_, list| Ok(Arc::clone(list)))
     }
 
     /// `craft_list_apps`.
@@ -211,8 +261,11 @@ impl Hub {
                 o.insert("app".into(), json!(a.id));
                 o.insert("name".into(), json!(a.name));
                 // A call holds the connection: the app runs, and is busy with it.
-                let started = match try_lock(&s.conn) {
-                    Some(c) => c.as_ref().is_some_and(|c| c.closed().is_none()),
+                let running = self.hold(s, false, |c| {
+                    c.as_ref().is_some_and(|c| c.closed().is_none())
+                });
+                let started = match running {
+                    Some(started) => started,
                     None => {
                         o.insert("busy".into(), json!(true));
                         true
@@ -325,16 +378,24 @@ impl Hub {
         timeout: Duration,
     ) -> Result<Value, String> {
         let i = self.index(app)?;
-        let tools = self.tools(i)?;
-        if !tools
-            .iter()
-            .any(|t| t.get("name").and_then(Value::as_str) == Some(tool))
-        {
-            return Err(format!(
-                "{app} has no tool `{tool}`; use {FIND_TOOLS} to look for one"
-            ));
-        }
-        self.with_conn(i, |conn, _| conn.call_tool(tool, arguments, timeout))
+        let offers = |tools: &[Value]| {
+            if tools
+                .iter()
+                .any(|t| t.get("name").and_then(Value::as_str) == Some(tool))
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{app} has no tool `{tool}`; use {FIND_TOOLS} to look for one"
+                ))
+            }
+        };
+        offers(&self.tools(i)?)?;
+        // Asked again: the app may have been restarted while this call waited for it.
+        self.with_conn(i, |conn, list| {
+            offers(list)?;
+            conn.call_tool(tool, arguments, timeout)
+        })
     }
 }
 
