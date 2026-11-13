@@ -1,0 +1,20 @@
+[package]
+name = "craft-ai-agents"
+description = "Whether a person lets AI agents use the Craft apps, and which apps they can reach: the ArtCraft Launcher's app list, read and written in one place."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+dirs = "7"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
