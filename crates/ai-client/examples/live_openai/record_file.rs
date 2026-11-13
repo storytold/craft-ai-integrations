@@ -21,7 +21,9 @@ pub(super) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
             file.write_all(b"\n")?;
         }
     }
-    writeln!(file, "{line}")
+    // One write for the line and its newline, so a record appended at the same time by another
+    // run cannot land between them.
+    file.write_all(format!("{line}\n").as_bytes())
 }
 
 #[cfg(test)]

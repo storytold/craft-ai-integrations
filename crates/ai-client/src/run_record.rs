@@ -4,10 +4,14 @@
 //! A record says a run happened without carrying what the person sent or received. Inputs appear as
 //! the consent screen shows them (role, kind, size). Outputs appear as kind, media type, size and a
 //! SHA-256 of the bytes; returned text as its length and hash. A link is never kept, because a
-//! hosted result link can carry a signed token. Error and notice text is kept, because the
-//! adapters word it for people, but it is cleaned when the record is built: the given secrets, the
-//! request's own text inputs, the text values of its parameters (each also in its JSON-escaped
-//! form) and anything shaped like a link are replaced.
+//! hosted result link can carry a signed token. Of error and notice text only the adapter's own
+//! lead is kept: everything after the first `": "` is where adapters quote what the service or
+//! model said (which can echo the prompt, cut short or re-encoded, or be the model's own reply in
+//! a failed run), so it is replaced by `[detail removed]` and, for an error, measured and hashed.
+//! The whole text is cleaned before it is cut: the given secrets, the request's own text inputs,
+//! the text values of its parameters, the text the run returned (each also in its JSON-escaped
+//! form), any stretch of 16 or more characters taken from one of those texts, and anything shaped
+//! like a link are replaced.
 //!
 //! Invariants: the error and notice text a record holds contains none of the secrets given to
 //! [`RunRecord::new`]. The other fields are copied from the plan and are not checked there, and the
@@ -26,7 +30,7 @@ use sha2::{Digest, Sha256};
 use crate::client::{Finished, Plan};
 
 /// Format version of a record line. Raise it when a field changes meaning.
-pub const RUN_RECORD_VERSION: u32 = 1;
+pub const RUN_RECORD_VERSION: u32 = 2;
 
 /// One finished run, ready to keep as evidence. Holds no key, no prompt, no result bytes, no link.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -73,11 +77,14 @@ pub enum RunOutcome {
     Unfinished,
 }
 
-/// The failure, as the adapter worded it.
+/// The failure, as the adapter worded it: its lead, cleaned (see the module notes).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RunError {
     pub kind: ErrorKind,
     pub message: String,
+    /// Length and hash of the cleaned detail that followed the lead, when there was one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Digested>,
 }
 
 /// Length and SHA-256 (lowercase hex) of some bytes.
@@ -179,13 +186,18 @@ impl RunRecord {
         let clean = |text: &str| scrub(text, secrets, &prompts, &results);
         let (outcome, error) = match &finished.state {
             JobState::Succeeded => (RunOutcome::Succeeded, None),
-            JobState::Failed { error } => (
-                RunOutcome::Failed,
-                Some(RunError {
-                    kind: error.kind,
-                    message: clean(&error.message),
-                }),
-            ),
+            JobState::Failed { error } => {
+                let cleaned = clean(&error.message);
+                let (message, detail) = lead_only(&cleaned);
+                (
+                    RunOutcome::Failed,
+                    Some(RunError {
+                        kind: error.kind,
+                        message,
+                        detail: detail.map(|d| Digested::of(d.as_bytes())),
+                    }),
+                )
+            }
             JobState::Cancelled => (RunOutcome::Cancelled, None),
             JobState::Queued | JobState::Running { .. } => (RunOutcome::Unfinished, None),
         };
@@ -194,7 +206,7 @@ impl RunRecord {
         for event in &finished.events {
             match event {
                 Event::Output(o) => outputs.push(RunOutput::of(&o.payload)),
-                Event::Notice { message } => notices.push(clean(message)),
+                Event::Notice { message } => notices.push(lead_only(&clean(message)).0),
                 Event::TextDelta { .. } | Event::ToolCall { .. } => {}
             }
         }
@@ -265,6 +277,29 @@ impl Removed {
     }
 }
 
+/// Where an adapter's own wording ends and what it quotes begins.
+const DETAIL_MARK: &str = ": ";
+
+/// The kept part of a cleaned message, `lead: [detail removed]` when it quoted something, and the
+/// detail itself so an error can measure it. Cut after cleaning, so a needle that holds `": "` is
+/// still found whole; the placeholders hold no `": "`, so the cut never lands inside one.
+fn lead_only(cleaned: &str) -> (String, Option<&str>) {
+    match cleaned.split_once(DETAIL_MARK) {
+        Some((lead, detail)) => (format!("{lead}{DETAIL_MARK}[detail removed]"), Some(detail)),
+        None => (cleaned.to_owned(), None),
+    }
+}
+
+/// Shortest stretch of a request or returned text that is removed wherever it appears on its own.
+/// Adapters cut long upstream messages short (at 300 or 360 characters), so a prompt echoed back
+/// often arrives cut part-way and never matches whole.
+///
+/// shortcut: a stretch is matched as written (and as JSON escapes it), so an echo re-encoded
+/// another way (Python's `é`, repr quoting) keeps pieces shorter than this between the
+/// re-encoded characters. The lead-only cut keeps those out of an adapter's detail; upgrade to a
+/// normalised comparison if an adapter is found putting re-encoded echoes in its lead.
+const MIN_ECHO_CHARS: usize = 16;
+
 /// `text` with each secret, each request text, each returned text and each link replaced by a
 /// placeholder. All of them are found in the original text and overlapping matches are removed together, so a key inside a
 /// prompt cannot break the prompt's match, and request text inside a link cannot split the link
@@ -287,6 +322,10 @@ fn scrub(text: &str, secrets: &[&str], prompts: &[&str], results: &[&str]) -> St
                 .chain(differs.then_some((escaped, kind)))
         })
         .collect();
+    // A stretch of a request or returned text found on its own: the echo of a text cut short.
+    for (needle, kind) in needles.iter().filter(|(_, k)| *k != Removed::Key) {
+        spans.extend(echo_spans(text, needle, *kind));
+    }
     for (needle, kind) in needles.iter().filter(|(n, _)| !n.is_empty()) {
         let (needle, kind) = (needle.as_str(), *kind);
         // Every occurrence, overlapping ones included (`match_indices` skips those): the next
@@ -319,6 +358,27 @@ fn scrub(text: &str, secrets: &[&str], prompts: &[&str], results: &[&str]) -> St
     }
     out.push_str(text.get(from..).unwrap_or_default());
     out
+}
+
+/// Each stretch of [`MIN_ECHO_CHARS`] characters of `text` that also appears in `needle`, as byte
+/// spans on character boundaries; overlapping stretches are merged by the caller.
+fn echo_spans(text: &str, needle: &str, kind: Removed) -> Vec<(usize, usize, Removed)> {
+    let bounds: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain([text.len()])
+        .collect();
+    if needle.len() < MIN_ECHO_CHARS {
+        return Vec::new();
+    }
+    bounds
+        .windows(MIN_ECHO_CHARS + 1)
+        .filter_map(|w| {
+            let (start, end) = (w[0], w[MIN_ECHO_CHARS]);
+            let stretch = text.get(start..end)?;
+            needle.contains(stretch).then_some((start, end, kind))
+        })
+        .collect()
 }
 
 /// Every text value inside `values`, however deeply nested in arrays and objects. Walked with a

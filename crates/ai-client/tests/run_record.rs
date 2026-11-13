@@ -178,7 +178,7 @@ fn a_local_run_through_the_real_adapter_is_recorded_without_its_words() {
     assert!(!line.contains(PROMPT), "{line}");
     assert!(!line.contains("pong"), "{line}");
     let back: Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(back["version"], 1);
+    assert_eq!(back["version"], 2);
     assert_eq!(back["outcome"], "succeeded");
     assert_eq!(back["locality"], "local");
 }
@@ -276,7 +276,7 @@ fn a_key_inside_the_request_text_takes_the_whole_text_with_it() {
     let plan = world.client.plan(&role(), request()).unwrap();
     let inner = "sentence";
     assert!(PROMPT.contains(inner));
-    let said = format!("could not use: {PROMPT}.");
+    let said = format!("could not use {PROMPT}.");
     let done = Finished {
         state: JobState::Failed {
             error: AiError::new(ErrorKind::Provider, said.clone()),
@@ -288,7 +288,7 @@ fn a_key_inside_the_request_text_takes_the_whole_text_with_it() {
     };
     let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[inner]);
-    let want = "could not use: [key removed].";
+    let want = "could not use [key removed].";
     assert_eq!(rec.error.unwrap().message, want);
     assert_eq!(rec.notices, vec![want.to_owned()]);
 }
@@ -302,7 +302,7 @@ fn request_text_repeated_with_overlap_is_removed_in_full() {
     let request =
         Request::new(role().capability).with_input(InputRole::Prompt, Payload::text(text));
     let plan = world.client.plan(&role(), request).unwrap();
-    let said = "saw: private private private.".to_owned();
+    let said = "saw private private private.".to_owned();
     let done = Finished {
         state: JobState::Failed {
             error: AiError::new(ErrorKind::Provider, said.clone()),
@@ -314,7 +314,7 @@ fn request_text_repeated_with_overlap_is_removed_in_full() {
     };
     let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY]);
-    let want = "saw: [request text removed].";
+    let want = "saw [request text removed].";
     assert_eq!(rec.error.unwrap().message, want);
     assert_eq!(rec.notices, vec![want.to_owned()]);
 }
@@ -468,7 +468,7 @@ fn a_link_holding_request_text_is_removed_whole() {
 fn returned_text_is_removed_from_messages() {
     let world = mock_world(Script::default());
     let plan = world.client.plan(&role(), request()).unwrap();
-    let said = "stopped after: a private reply. Streamed: part one, part two";
+    let said = "stopped after a private reply. Streamed part one, part two";
     let done = Finished {
         state: JobState::Failed {
             error: AiError::new(ErrorKind::Provider, said.to_owned()),
@@ -492,7 +492,7 @@ fn returned_text_is_removed_from_messages() {
     };
     let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY]);
-    let want = "stopped after: [result text removed]. Streamed: [result text removed]";
+    let want = "stopped after [result text removed]. Streamed [result text removed]";
     assert_eq!(rec.error.unwrap().message, want);
     assert_eq!(rec.notices, vec![want.to_owned()]);
 }
@@ -507,4 +507,48 @@ fn a_json_escaped_link_is_removed() {
     let want = "saved to [link removed] for you";
     assert_eq!(rec.error.unwrap().message, want);
     assert_eq!(rec.notices, vec![want.to_owned()]);
+}
+
+/// An upstream message that quotes a long prompt is cut short by the adapter, so the prompt never
+/// matches whole. Every stretch of it is still removed, here in a lead with no detail.
+#[test]
+fn a_prompt_echo_cut_short_is_removed() {
+    let prompt = "Paint a lighthouse on a cliff at dusk, with gulls over a calm green sea and one lit window";
+    let request =
+        Request::new(role().capability).with_input(InputRole::Prompt, Payload::text(prompt));
+    let cut: String = prompt.chars().take(40).collect();
+    let rec = failed_with(request, &format!("input_value='{cut}"));
+    let message = rec.error.unwrap().message;
+    assert!(!message.contains("lighthouse"), "{message}");
+    assert_eq!(message, "input_value='[request text removed]");
+}
+
+/// What a service or model said after the adapter's own words is never kept: a failed image run
+/// whose model replied in text (quoting the prompt or not) keeps only the adapter's lead, and the
+/// reply's length and hash.
+#[test]
+fn what_follows_the_adapters_words_is_measured_not_kept() {
+    let said = "Gemini returned no image: I can't make a picture of that harbour";
+    let rec = failed_with(request(), said);
+    let line = rec.to_json_line(&[KEY]).unwrap();
+    assert!(!line.contains("harbour"), "{line}");
+    let error = rec.error.unwrap();
+    assert_eq!(error.message, "Gemini returned no image: [detail removed]");
+    let detail = error.detail.unwrap();
+    let quoted = "I can't make a picture of that harbour";
+    assert_eq!(detail.bytes, quoted.len() as u64);
+    assert_eq!(detail.sha256, sha256_hex(quoted.as_bytes()));
+    assert_eq!(
+        rec.notices,
+        vec!["Gemini returned no image: [detail removed]".to_owned()]
+    );
+}
+
+/// A message without a detail has none recorded.
+#[test]
+fn a_message_without_a_detail_records_none() {
+    let rec = failed_with(request(), "Gemini answered 503");
+    let error = rec.error.unwrap();
+    assert_eq!(error.message, "Gemini answered 503");
+    assert!(error.detail.is_none());
 }
