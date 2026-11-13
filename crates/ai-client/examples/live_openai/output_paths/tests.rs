@@ -97,24 +97,30 @@ fn the_same_new_record_and_image_path_is_refused() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
-/// Windows can read identity metadata without data sharing, but a locked output cannot be written.
+/// A Windows file another operation holds without sharing is never overwritten. Whether its
+/// identity can still be read depends on the machine (a metadata-only open succeeds on some
+/// Windows installs and is refused on the CI runners), so both outcomes are checked: an
+/// unreadable identity is refused up front, and a readable one still fails at the write.
 #[cfg(windows)]
 #[test]
-fn a_locked_output_with_readable_identity_cannot_be_written() {
+fn a_locked_output_is_never_overwritten() {
     use std::os::windows::fs::OpenOptionsExt;
     let (dir, path, before) = store();
     let output = dir.path().join("locked-output");
     std::fs::write(&output, b"other operation").unwrap();
-    let _held = std::fs::OpenOptions::new()
+    let held = std::fs::OpenOptions::new()
         .read(true)
         .share_mode(0)
         .open(&output)
         .unwrap();
-    // same-file requests metadata access only, so this is not an identity-read error.
-    assert!(same_file::Handle::from_path(&output).is_ok());
-    assert!(validate(&path, Some(&output), None).is_ok());
+    if same_file::Handle::from_path(&output).is_err() {
+        assert!(validate(&path, Some(&output), None).is_err());
+        assert!(validate(&path, None, Some(&output)).is_err());
+    } else {
+        assert!(validate(&path, Some(&output), None).is_ok());
+    }
     assert!(super::write_image(&path, None, &output, b"replacement").is_err());
-    drop(_held);
+    drop(held);
     assert_eq!(std::fs::read(&output).unwrap(), b"other operation");
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
