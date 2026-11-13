@@ -41,6 +41,7 @@
     clippy::unreachable
 )]
 
+mod app_tools;
 mod assignments;
 mod client;
 mod declarative;
@@ -61,6 +62,7 @@ mod runner;
 mod setup_flow;
 mod tools;
 
+pub use app_tools::{AppTools, Canceller, ToolReport};
 pub use assignments::{
     Ability, Assigned, ChoiceScope, ToolChoiceState, UnavailableChoice, Withdraw, Withdrawn,
 };
