@@ -1,0 +1,6 @@
+# Python packages the SAM 3 bridge (server.py) imports itself.
+# SAM 3 and PyTorch are installed separately, following SAM 3's own instructions.
+#
+# Pillow decodes every picture a caller sends. 13.0.0 is the first release with no open
+# advisory in the OSV database (checked 11/11/2026); 12.x has several decoder fixes missing.
+pillow>=13.0.0
