@@ -7,8 +7,8 @@ loads.
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-M = 'crates/ai-engine/src/memory.rs'
-P = 'crates/ai-engine/src/provider.rs'
+M = 'crates/local/ai-engine/src/memory.rs'
+P = 'crates/local/ai-engine/src/provider.rs'
 E = 'craft-ai-engine'
 
 BUSY = (
@@ -59,9 +59,9 @@ MM = [
 # Group `cm`: the same, through the app's client (`ai-client/src/engines.rs`, `factory.rs`,
 # `client.rs`). Unloading one model needs its connection, a replaced engine's models are not
 # listed, and a free-memory reader applies whichever order the client and factory are built in.
-CE = 'crates/ai-client/src/engines.rs'
-CF = 'crates/ai-client/src/factory.rs'
-CC = 'crates/ai-client/src/client.rs'
+CE = 'crates/app/ai-client/src/engines.rs'
+CF = 'crates/app/ai-client/src/factory.rs'
+CC = 'crates/app/ai-client/src/client.rs'
 C = 'craft-ai-client'
 T = 'loaded_models'
 

@@ -53,7 +53,7 @@ local configuration folder (`%LOCALAPPDATA%\ArtCraft\mcp` on Windows, beside the
 command or a repeated id are left out, and `craft_list_apps` says why. Without the file the
 gateway offers no app: agents are turned off.
 
-The format is read and written in one place, the crate `craft-ai-agents` (`crates/ai-agents`):
+The format is read and written in one place, the crate `craft-ai-agents` (`crates/app/ai-agents`):
 the launcher writes the list with it, the gateway reads it with it, and each app asks it whether
 the person lets agents use that app (`craft_ai_agents::allowed("photocraft")`). Nobody else parses
 the file.

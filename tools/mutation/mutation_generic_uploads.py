@@ -8,8 +8,8 @@ Format: (name, file, old, new, package, test target, test filter).
 Not covered: the live test (`tests/generic_segment_live.rs`, ignored) is the only check of a real
 graph.
 """
-SR = 'crates/ai-comfyui/src/segment_route.rs'
-PV = 'crates/ai-comfyui/src/provider.rs'
+SR = 'crates/local/ai-comfyui/src/segment_route.rs'
+PV = 'crates/local/ai-comfyui/src/provider.rs'
 CC = 'craft-ai-comfyui'
 FIND = 'if let Some((_, name)) = self.uploads().iter().find(|(k, _)| *k == key) {'
 STALE = 'Err(e) if reused && e.kind == ErrorKind::InvalidRequest => {'

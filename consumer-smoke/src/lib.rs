@@ -1,8 +1,8 @@
 //! A separate consumer root for the public `craft-ai-egui` API.
 //!
 //! This crate is not a member of the repository workspace. Its own `[patch.crates-io]` recipe is
-//! the one an adopting app must repeat. It path-depends on this repository's `crates/ai-egui` and
-//! `crates/ai-core`, then names the widget-facing core types through `craft_ai_core`; a second
+//! the one an adopting app must repeat. It path-depends on this repository's `crates/app/ai-egui` and
+//! `crates/foundation/ai-core`, then names the widget-facing core types through `craft_ai_core`; a second
 //! `craft-ai-core` package (for example from `craft-libs`) would make that assertion fail to
 //! compile. Draw calls use only synthetic data and no host service.
 

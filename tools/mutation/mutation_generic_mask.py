@@ -7,8 +7,8 @@ Format: (name, file, old, new, package, test target, test filter).
 Equivalent, so not listed: the pixel limit on the mask in `finish` (a mask must equal the size of
 a picture that already passed the same limit).
 """
-SR = 'crates/ai-comfyui/src/segment_route.rs'
-PV = 'crates/ai-comfyui/src/provider.rs'
+SR = 'crates/local/ai-comfyui/src/segment_route.rs'
+PV = 'crates/local/ai-comfyui/src/provider.rs'
 CC = 'craft-ai-comfyui'
 SIZE = 'if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {'
 

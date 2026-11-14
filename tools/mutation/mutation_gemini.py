@@ -1,8 +1,8 @@
 """Gemini jobs retain unread terminal states under bounded tracking pressure."""
 
-PATH = 'crates/ai-gemini/src/lib.rs'
+PATH = 'crates/api/ai-gemini/src/lib.rs'
 # The eviction rule moved into the registry module.
-REGISTRY = 'crates/ai-gemini/src/registry.rs'
+REGISTRY = 'crates/api/ai-gemini/src/registry.rs'
 PACKAGE = 'craft-ai-gemini'
 GI = [
     ('gemini-unread-terminal-evicted', REGISTRY,

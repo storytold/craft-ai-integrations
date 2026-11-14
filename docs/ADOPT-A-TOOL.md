@@ -4,7 +4,7 @@
 
 For someone building on this layer: you ship a service, a kind of tool, or an app that uses them.
 You should not need to edit this repository or anyone else's app. This page is the path; the
-runnable version of every step is `crates/ai-client/tests/third_party_adoption.rs`, which CI runs,
+runnable version of every step is `crates/app/ai-client/tests/third_party_adoption.rs`, which CI runs,
 so if this page and the code disagree the test is right.
 
 The jobs, each independent of the others:

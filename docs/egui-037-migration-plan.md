@@ -18,7 +18,7 @@ and remote/platform CI remain open. No push, pull request, comment, release, mer
 publication is authorised; each future publication and the final merge still need fresh explicit
 human approval after the exact content and validation are shown.
 
-The repository is `storytold/craft-ai-integrations`. Its only egui consumer is `crates/ai-egui` (package `craft-ai-egui`).
+The repository is `storytold/craft-ai-integrations`. Its only egui consumer is `crates/app/ai-egui` (package `craft-ai-egui`).
 This plan covers that crate, its examples, tests, workspace dependency graph, and the contracts it must keep for any app that
 may adopt it.
 
@@ -33,7 +33,7 @@ may adopt it.
 | Consumer recipe | `consumer-smoke/` is a separate workspace that repeats the complete `[patch.crates-io]` recipe, path-depends on this repository's `ai-egui` and `ai-core`, and asserts the public widget values are that `craft_ai_core` identity. Its locked test build and one draw test passed with one `craft-ai-core` identity and the pinned egui family; the rendererless root leaves the winit patches unused. |
 | Font policy | The library keeps `egui` at `default-features = false`. Tests/examples opt into bundled `default_fonts`; the snapshot suite installs `FontDefinitions::default()` explicitly and keeps kittest's missing-glyph panic. A host supplies fonts or gets them through eframe; production does not force them. |
 | Test-only features | `egui_kittest` uses `snapshot` + `wgpu` only as a dev dependency. `eframe` stays a dev dependency with `default_fonts`, `glow`, `x11`, `wayland`. No new public feature flag. |
-| Duplicate core policy | This workspace and the smoke root use one path `craft-ai-core`. Do not combine it with `craft-libs/crates/ai-core`; replacing the local copy remains separate `CORE-SYNC` work. |
+| Duplicate core policy | This workspace and the smoke root use one path `craft-ai-core`. Do not combine it with `craft-libs/crates/foundation/ai-core`; replacing the local copy remains separate `CORE-SYNC` work. |
 | Historical headless checkpoint (2026-10-24) | Under managed job `egui037-ai-regression-mutation-20261024-2205`, **108 tests passed** with strict `clippy --all-targets` and `cargo fmt --all --check` green on Linux, then again after restoration. Five committed kittest snapshots are hash-stable. The `eg` group caught both compiled lifecycle mutants; changing the background from RGB(27,27,27) to RGB(30,30,30) failed the expected snapshot with 75,486 changed pixels. The locked consumer smoke passed one draw test with one `craft-ai-core` identity and the pinned egui family. An independent test-packet review passed. This remains historical: it is not evidence for native GUI, IME/clipboard, physical-GPU or performance acceptance. |
 | Current headless qualification (2026-10-25) | Under managed job `egui037-ai-final-ci-20261025-1331`, on the `7b3f3e6` tree plus the 13-file documentation and cancellation-test change set: **126 passed, 0 failed, 4 ignored** (doctests) across the targeted `craft-ai-egui`/`craft-ai-engine` suites and the locked consumer smoke. The formatting command left the worktree unchanged, strict all-target clippy for those two packages was green, and the five kittest snapshots passed. This supersedes the 108-test count but does not rerun the historical mutation controls; it is not evidence for native GUI, IME/clipboard, physical-GPU or performance acceptance. |
 | Still open | Full remote workspace/platform CI; native Linux X11/Wayland and Windows widget workflows (focus, keyboard, clipboard/IME, screenshots); macOS IME/Metal/termination remains an explicit blocker; physical-GPU and performance qualification; any app adoption; human review of this documentation and fresh explicit approval for publication. The non-widget mutation groups were not rerun in the current headless job. |
@@ -47,7 +47,7 @@ may adopt it.
 | repository / checkout | `storytold/craft-ai-integrations` at `/home/codex/work/CraftApps/egui037-migration-20261022/craft-ai-integrations` |
 | baseline commit / branch | `1a02afd6bed425bcd516d8de2f3dc3b29614b23d` (`feat(client): offer SAM 2.1 on Burn as an optional engine after rten (#91)`) / `codex/egui-037-plan-20261022` |
 | workspace manifest | `Cargo.toml`, resolver 3, members `crates/*`, edition 2024, workspace MSRV 1.90 |
-| `craft-ai-egui` MSRV | `rust-version = "1.95"` (`crates/ai-egui/Cargo.toml:9`) |
+| `craft-ai-egui` MSRV | `rust-version = "1.95"` (`crates/app/ai-egui/Cargo.toml:9`) |
 | lockfile | `Cargo.lock`, format 4, 943 packages |
 | current egui family | `egui`, `eframe`, `egui_kittest`, `egui-winit`, `egui-wgpu`, `egui_glow`, `epaint`, `epaint_default_fonts`, `ecolor`, `emath` all 0.36.2 from crates.io |
 | current access/kittest | `accesskit` 0.24.1, `accesskit_consumer` 0.35.0, `kittest` 0.4.0 |
@@ -66,10 +66,10 @@ checkouts (`ai-0.37`/`ai-lang`) differ from the provenance names above; only the
 
 ### 1.2 Current package targets and entry points
 
-`crates/ai-egui/Cargo.toml` declares one library package and no `[[bin]]`, feature table, `[patch]`, or vendored source. The
+`crates/app/ai-egui/Cargo.toml` declares one library package and no `[[bin]]`, feature table, `[patch]`, or vendored source. The
 workspace has no root examples directory; the two examples belong to the package.
 
-- library target: `crates/ai-egui/src/lib.rs`
+- library target: `crates/app/ai-egui/src/lib.rs`
 - `examples/picker_demo.rs`: native eframe window, sample-only store
 - `examples/history_demo.rs`: native eframe window, sample log by default, optional real history read
 - integration tests: `consent_terms.rs`, `history_view.rs`, `native_setup_view.rs`, `panel.rs`, `picker_view.rs`,
@@ -78,7 +78,7 @@ workspace has no root examples directory; the two examples belong to the package
 - deliberate-bug harness: `tools/mutation/`, groups `ce` (consent), `nw` (native setup), `v2` (picker), `v3` (popup)
 
 Normal dependencies are local path dependencies: `craft-ai-core`, `craft-ai-client`, `craft-ai-features`
-(`crates/ai-egui/Cargo.toml:12-14`) and `egui = "0.36"` (`:15`). Dev dependencies are `egui_kittest = "0.36"` (`:18`),
+(`crates/app/ai-egui/Cargo.toml:12-14`) and `egui = "0.36"` (`:15`). Dev dependencies are `egui_kittest = "0.36"` (`:18`),
 `eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }` (`:19`),
 `craft-ai-native`, `craft-ai-features`, `tempfile`, `serde_json` (`:20-23`).
 
@@ -107,15 +107,15 @@ checkouts above. Treat the sentence as stale or as describing an external branch
 widget consumer. Any future adoption is a separate integration with its own plan, dependency pin, font policy and UI tests.
 
 **Duplicate core is a future-adoption constraint, not an egui deliverable.** `craft-ai-egui` uses the local `craft-ai-core`
-path (`crates/ai-egui/Cargo.toml:12`; package at `crates/ai-core/Cargo.toml:2`), while `craft-libs` contains another crate
-with the same package name (`craft-libs/crates/ai-core/Cargo.toml:2`). `docs/CORE-SYNC.md:3-5,28-33` already records that the
+path (`crates/app/ai-egui/Cargo.toml:12`; package at `crates/foundation/ai-core/Cargo.toml:2`), while `craft-libs` contains another crate
+with the same package name (`craft-libs/crates/foundation/ai-core/Cargo.toml:2`). `docs/CORE-SYNC.md:3-5,28-33` already records that the
 copies are not interchangeable and lists contract additions that have not moved upstream. An app that adopted both would have
 two package identities and distinct public types (`ConnectionId`, `DraftError`, …), and `cargo tree -d` would show the
 duplicate.
 
 The migration therefore does not merge the two implementations and does not switch the local core to a craft-libs pin as a
-side effect. The AI-2 consumer-smoke workspace must prove the intended identity instead: it path-depends on `crates/ai-egui`
-and this workspace's `crates/ai-core`, resolves exactly one `craft-ai-core` package in `cargo tree -d`, and includes a
+side effect. The AI-2 consumer-smoke workspace must prove the intended identity instead: it path-depends on `crates/app/ai-egui`
+and this workspace's `crates/foundation/ai-core`, resolves exactly one `craft-ai-core` package in `cargo tree -d`, and includes a
 type-level assertion that the widget-facing `ConnectionDraft`, `ConnectionId` and `DraftError` values are the same core
 types. Switching to one authoritative core needs separate `CORE-SYNC` work, its own review, old-store round-trip tests and a
 pinned upstream revision; it is not part of the egui migration.
@@ -463,7 +463,7 @@ App plans depend on AI-2/AI-3 only if they adopt `craft-ai-egui`; none currently
 
 ### 5.2 Rollback
 
-The old coherent set is the entire baseline: `Cargo.toml` and `Cargo.lock` at `1a02afd6...`; `crates/ai-egui`
+The old coherent set is the entire baseline: `Cargo.toml` and `Cargo.lock` at `1a02afd6...`; `crates/app/ai-egui`
 source/tests/examples at that commit; registry 0.36.2 egui family plus winit 0.30.13; no fork patch. Rollback is a revert of
 the whole stage, not a lone version swap and not a stock-0.37 intermediate. Preserve the old `Cargo.lock` and source SHA in
 evidence before the first dependency change. Do not change shared store/history/consent formats; no user-data migration is
@@ -474,9 +474,9 @@ needed.
 - The repository is not a registry package (`publish = false`). Consumers use a pinned git revision.
 - A consumer root that references the fork adds its own `[patch.crates-io]` entries for every egui-family package it actually
   uses plus winit; this repository’s patch is ignored by that consumer.
-- The consumer-smoke workspace (separate `[workspace]`, path dependency on `crates/ai-egui` and `crates/ai-core`, its own
+- The consumer-smoke workspace (separate `[workspace]`, path dependency on `crates/app/ai-egui` and `crates/foundation/ai-core`, its own
   exact `[patch.crates-io]`) runs the same tests with the fork and proves the recipe a real app will copy. Its `cargo tree` duplicate check must show one `craft-ai-core` and one egui family/one winit, and its type assertions must use that core identity. It
-  must not pull `craft-libs/crates/ai-core`.
+  must not pull `craft-libs/crates/foundation/ai-core`.
 - Add a static check that rejects path patches in publication/manifests (except the intentional local path dependency in
   private development), branch/tag refs for egui/winit, a second registry egui family, and machine-local paths in
   docs/examples.
@@ -564,7 +564,7 @@ do not catch changed styling, clipping, contrast, theme colors, or a visually br
 - Baseline is captured at 0.36.2 before production edits. Candidate differences from 0.37 style changes are reviewed
   individually and recorded as intended. Never bulk-refresh goldens to make a failing suite green.
 - **Actual implementation note:** this checkout did not capture the 0.36.2 baseline images. The new
-  `crates/ai-egui/tests/visual_snapshots.rs` suite renders the 0.37 candidate only; its five
+  `crates/app/ai-egui/tests/visual_snapshots.rs` suite renders the 0.37 candidate only; its five
   committed PNGs are candidate baselines, not before/after migration attribution. The final run
   kept all five hashes unchanged, and a pure-background RGB(27,27,27) to RGB(30,30,30) negative
   control failed as expected with 75,486 changed pixels.

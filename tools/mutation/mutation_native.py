@@ -3,7 +3,7 @@
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-F = 'crates/ai-features/src/'
+F = 'crates/foundation/ai-features/src/'
 FE = 'craft-ai-features'
 
 NF = [
@@ -26,5 +26,5 @@ NF = [
     ('native-option-loses-its-model-id', F + 'options.rs', 'model: native.model.clone(),', 'model: String::new(),', FE, 'native_setup', 'candle_with_its_own_size'),
     ('onnx-is-not-weights', F + 'recipe.rs', '            name.ends_with(".safetensors") || name.ends_with(".onnx")', '            name.ends_with(".safetensors")', FE, 'native_onnx', 'an_onnx_file'),
     ('onnx-name-is-case-sensitive', F + 'recipe.rs', 'let name = m.filename.to_ascii_lowercase();', 'let name = m.filename.clone();', FE, 'native_onnx', 'an_onnx_file'),
-    ('onnx-path-refused-when-binding', 'crates/ai-client/src/local.rs', '["safetensors", "onnx", "bpk"]', '["safetensors", "bpk"]', 'craft-ai-client', 'local_native', 'the_native_route_is_registered'),
+    ('onnx-path-refused-when-binding', 'crates/app/ai-client/src/local.rs', '["safetensors", "onnx", "bpk"]', '["safetensors", "bpk"]', 'craft-ai-client', 'local_native', 'the_native_route_is_registered'),
 ]

@@ -107,11 +107,11 @@ These come from the people who use the suite. The checks enforce most of them.
 
 | Folder | What is in it |
 |---|---|
-| `crates/ai-core` | The data model and the `Provider` trait. No I/O. Builds for wasm. |
-| `crates/ai-client` | `AiClient`, `ToolDesk` and `ProviderFactory`. What an app holds. |
-| `crates/ai-features` | The catalogue of tools and how each can be set up. |
-| `crates/ai-native` | The shared store file, key stores, consent and history files. |
-| `crates/ai-egui` | Optional theme-neutral widgets. |
+| `crates/foundation/ai-core` | The data model and the `Provider` trait. No I/O. Builds for wasm. |
+| `crates/app/ai-client` | `AiClient`, `ToolDesk` and `ProviderFactory`. What an app holds. |
+| `crates/foundation/ai-features` | The catalogue of tools and how each can be set up. |
+| `crates/foundation/ai-native` | The shared store file, key stores, consent and history files. |
+| `crates/app/ai-egui` | Optional theme-neutral widgets. |
 | `docs/` | These guides, the [layout](../LAYOUT.md), the [platform contract](../PLATFORM-CONTRACT.md) and [custom connections and sources](../custom-connections-and-sources.md). |
 
 ## Getting help and giving back

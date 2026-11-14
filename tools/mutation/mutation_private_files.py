@@ -7,11 +7,11 @@ Loaded by mutation_check.py. Each case breaks one rule and names the test that s
 Format: (name, file, old, new, package, test target, test filter). Most tests are Unix-only, so
 the group is meant for the Ubuntu and macOS runs of the Deliberate-bug checks workflow.
 """
-LEASE = 'crates/ai-comfyui/src/sam3_lease.rs'
-OWNER = 'crates/ai-native/src/owner_only.rs'
-HIST = 'crates/ai-native/src/history_file.rs'
-SHARED = 'crates/ai-native/src/shared.rs'
-FOLDERS = 'crates/ai-client/src/folders.rs'
+LEASE = 'crates/local/ai-comfyui/src/sam3_lease.rs'
+OWNER = 'crates/foundation/ai-native/src/owner_only.rs'
+HIST = 'crates/foundation/ai-native/src/history_file.rs'
+SHARED = 'crates/foundation/ai-native/src/shared.rs'
+FOLDERS = 'crates/app/ai-client/src/folders.rs'
 CU = 'craft-ai-comfyui'
 N = 'craft-ai-native'
 CL = 'craft-ai-client'
@@ -27,7 +27,7 @@ PF = [
     ('sddl-any-account-let-in', OWNER, '!allows || trusted(who)', 'true', N, 'lib', 'any_other_account_let_in_is_refused'),
     ('sddl-owner-unchecked', OWNER, "if !(owner == me || Some(owner) == me_alias || owner == \"BA\") {", 'if false {', N, 'lib', 'owned_by_another_account_is_refused'),
     ('sddl-null-list-accepted', OWNER, 'if dacl.starts_with("NO_ACCESS_CONTROL") {', 'if false {', N, 'lib', 'a_missing_access_list'),
-    ('atomic-writes-not-serialised', 'crates/ai-native/src/fsutil.rs', '    let _turn = WRITE_TURN\n        .lock()\n        .unwrap_or_else(|poisoned| poisoned.into_inner());\n', '', N, 'lib', 'concurrent_writes_to_one_file_do_not_collide'),
+    ('atomic-writes-not-serialised', 'crates/foundation/ai-native/src/fsutil.rs', '    let _turn = WRITE_TURN\n        .lock()\n        .unwrap_or_else(|poisoned| poisoned.into_inner());\n', '', N, 'lib', 'concurrent_writes_to_one_file_do_not_collide'),
     ('native-folders-default-mode', OWNER, '            .mode(0o700)\n', '            .mode(0o755)\n', N, 'lib', 'new_folders_are_private'),
     ('history-created-with-umask', HIST, '            create_private(&self.path)?;\n', '', N, 'lib', 'a_new_history_file_in_an_existing_folder'),
     ('corrupt-copy-keeps-mode', SHARED, 'let _ = fsutil::atomic_copy(&self.path, &PathBuf::from(backup));', 'let _ = std::fs::copy(&self.path, PathBuf::from(backup));', N, 'shared_store', 'copy_of_a_corrupt_store_is_private'),

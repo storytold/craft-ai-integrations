@@ -281,7 +281,7 @@ START_IMAGE_NEW = """let source = match &request.inputs.iter().find(|i| i.role =
                 _ => return Err(AiError::invalid("an image is needed")),
             };
             let source = self.upload(InputRole::Source, &source)?;"""
-# p4: media going to and coming from ComfyUI is judged by its bytes (crates/ai-comfyui).
+# p4: media going to and coming from ComfyUI is judged by its bytes (crates/local/ai-comfyui).
 P4 = [
     ('output-not-checked', CF_OUT, 'if sniff::media_type(head).map(|(media, _)| media) == Some(expected) {', 'if true {', CF, 'media_checks', 'an_output_that_is'),
     ('output-any-media-accepted', CF_OUT, 'if sniff::media_type(head).map(|(media, _)| media) == Some(expected) {', 'if sniff::media_type(head).is_some() {', CF, 'media_checks', 'an_output_that_is'),
@@ -312,7 +312,7 @@ RETRY_GATE = '|error: &AiError| error.is_retryable() && in_time(),'
 TRY_LIMIT = 'if attempt >= self.max_attempts.clamp(1, 5) {'
 BUDGET = '(elapsed.saturating_add(wait) <= self.budget).then_some(wait)'
 # p10: a busy media host is tried again, a refused link is not, and the pauses are bounded
-# (crates/ai-media, whose pauses come from the shared rule in crates/ai-core/src/retry.rs). Each
+# (crates/foundation/ai-media, whose pauses come from the shared rule in crates/foundation/ai-core/src/retry.rs). Each
 # mutant runs only the test that should notice it, so none can hang on a real hour-long pause.
 P10 = [
     ('retry-never', MEDIA, RETRY_GATE, '|_: &AiError| false,', CM, 'retry', 'tried_again_until'),
@@ -334,7 +334,7 @@ P10 = [
 ]
 
 # rx: a cut media download resumes only against a named version and only with a piece that
-# fits, and a clearly expired link is refused before any request (crates/ai-media).
+# fits, and a clearly expired link is refused before any request (crates/foundation/ai-media).
 EXPIRY = C + 'ai-media/src/expiry.rs'
 PARTIAL = C + 'ai-media/src/partial.rs'
 MEDIA_LIB = C + 'ai-media/src/lib.rs'
@@ -377,7 +377,7 @@ RX = [
     ('deadline-told-when-past', MEDIA_LIB, 'if !expiry::clearly_expired(at, expiry::now_unix()) {', 'if true {', CM, 'expiry', 'reported_once'),
 ]
 
-# ar: provider API calls are retried only where safe (crates/ai-client/src/client_wait.rs). A
+# ar: provider API calls are retried only where safe (crates/app/ai-client/src/client_wait.rs). A
 # dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
 WAIT = C + 'ai-client/src/client_wait.rs'
 CLIENT = C + 'ai-client/src/client.rs'
@@ -543,8 +543,8 @@ LR = [
     ('remote-route-leaked', LOCAL_RS, 'if resolved.connection.locality != Locality::Local {', 'if false {', CL, 'local_routes', 'a_remote_choice'),
     ('native-route-treated-as-comfyui', LOCAL_RS, 'if route.provider != "comfyui" {', 'if false {', CL, 'local_routes', 'an_endpoint_cannot'),
     ('unsupported-native-looks-ready', CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, 'local_routes', 'a_selected_native'),
-    ('picker-offers-uninstalled-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', '} else if !client.has_adapter(&connection.provider) {', '} else if false {', CL, 'local_routes', 'a_selected_native'),
-    ('picker-false-setup-for-adapter', ROOT / 'crates/ai-client/src/picker_groups.rs', 'state != GroupState::Ready && state != GroupState::NeedsAdapter', 'state != GroupState::Ready', CL, 'local_routes', 'a_selected_native'),
+    ('picker-offers-uninstalled-adapter', ROOT / 'crates/app/ai-client/src/picker_groups.rs', '} else if !client.has_adapter(&connection.provider) {', '} else if false {', CL, 'local_routes', 'a_selected_native'),
+    ('picker-false-setup-for-adapter', ROOT / 'crates/app/ai-client/src/picker_groups.rs', 'state != GroupState::Ready && state != GroupState::NeedsAdapter', 'state != GroupState::Ready', CL, 'local_routes', 'a_selected_native'),
 ]
 
 # nr: the built-in runtime route reads one weights file (ai-client/tests/local_native.rs)
@@ -680,13 +680,13 @@ WS = [
     ('steps-label-uncut', EGUI_TEXT, '.take(STEP_LABEL_CHARS)', '.take(usize::MAX)', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
     ('steps-not-in-plan', CLIENT_RUN, 'if !steps.is_empty() {\n            disclosure.locality = Locality::Remote;', 'if false {\n            disclosure.locality = Locality::Remote;', CL, 'comfyui_steps', 'nothing_is_sent_until'),
     ('steps-stay-local', CLIENT_RUN, '            disclosure.locality = Locality::Remote;\n', '', CL, 'comfyui_steps', 'nothing_is_sent_until'),
-    ('steps-change-not-rechecked', 'crates/ai-client/src/factory/comfyui.rs', 'if steps != agreed {', 'if false {', 'craft-ai-client', 'comfyui_steps', 'changed_after_planning'),
+    ('steps-change-not-rechecked', 'crates/app/ai-client/src/factory/comfyui.rs', 'if steps != agreed {', 'if false {', 'craft-ai-client', 'comfyui_steps', 'changed_after_planning'),
     ('steps-provider-case-sensitive', CLIENT_RUN, 'connection.provider.eq_ignore_ascii_case("comfyui")', 'connection.provider == "comfyui"', CL, 'comfyui_steps', 'mixed_case_comfyui_names'),
     ('steps-other-providers-checked', CLIENT_RUN, 'if !is_comfyui(connection) {', 'if false {', CL, 'comfyui_steps', 'not_comfyui'),
-    ('steps-build-reads-library-again', 'crates/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let snapshot = if false {', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
-    ('steps-build-unchecked', 'crates/ai-client/src/factory/comfyui.rs', 'self.workflows,', 'load(factory.comfyui_library.as_deref())?,', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
-    ('steps-snapshot-before-key', 'crates/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let _ = secret_for(&*self.secrets, &plan.connection)?;\n        let snapshot = if is_comfyui(&plan.connection) {', 'craft-ai-client', 'comfyui_steps', 'refused_before_key_read'),
-    ('steps-selected-model-required', 'crates/ai-client/src/factory/comfyui.rs', 'let steps = workflows\n                .iter()\n                .find(|w| w.id() == model)', 'let steps = workflows\n                .iter()\n                .find(|_| true)', 'craft-ai-client', 'comfyui_steps', 'absent_selected_workflow'),
+    ('steps-build-reads-library-again', 'crates/app/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let snapshot = if false {', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
+    ('steps-build-unchecked', 'crates/app/ai-client/src/factory/comfyui.rs', 'self.workflows,', 'load(factory.comfyui_library.as_deref())?,', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
+    ('steps-snapshot-before-key', 'crates/app/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let _ = secret_for(&*self.secrets, &plan.connection)?;\n        let snapshot = if is_comfyui(&plan.connection) {', 'craft-ai-client', 'comfyui_steps', 'refused_before_key_read'),
+    ('steps-selected-model-required', 'crates/app/ai-client/src/factory/comfyui.rs', 'let steps = workflows\n                .iter()\n                .find(|w| w.id() == model)', 'let steps = workflows\n                .iter()\n                .find(|_| true)', 'craft-ai-client', 'comfyui_steps', 'absent_selected_workflow'),
     ('steps-own-builder-bypassed', C + 'ai-client/src/factory/comfyui.rs', 'if !self.comfyui_built_in {', 'if false {', CL, 'comfyui_steps', 'own_comfyui_builder'),
     ('steps-grant-widens-wider-record', CONSENT_CORE, '.find(|r| r.same_scope(d) && r.expires_at == expires_at)', '.find(|r| r.covers(d) && r.expires_at == expires_at)', M, 'consent_steps', 'does_not_widen'),
     ('steps-renewal-shortens-wider-record', CONSENT_CORE, '.filter(|r| r.same_scope(d) && r.expires_at != expires_at)', '.filter(|r| r.covers(d) && r.expires_at != expires_at)', M, 'consent_steps', 'does_not_widen'),
@@ -782,7 +782,7 @@ def main():
             os.utime(path, None)
             # The drive-letter mutant really does write `C:evil.py` into the working folder of the
             # test (a drive-relative path), which is what the check exists to stop. Tidy it away.
-            (ROOT / 'crates/ai-comfy-env/evil.py').unlink(missing_ok=True)
+            (ROOT / 'crates/local/ai-comfy-env/evil.py').unlink(missing_ok=True)
     saved = OUT / (group + '-mutations.json')
     if only and saved.exists():
         # A filtered rerun updates its own entries and keeps the rest.
