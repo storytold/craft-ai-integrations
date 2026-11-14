@@ -1,14 +1,15 @@
 """be: the Burn engine's own rules (saved-weights loading, the panic guard, the answer checks, the
 file names it accepts), the catalogue route it is listed by, the binding's `.bpk` rule and the
 shared revision; for InSPyReNet, the complete-weights rule, the matte size, the picture size and
-the move to the processor when the card fails.
+the move to the processor when the card fails; and that a loaded model runs on its own GPU stream.
 
 Not reached here, because they need the real model, a graphics card or a graph the converter
 panics on (the ignored live tests in `crates/ai-engine-burn/tests/live.rs` and
 `crates/ai-client/tests/burn_engine.rs` are not run by this checker): the picture-size check in
 `encode`, the click-count check in `segment`, the choice between the graphics card and the
-processor, the converter's panic guard in `runner/prepare.rs`, and the cargo feature wiring in
-`ai-client`.
+processor, the converter's panic guard in `runner/prepare.rs`, the cargo feature wiring in
+`ai-client`, and each runner's `load` going through `stream::load_on_own_stream` (checked with the
+real model: the card's memory stays flat over twelve runs).
 Case shape: name, file, old, new, package, target, test filter.
 """
 B = 'crates/ai-engine-burn/src/'
@@ -80,6 +81,15 @@ BE = [
     lib('inspyrenet-bad-file-read-twice', FALLBACK,
         'Err(error) if error.kind == ErrorKind::Unsupported => Err(error),',
         'Err(error) if false => Err(error),', 'not_read_twice'),
+    lib('burn-run-off-the-model-stream', 'stream.rs',
+        'self.stream.executes(|| model.run(request, ctx))', 'model.run(request, ctx)',
+        'every_run_uses_the_stream'),
+    lib('burn-model-shares-the-loading-threads-stream', 'stream.rs',
+        'let stream = StreamId::allocate();', 'let stream = StreamId::current();',
+        'two_models_get_two_streams'),
+    lib('inspyrenet-big-stack-thread-gets-its-own-stream', 'inspyrenet/mod.rs',
+        '.spawn_scoped(scope, move || stream.executes(work))', '.spawn_scoped(scope, work)',
+        'the_big_stack_thread_keeps'),
     ('burn-revision-bumped-in-the-architecture', B + 'model/mod.rs',
      'onnx-0.22.0-v1";', 'onnx-0.22.0-v2";', PKG, 'revision', 'the_architecture_and_the_saved'),
     ('burn-revision-bumped-in-the-cache-key', 'crates/ai-burn-setup/src/sam21.rs',
