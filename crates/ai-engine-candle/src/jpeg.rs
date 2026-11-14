@@ -9,10 +9,13 @@
 //! The decoder is `zune-jpeg` through the `image` crate, which handles baseline, progressive,
 //! greyscale and CMYK files. Hostile input is bounded the same way as PNG: the size is read from
 //! the header and refused before any pixel is decoded, and the decoder is given an allocation cap.
+//! A file with more Extended XMP fragments than the shared cap is refused before the decoder sees
+//! it, because the decoder's header parse costs quadratic time in their number.
 
 use std::io::Cursor;
 
 use craft_ai_core::AiError;
+use craft_ai_core::jpeg::too_many_xmp_fragments;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, metadata::Orientation};
 
 use crate::image_io::{MAX_PIXELS, READ_FAILED, Rgb, too_large};
@@ -22,6 +25,9 @@ const MAX_ALLOC: u64 = 900 * 1024 * 1024;
 
 pub(crate) fn decode_jpeg(data: &[u8]) -> Result<Rgb, AiError> {
     let bad = |_| AiError::invalid(READ_FAILED);
+    if too_many_xmp_fragments(data) {
+        return Err(AiError::invalid(READ_FAILED));
+    }
     let mut reader = ImageReader::with_format(Cursor::new(data), ImageFormat::Jpeg);
     let mut limits = Limits::default();
     limits.max_alloc = Some(MAX_ALLOC);
