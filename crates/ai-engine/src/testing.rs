@@ -5,7 +5,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use craft_ai_core::conformance::{
@@ -47,6 +47,17 @@ pub struct FakeRunner {
     pub vendors: Vec<GpuVendor>,
     /// Never looks at Cancel, like a runner that forgot to.
     pub deaf: bool,
+    /// What the loaded model says it holds, read each time it is asked, so a test can change
+    /// it between runs. `None` leaves the provider to estimate.
+    pub memory: Option<Arc<AtomicU64>>,
+    /// While set, a run waits after its first step (still answering Cancel), so a test can look
+    /// at a job that is certainly running. Clear it to let the run finish.
+    pub hold: Option<Arc<AtomicBool>>,
+    /// While set, a load waits before reading anything, so a test can act on a job that has
+    /// not loaded its model yet. Clear it to let the load go on.
+    pub load_hold: Option<Arc<AtomicBool>>,
+    /// How many loads have started (counted before `load_hold` is waited on).
+    pub load_started: Arc<AtomicUsize>,
 }
 
 impl FakeRunner {
@@ -62,6 +73,10 @@ impl FakeRunner {
             runs: Arc::default(),
             vendors: Vec::new(),
             deaf: false,
+            memory: None,
+            hold: None,
+            load_hold: None,
+            load_started: Arc::default(),
         }
     }
 
@@ -109,6 +124,14 @@ impl ModelRunner for FakeRunner {
         if !weights.is_file() {
             return Err(AiError::unsupported("no such weights"));
         }
+        self.load_started.fetch_add(1, Ordering::SeqCst);
+        while self
+            .load_hold
+            .as_ref()
+            .is_some_and(|h| h.load(Ordering::SeqCst))
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         self.loads.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(self.clone()))
     }
@@ -117,6 +140,10 @@ impl ModelRunner for FakeRunner {
 impl LoadedModel for FakeRunner {
     fn run(&mut self, _request: &Request, ctx: &RunContext) -> Result<Vec<Output>, AiError> {
         self.runs.fetch_add(1, Ordering::SeqCst);
+        while self.hold.as_ref().is_some_and(|h| h.load(Ordering::SeqCst)) {
+            ctx.check_cancelled()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
         for step in 0..self.steps {
             if !self.deaf {
                 ctx.check_cancelled()?;
@@ -134,6 +161,10 @@ impl LoadedModel for FakeRunner {
             payload: Payload::text("done"),
             label: None,
         }])
+    }
+
+    fn memory_bytes(&self) -> Option<u64> {
+        self.memory.as_ref().map(|m| m.load(Ordering::SeqCst))
     }
 }
 
