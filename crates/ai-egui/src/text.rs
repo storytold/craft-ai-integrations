@@ -52,8 +52,15 @@ pub fn disclosure_lines(d: &Disclosure) -> Vec<String> {
     if !d.param_names.is_empty() {
         lines.push(format!("settings: {}", d.param_names.join(", ")));
     }
+    if d.key_in_clear {
+        lines.push(KEY_IN_CLEAR_LINE.to_owned());
+    }
     lines
 }
+
+/// Says the saved key goes too, and why that is asked about although the address is on this
+/// computer.
+pub const KEY_IN_CLEAR_LINE: &str = "your saved key, unencrypted: whichever program is using this address on this computer receives it, and on a computer shared with other people that could be someone else's program";
 
 /// The headline above the list.
 pub fn consent_headline(d: &Disclosure, app_label: &str) -> String {
@@ -151,7 +158,19 @@ mod tests {
             destination: "https://api.example.com".into(),
             items,
             param_names: params.iter().map(|s| (*s).to_owned()).collect(),
+            key_in_clear: false,
         }
+    }
+
+    #[test]
+    fn a_key_sent_unencrypted_is_named_and_the_reason_given() {
+        let mut d = disclosure(vec![], &[]);
+        assert!(disclosure_lines(&d).iter().all(|l| !l.contains("key")));
+        d.key_in_clear = true;
+        let lines = disclosure_lines(&d);
+        assert_eq!(lines.last().map(String::as_str), Some(KEY_IN_CLEAR_LINE));
+        assert!(KEY_IN_CLEAR_LINE.contains("saved key, unencrypted"));
+        assert!(KEY_IN_CLEAR_LINE.contains("someone else's program"));
     }
 
     #[test]

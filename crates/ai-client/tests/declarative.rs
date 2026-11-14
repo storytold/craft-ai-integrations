@@ -105,6 +105,15 @@ impl World {
     }
 }
 
+/// The person's agreement to this plan. The key goes over plain http to this computer, so
+/// every job here is asked about first.
+fn agreed(plan: &craft_ai_client::Plan) -> ConsentLedger {
+    let mut ledger = ConsentLedger::default();
+    assert!(plan.needs_consent(&ledger));
+    ledger.grant(plan.disclosure());
+    ledger
+}
+
 fn note() -> Request {
     Request::new(tool().capability)
         .with_input(InputRole::Prompt, Payload::text("long meeting notes"))
@@ -126,7 +135,7 @@ fn two_apps_run_a_tool_that_exists_only_as_data() {
         );
         let plan = client.plan(&tool(), note()).unwrap();
         let done = client
-            .start(&plan, &ConsentLedger::default())
+            .start(&plan, &agreed(&plan))
             .unwrap()
             .wait(Duration::from_millis(2), Duration::from_secs(10))
             .unwrap();
@@ -149,7 +158,7 @@ fn a_service_whose_address_differs_from_its_settings_file_is_refused_before_anyt
     let world = World::new(&server.url, &other.url);
     let client = world.app("photocraft");
     let plan = client.plan(&tool(), note()).unwrap();
-    let err = client.start(&plan, &ConsentLedger::default()).unwrap_err();
+    let err = client.start(&plan, &agreed(&plan)).unwrap_err();
     assert_eq!(err.kind, ErrorKind::InvalidRequest);
     assert!(err.message.contains("different address"), "{}", err.message);
     assert_eq!(server.count() + other.count(), 0);
@@ -167,7 +176,7 @@ fn a_missing_or_damaged_settings_file_says_so_plainly() {
         }
         let client = world.app("photocraft");
         let plan = client.plan(&tool(), note()).unwrap();
-        let err = client.start(&plan, &ConsentLedger::default()).unwrap_err();
+        let err = client.start(&plan, &agreed(&plan)).unwrap_err();
         assert!(
             err.message.contains("settings for Notes Service"),
             "{}",
