@@ -6,8 +6,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use craft_ai_core::{
     AiError, Connection, ErrorKind, JobId, JobSnapshot, Limits, ModelId, ModelInfo, Output,
@@ -15,6 +16,9 @@ use craft_ai_core::{
 };
 
 use crate::job::Job;
+use crate::memory::{
+    FreeMemory, LoadAdmission, LoadedModelInfo, Outcome, Residency, Slot, Unloaded,
+};
 use crate::registry::EngineRegistry;
 use crate::runner::{LoadedModel, ModelRunner};
 
@@ -40,12 +44,39 @@ struct Entry {
     model: ModelInfo,
     /// The loaded model. Held for the length of a run, which is what makes jobs for one model
     /// take turns.
-    loaded: Mutex<Option<Box<dyn LoadedModel>>>,
+    loaded: Slot,
+    /// What the loaded model holds, readable while a run has the slot.
+    residency: Residency,
 }
 
 impl Entry {
-    fn run(&self, request: &Request, job: &Job) -> Result<Vec<Output>, AiError> {
+    fn run(
+        &self,
+        request: &Request,
+        job: &Job,
+        memory: (Option<&FreeMemory>, &LoadAdmission),
+        retired: &AtomicBool,
+    ) -> Result<Vec<Output>, AiError> {
         let mut slot = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        self.residency.enter();
+        let result = self.turn(&mut slot, request, job, memory);
+        // Whatever state a model that failed inside was left in, do not reuse it. A retired
+        // provider keeps nothing once a job is done with it.
+        let discard = matches!(&result, Err(e) if e.kind == ErrorKind::Internal)
+            || retired.load(Ordering::Acquire);
+        // Dropped here, once the slot and the residency are both released.
+        drop(self.residency.leave(slot, discard));
+        result
+    }
+
+    /// One job's turn with the model, with the slot held.
+    fn turn(
+        &self,
+        slot: &mut Option<Box<dyn LoadedModel>>,
+        request: &Request,
+        job: &Job,
+        (free, admission): (Option<&FreeMemory>, &LoadAdmission),
+    ) -> Result<Vec<Output>, AiError> {
         // Only now is the job really running: until this point it was waiting its turn behind
         // another job for the same model. A job cancelled while it waited never loads or runs.
         if !job.begin() {
@@ -53,8 +84,20 @@ impl Entry {
         }
         let ctx = job.context();
         if slot.is_none() {
+            let needed = guarded(|| Ok(self.runner.memory_needed(&self.weights)))?;
+            // The reader is the app's code: a panic in it fails this job, not the worker. The
+            // load's share stays set aside until the load ends, so a load judged at the same
+            // time on another model cannot count the same free memory.
+            let admitted = guarded(|| admission.admit(&self.model.label, needed, free))?;
             let weights = self.weights.clone();
-            *slot = Some(guarded(|| self.runner.load(&weights))?);
+            let model = guarded(|| self.runner.load(&weights));
+            drop(admitted);
+            let model = model?;
+            match reported(model.as_ref()) {
+                Some(bytes) => self.residency.loaded(bytes, false),
+                None => self.residency.loaded(needed.unwrap_or_default(), true),
+            }
+            *slot = Some(model);
         }
         // Cancel pressed during a slow load stops here, before any work on the request.
         ctx.check_cancelled()?;
@@ -62,12 +105,19 @@ impl Entry {
             return Err(AiError::new(ErrorKind::Internal, "the model did not load"));
         };
         let result = guarded(|| model.run(request, &ctx));
-        if matches!(&result, Err(e) if e.kind == ErrorKind::Internal) {
-            // Whatever state it was left in, do not reuse it.
-            *slot = None;
+        // A model may keep work between runs (SAM keeps the picture), so read its size again.
+        if let Some(bytes) = reported(model.as_ref()) {
+            self.residency.loaded(bytes, false);
         }
         result
     }
+}
+
+/// What a loaded model says it holds; a model that panics saying so is treated as silent.
+fn reported(model: &dyn LoadedModel) -> Option<u64> {
+    catch_unwind(AssertUnwindSafe(|| model.memory_bytes()))
+        .ok()
+        .flatten()
 }
 
 /// Runs `f`, turning a panic into an error a person can read.
@@ -94,6 +144,11 @@ pub struct EngineProvider {
     table: Mutex<Table>,
     next: AtomicU64,
     pending: Arc<AtomicUsize>,
+    free: Option<FreeMemory>,
+    /// Shared with every provider that judges loads against the same memory.
+    admission: LoadAdmission,
+    /// Set by `retire`: every job lets go of its model when it finishes.
+    retired: Arc<AtomicBool>,
 }
 
 impl EngineProvider {
@@ -112,6 +167,7 @@ impl EngineProvider {
                     weights,
                     model,
                     loaded: Mutex::new(None),
+                    residency: Residency::default(),
                 })
             })
             .collect();
@@ -122,7 +178,75 @@ impl EngineProvider {
             table: Mutex::new(Table::default()),
             next: AtomicU64::new(0),
             pending: Arc::default(),
+            free: None,
+            admission: LoadAdmission::default(),
+            retired: Arc::default(),
         }
+    }
+
+    /// Checks free memory before each load, refusing in words a load that will not fit rather
+    /// than starting one that cannot finish. `read` returns `None` when it cannot tell.
+    pub fn with_free_memory(mut self, read: FreeMemory) -> Self {
+        self.free = Some(read);
+        self
+    }
+
+    /// Judges loads together with every other provider given the same `admission`, so loads
+    /// that start at once cannot both count the same free memory. Without it, a provider judges
+    /// only its own loads together.
+    pub fn with_load_admission(mut self, admission: LoadAdmission) -> Self {
+        self.admission = admission;
+        self
+    }
+
+    /// Marks this provider as replaced: jobs already submitted still run, and each lets go of
+    /// its model as it finishes, so nothing loaded after the replacement stays behind. Models
+    /// loaded now are unloaded as with [`unload`](Self::unload).
+    pub fn retire(&self) -> Unloaded {
+        self.retired.store(true, Ordering::Release);
+        self.unload(None)
+    }
+
+    /// Whether a job is waiting or running, so may still load a model.
+    pub fn is_busy(&self) -> bool {
+        self.pending.load(Ordering::Acquire) > 0
+    }
+
+    /// The models held in memory now, in registration order.
+    pub fn loaded_models(&self) -> Vec<LoadedModelInfo> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.residency.info(&e.model.id, &e.model.label))
+            .collect()
+    }
+
+    /// Unloads `model`, or every model when `None`. A model in use is let go of as its job
+    /// finishes. The next job loads it again. The files on disk are untouched.
+    pub fn unload(&self, model: Option<&ModelId>) -> Unloaded {
+        self.unload_where(|e| model.is_none_or(|m| &e.model.id == m), None)
+    }
+
+    /// Unloads every model no job has used for at least `older_than`. Models in use, or used
+    /// more recently, are left alone. The app decides when to call this; nothing here runs on a
+    /// timer.
+    pub fn unload_idle(&self, older_than: Duration) -> Unloaded {
+        self.unload_where(|_| true, Some(older_than))
+    }
+
+    fn unload_where(&self, pick: impl Fn(&Entry) -> bool, idle: Option<Duration>) -> Unloaded {
+        let mut done = Unloaded::default();
+        for entry in self.entries.iter().filter(|e| pick(e)) {
+            match entry.residency.unload(&entry.loaded, idle) {
+                // Dropped here, outside every lock.
+                Outcome::Freed(model) => {
+                    drop(model);
+                    done.freed.push(entry.model.id.clone());
+                }
+                Outcome::AfterRun => done.after_run.push(entry.model.id.clone()),
+                Outcome::Untouched => {}
+            }
+        }
+        done
     }
 
     /// Builds the provider for a saved connection: one runner per model on it, each reading the
@@ -222,12 +346,14 @@ impl Provider for EngineProvider {
         let id = JobId::new(format!("{}-{n}", self.engine))
             .map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))?;
         let job = Job::new();
-        let (work, request) = (job.clone(), request.clone());
+        let (work, request, free) = (job.clone(), request.clone(), self.free.clone());
+        let retired = self.retired.clone();
+        let admission = self.admission.clone();
         std::thread::Builder::new()
             .name(format!("{}-{n}", self.engine))
             .spawn(move || {
                 let _pending = pending;
-                let result = entry.run(&request, &work);
+                let result = entry.run(&request, &work, (free.as_ref(), &admission), &retired);
                 work.finish(result);
             })
             .map_err(|e| {
@@ -285,7 +411,8 @@ mod tests {
 
         let cancelled = Job::new();
         cancelled.cancel();
-        let result = entry.run(&request, &cancelled);
+        let memory = (None, &LoadAdmission::default());
+        let result = entry.run(&request, &cancelled, memory, &AtomicBool::new(false));
         assert_eq!(
             result.as_ref().err().map(|e| e.kind),
             Some(ErrorKind::Cancelled)
@@ -307,7 +434,8 @@ mod tests {
         // removed, the cancelled job above would load (and, without the cancel check, run), so
         // these counters would no longer be 0.
         let control = Job::new();
-        let result = entry.run(&request, &control);
+        let memory = (None, &LoadAdmission::default());
+        let result = entry.run(&request, &control, memory, &AtomicBool::new(false));
         assert!(matches!(&result, Ok(outputs) if outputs.len() == 1));
         control.finish(result);
         assert_eq!(control.snapshot().state, JobState::Succeeded);
