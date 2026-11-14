@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scrub import scrub  # noqa: E402
+from outcome import proves_nothing  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / 'verification'
 OUT.mkdir(exist_ok=True)
@@ -673,8 +674,6 @@ EQUIVALENT.update(CE_EQUIVALENT)
 # ubuntu-latest and macos-latest through the Deliberate-bug checks workflow.
 WINDOWS_ONLY_EQUIVALENT = {'directory-taken-as-local-file', 'input-folder-read'}
 TIMEOUTS = {}
-# Printed by a test that skips itself because the machine cannot do what it needs.
-SKIP_MARK = 'skipped: this machine does not allow directory links'
 
 
 def main():
@@ -721,9 +720,9 @@ def main():
                 log += '\nTIMED OUT: the mutated code made the test hang'
             (OUT / ('mutation-' + name + '.txt')).write_text(scrub(log), encoding='utf-8')
             caught = timed_out or (proc.returncode != 0 and 'test result: FAILED' in log)
-            # A test that skips itself (for example, no directory links here) passes whatever the code does,
-            # so a pass that printed the skip proves nothing and is neither caught nor a survivor.
-            skipped = (not caught) and SKIP_MARK in log
+            # A test that skipped itself, or (on Windows) a run where Unix-only tests were compiled out,
+            # passes whatever the code does, so it is neither caught nor a survivor. See outcome.py.
+            skipped = (not caught) and proves_nothing(log, os.name == 'nt')
             # Equivalent on Windows only: elsewhere the case is expected to be caught, and a miss there is a finding.
             equivalent = (not caught) and (not skipped) and name in EQUIVALENT and not (name in WINDOWS_ONLY_EQUIVALENT and os.name != 'nt')
             results.append({'mutation': name, 'caught_by_runtime_test': caught, 'timed_out': timed_out, 'skipped': skipped, 'equivalent': EQUIVALENT[name] if equivalent else None})
