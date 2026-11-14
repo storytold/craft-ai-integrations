@@ -29,6 +29,7 @@ fn disclosure(locality: Locality) -> Disclosure {
             bytes: Some(2_500_000),
         }],
         param_names: vec!["size".into()],
+        key_in_clear: false,
     }
 }
 
