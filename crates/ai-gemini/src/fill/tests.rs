@@ -98,7 +98,7 @@ fn the_body_sends_instruction_source_and_mask_with_ratio_and_size() {
         input[0]["text"]
             .as_str()
             .unwrap()
-            .contains("placeholder with: a red balloon.")
+            .contains("The requested change is: \"a red balloon\".")
     );
     assert_eq!(input[1]["data"], base64_encode(&gray(1600, 900, 90)));
     assert_eq!(input[2]["mime_type"], "image/png");
@@ -162,12 +162,13 @@ fn an_empty_prompt_asks_for_removal() {
         empty.contains("had never existed") && empty.contains("Do not add a new"),
         "{empty}"
     );
-    assert!(!empty.contains("placeholder with:"));
+    assert!(!empty.contains("requested change"));
     let boat = fill_instruction("  a boat. ");
-    assert!(boat.contains("placeholder with: a boat.") && !boat.contains("had never existed"));
     assert!(
-        boat.contains("white marks the area of the first image to fill, black the area to keep")
+        boat.contains("The requested change is: \"a boat\".")
+            && !boat.contains("had never existed")
     );
+    assert!(boat.contains("white marks the only area you may change"));
 }
 
 #[test]

@@ -6,9 +6,10 @@
 //! instruction that says what it means. Nothing stops the model from changing pixels outside the
 //! mask, so the caller should keep only the masked part of the result (PhotoCraft does).
 //!
-//! The instruction allows for the area under the mask already having been blurred or dimmed out
-//! (PhotoCraft does that so the model cannot paint back what was there): whatever the area shows
-//! is treated as a placeholder to replace, not as content to keep.
+//! The instruction comes from [`craft_ai_media::mask::fill_instruction`]. With no prompt the area
+//! under the mask may have been blurred or dimmed out (PhotoCraft does that for a removal) and is
+//! treated as a placeholder. With a prompt it shows the real picture, and only what the prompt
+//! names changes.
 use craft_ai_core::payload::{base64_decode, base64_encode};
 use craft_ai_core::{AiError, ErrorKind, InputRole, Payload, Request};
 use craft_ai_media::mask::{self, Bounds, ReferenceRule};
