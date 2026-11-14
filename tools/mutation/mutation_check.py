@@ -656,7 +656,37 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM, 'rp': RP, 'rr': RR}
+# NV2: a library workflow using steps not known to keep data local is named and asked about.
+STEPS = C + 'ai-comfyui/src/local_steps.rs'
+CONSENT_CORE = C + 'ai-core/src/consent.rs'
+CLIENT_RUN = C + 'ai-client/src/client_run.rs'
+EGUI_TEXT = C + 'ai-egui/src/text.rs'
+WS = [
+    ('steps-any-class-known', STEPS, '.filter(|class| !KNOWN_LOCAL_STEPS.contains(class))', '.filter(|_| false)', 'craft-ai-comfyui', 'local_steps', 'every_other_step'),
+    ('steps-identity-cut', STEPS, '.map(str::to_owned)', '.map(|c| c.chars().take(80).collect())', 'craft-ai-comfyui', 'local_steps', 'exact_however_long'),
+    ('steps-label-unnamed-dropped', EGUI_TEXT, '"(unnamed step)".to_owned()', '"LoadImage".to_owned()', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
+    ('steps-label-not-cleaned', EGUI_TEXT, '.filter(|c| !c.is_control())', '.filter(|_| true)', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
+    ('steps-label-uncut', EGUI_TEXT, '.take(STEP_LABEL_CHARS)', '.take(usize::MAX)', 'craft-ai-egui', 'lib', 'unknown_workflow_steps'),
+    ('steps-not-in-plan', CLIENT_RUN, 'if !steps.is_empty() {\n            disclosure.locality = Locality::Remote;', 'if false {\n            disclosure.locality = Locality::Remote;', CL, 'comfyui_steps', 'nothing_is_sent_until'),
+    ('steps-stay-local', CLIENT_RUN, '            disclosure.locality = Locality::Remote;\n', '', CL, 'comfyui_steps', 'nothing_is_sent_until'),
+    ('steps-change-not-rechecked', 'crates/ai-client/src/factory/comfyui.rs', 'if steps != agreed {', 'if false {', 'craft-ai-client', 'comfyui_steps', 'changed_after_planning'),
+    ('steps-provider-case-sensitive', CLIENT_RUN, 'connection.provider.eq_ignore_ascii_case("comfyui")', 'connection.provider == "comfyui"', CL, 'comfyui_steps', 'mixed_case_comfyui_names'),
+    ('steps-other-providers-checked', CLIENT_RUN, 'if !is_comfyui(connection) {', 'if false {', CL, 'comfyui_steps', 'not_comfyui'),
+    ('steps-build-reads-library-again', 'crates/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let snapshot = if false {', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
+    ('steps-build-unchecked', 'crates/ai-client/src/factory/comfyui.rs', 'self.workflows,', 'load(factory.comfyui_library.as_deref())?,', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
+    ('steps-snapshot-before-key', 'crates/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let _ = secret_for(&*self.secrets, &plan.connection)?;\n        let snapshot = if is_comfyui(&plan.connection) {', 'craft-ai-client', 'comfyui_steps', 'refused_before_key_read'),
+    ('steps-selected-model-required', 'crates/ai-client/src/factory/comfyui.rs', 'let steps = workflows\n                .iter()\n                .find(|w| w.id() == model)', 'let steps = workflows\n                .iter()\n                .find(|_| true)', 'craft-ai-client', 'comfyui_steps', 'absent_selected_workflow'),
+    ('steps-own-builder-bypassed', C + 'ai-client/src/factory/comfyui.rs', 'if !self.comfyui_built_in {', 'if false {', CL, 'comfyui_steps', 'own_comfyui_builder'),
+    ('steps-grant-widens-wider-record', CONSENT_CORE, '.find(|r| r.same_scope(d) && r.expires_at == expires_at)', '.find(|r| r.covers(d) && r.expires_at == expires_at)', M, 'consent_steps', 'does_not_widen'),
+    ('steps-renewal-shortens-wider-record', CONSENT_CORE, '.filter(|r| r.same_scope(d) && r.expires_at != expires_at)', '.filter(|r| r.covers(d) && r.expires_at != expires_at)', M, 'consent_steps', 'does_not_widen'),
+    ('steps-grant-set-broadened', CONSENT_CORE, '.all(|s| d.unknown_steps.contains(s))', '.all(|_| true)', M, 'consent_step_grants', 'a_narrow_image_grant'),
+    ('steps-grant-set-order-sensitive', CONSENT_CORE, '.all(|s| d.unknown_steps.contains(s))', '.all(|s| d.unknown_steps.contains(s)) && self.unknown_steps == d.unknown_steps', M, 'consent_step_grants', 'exact_step_sets_merge_kinds'),
+    ('steps-grant-scope-ignored', CONSENT_CORE, 'self.covers(d)', 'true', M, 'consent_step_grants', 'matching_step_sets_do_not_merge_other_consent_scopes'),
+    ('steps-consent-ignores-steps', CONSENT_CORE, '.all(|s| self.unknown_steps.contains(s))', '.all(|_| true)', M, 'consent_steps', 'agreement'),
+    ('steps-not-recorded', CONSENT_CORE, '                unknown_steps: d.unknown_steps.clone(),', '                unknown_steps: vec![],', M, 'consent_steps', 'covers_the_steps'),
+]
+
+GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM, 'rp': RP, 'rr': RR, 'ws': WS}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

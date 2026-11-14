@@ -9,6 +9,8 @@ use craft_ai_features::{Feature, Gpu, GpuVendor, Os, SystemProfile};
 use craft_ai_native::secrets::MemoryStore;
 use craft_ai_native::shared::SharedStore;
 
+mod comfyui_steps_rig;
+
 const JARGON: &[&str] = &[
     "candle",
     "burn",
@@ -269,4 +271,29 @@ fn the_plain_text_check_itself_catches_jargon() {
         ["adapter", "candle"]
     );
     assert!(jargon_in("This app can't use this option yet.").is_empty());
+}
+
+#[test]
+fn what_a_workflow_with_add_on_steps_says_is_plain() {
+    use craft_ai_core::ConsentLedger;
+    let w = comfyui_steps_rig::World::new();
+    w.write(&["HttpPost"]);
+    let plan = w
+        .client
+        .plan(&comfyui_steps_rig::role(), comfyui_steps_rig::request())
+        .unwrap();
+    let mut texts = vec![
+        w.client
+            .start(&plan, &ConsentLedger::default())
+            .unwrap_err()
+            .message,
+    ];
+    let mut ledger = ConsentLedger::default();
+    ledger.grant(plan.disclosure());
+    w.write(&[]);
+    texts.push(w.client.start(&plan, &ledger).unwrap_err().message);
+    assert!(texts[1].contains("workflow changed"), "{}", texts[1]);
+    for t in &texts {
+        assert!(jargon_in(t).is_empty(), "{t}");
+    }
 }

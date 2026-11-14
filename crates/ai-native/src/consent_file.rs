@@ -107,6 +107,7 @@ mod tests {
             capability: Some(CapabilityId::parse("image.inpaint").unwrap()),
             kinds: vec![],
             expires_at: Some(1_000),
+            unknown_steps: vec![],
         });
         l
     }
