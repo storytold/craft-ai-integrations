@@ -4,6 +4,8 @@
 //! module is built around one rule: **nothing runs, ever, during an install.** What it does:
 //!
 //! - [`parse_pack`] understands `https://github.com/owner/repo` (optionally `/tree/<ref>`).
+//!   A ref written as a commit id is accepted only when the repository's default branch
+//!   contains it, because GitHub also serves a fork's commits under the original name.
 //! - [`Resolver::resolve_pack`](super::Resolver::resolve_pack) pins the address to one commit and
 //!   describes it for the person: the commit, its first line, its date, the licence, and whether
 //!   the repository is archived. Only public repositories.
@@ -37,7 +39,8 @@ pub(super) use archive::unpack;
 pub struct PackSpec {
     pub owner: String,
     pub repo: String,
-    /// A branch or tag; the repository's default branch when absent.
+    /// A branch, a tag or a commit id; the repository's default branch when absent. A commit
+    /// id is installed only when the default branch contains it.
     pub reference: Option<String>,
 }
 

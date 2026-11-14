@@ -44,6 +44,59 @@ impl<'a> Api<'a> {
         url: &str,
         token: Option<&SecretString>,
     ) -> Result<Value, AiError> {
+        self.read(self.send_get(kind, url, token))
+    }
+
+    /// Like [`Api::get`], but a 404 is `Ok(None)`: the thing asked about does not exist. Every
+    /// other failure is still an error.
+    pub fn get_if_found(
+        &self,
+        kind: SourceKind,
+        url: &str,
+        token: Option<&SecretString>,
+    ) -> Result<Option<Value>, AiError> {
+        let response = self.send_get(kind, url, token)?;
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        self.read(Ok(response)).map(Some)
+    }
+
+    /// Reads a reply that may be large (GitHub's compare lists the changed files) into `T`
+    /// as it arrives, so only the fields `T` names are kept. At most `max_bytes` are accepted:
+    /// one byte more is read, and a reply that reaches it is refused even when what came
+    /// before it parsed, so a cut-off reply is never taken as a whole one.
+    pub fn get_streamed<T: serde::de::DeserializeOwned>(
+        &self,
+        kind: SourceKind,
+        url: &str,
+        token: Option<&SecretString>,
+        max_bytes: u64,
+    ) -> Result<T, AiError> {
+        let body = self.body(self.send_get(kind, url, token))?;
+        let mut limited = body.into_reader().take(max_bytes.saturating_add(1));
+        let unreadable =
+            |_: serde_json::Error| refused("the source's reply was too large or not readable");
+        let parsed = {
+            let mut reader = serde_json::Deserializer::from_reader(&mut limited);
+            let parsed = T::deserialize(&mut reader).map_err(unreadable)?;
+            reader.end().map_err(unreadable)?;
+            parsed
+        };
+        if limited.limit() == 0 {
+            return Err(refused("the source's reply was too large or not readable"));
+        }
+        Ok(parsed)
+    }
+
+    /// Sends one checked GET: the address must be one of the kind's hosts, and the token goes
+    /// only to the kind's token host.
+    fn send_get(
+        &self,
+        kind: SourceKind,
+        url: &str,
+        token: Option<&SecretString>,
+    ) -> Result<ureq::http::Response<ureq::Body>, AiError> {
         let (url, token) = self.checked(kind, url, token)?;
         // The agent itself carries no proxy, so a loopback source an app allowed never sends
         // its requests (token included) to a proxy host; a hosted one may use the environment's.
@@ -59,7 +112,9 @@ impl<'a> Api<'a> {
         if let Some(token) = token {
             request = request.header("Authorization", format!("Bearer {}", token.expose()));
         }
-        self.read(request.call())
+        request
+            .call()
+            .map_err(|_| AiError::new(ErrorKind::Network, "could not reach the model source"))
     }
 
     pub fn post(
@@ -84,7 +139,11 @@ impl<'a> Api<'a> {
         if let Some(token) = token {
             request = request.header("Authorization", format!("Bearer {}", token.expose()));
         }
-        self.read(request.send(body.to_string().as_bytes()))
+        self.read(
+            request
+                .send(body.to_string().as_bytes())
+                .map_err(|_| AiError::new(ErrorKind::Network, "could not reach the model source")),
+        )
     }
 
     /// The parsed address, and the token only if this address is the kind's token host.
@@ -111,12 +170,34 @@ impl<'a> Api<'a> {
         Ok((parsed, token))
     }
 
+    /// A small JSON reply, read whole and parsed.
     fn read(
         &self,
-        result: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+        result: Result<ureq::http::Response<ureq::Body>, AiError>,
     ) -> Result<Value, AiError> {
-        let response = result
-            .map_err(|_| AiError::new(ErrorKind::Network, "could not reach the model source"))?;
+        let mut bytes = Vec::new();
+        self.body(result)?
+            .into_reader()
+            .take(MAX_REPLY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| {
+                AiError::new(
+                    ErrorKind::Network,
+                    "the connection broke while reading the reply",
+                )
+            })?;
+        if bytes.len() as u64 > MAX_REPLY_BYTES {
+            return Err(refused("the source's reply was too large"));
+        }
+        serde_json::from_slice(&bytes).map_err(|_| refused("the source's reply was not readable"))
+    }
+
+    /// The reply's body when its status is a success; otherwise the error the status means.
+    fn body(
+        &self,
+        result: Result<ureq::http::Response<ureq::Body>, AiError>,
+    ) -> Result<ureq::Body, AiError> {
+        let response = result?;
         let status = response.status().as_u16();
         match status {
             200..=299 => {}
@@ -144,22 +225,7 @@ impl<'a> Api<'a> {
                 ));
             }
         }
-        let mut bytes = Vec::new();
-        response
-            .into_body()
-            .into_reader()
-            .take(MAX_REPLY_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| {
-                AiError::new(
-                    ErrorKind::Network,
-                    "the connection broke while reading the reply",
-                )
-            })?;
-        if bytes.len() as u64 > MAX_REPLY_BYTES {
-            return Err(refused("the source's reply was too large"));
-        }
-        serde_json::from_slice(&bytes).map_err(|_| refused("the source's reply was not readable"))
+        Ok(response.into_body())
     }
 }
 
