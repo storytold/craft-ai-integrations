@@ -221,6 +221,14 @@ U4 = [
     ('pack-subject-unclean', PACK_RESOLVE, 'let clean: String = line.chars().filter(|c| !c.is_control()).take(120).collect();', 'let clean: String = line.chars().take(120).collect();', E, 'nodepack', 'one_short_clean_line'),
     ('pack-subject-unbounded', PACK_RESOLVE, '.take(120)', '.take(1200)', E, 'nodepack', 'one_short_clean_line'),
     ('pack-archive-unpinned', PACK_RESOLVE, '&format!("{sha}.tar.gz")', '&format!("{}.tar.gz", spec.reference.as_deref().unwrap_or("main"))', E, 'nodepack', 'pinned_to_a_commit'),
+    ('pack-commit-not-compared', PACK_RESOLVE, 'if !matches!(comparison.status.as_str(), "behind" | "identical") {', 'if false {', E, 'nodepack_commit', 'does_not_contain'),
+    ('pack-commit-ahead-accepted', PACK_RESOLVE, '"behind" | "identical"', '"behind" | "identical" | "ahead" | "diverged"', E, 'nodepack_commit', 'does_not_contain'),
+    ('pack-every-ref-trusted', PACK_RESOLVE, 'Some(r) => names_own_ref(', 'Some(r) => r.is_empty() || !r.is_empty() || names_own_ref(', E, 'nodepack_commit', 'other_spelling'),
+    ('pack-ref-sha-unchecked', PACK_RESOLVE, '&& target.get("sha").and_then(Value::as_str) == Some(sha)', '', E, 'nodepack_commit', 'points_at_another_commit'),
+    ('pack-ref-lookup-error-ignored', PACK_RESOLVE, 'api.get_if_found(SourceKind::NodePack, &address, token)? else {', 'api.get_if_found(SourceKind::NodePack, &address, token).ok().flatten() else {', E, 'nodepack_commit', 'failed_branch_lookup'),
+    ('pack-tag-not-peeled', PACK_RESOLVE, 'for _ in 0..MAX_TAG_DEPTH {', 'for _ in 0..0 {', E, 'nodepack_commit', 'need_no_comparison'),
+    ('pack-compare-overflow-accepted', API, 'if limited.limit() == 0 {', 'if false {', E, 'nodepack_commit', 'longer_than_the_limit'),
+    ('pack-compare-read-small', PACK_RESOLVE, 'const MAX_COMPARE_BYTES: u64 = 32 * 1024 * 1024;', 'const MAX_COMPARE_BYTES: u64 = 2 * 1024 * 1024;', E, 'nodepack_commit', 'long_comparison'),
     ('pack-consent-for-any-commit', PACK_INSTALL, 'if !consent.is_some_and(|c| c.commit == candidate.commit) {', 'if consent.is_none() {', E, 'nodepack', 'consent_to_run_code'),
     ('pack-consent-not-needed', PACK_INSTALL, 'if !consent.is_some_and(|c| c.commit == candidate.commit) {', 'if false {', E, 'nodepack', 'consent_to_run_code'),
     ('pack-folder-checked-after-download', PACK_INSTALL, 'if std::fs::symlink_metadata(&target).is_ok() {\n            return Err(PackError::Refused(PackRefusal::FolderTaken));\n        }\n        if cancel', 'if false {\n            return Err(PackError::Refused(PackRefusal::FolderTaken));\n        }\n        if cancel', E, 'nodepack', 'existing_folder_is_never'),
@@ -686,7 +694,18 @@ WS = [
     ('steps-not-recorded', CONSENT_CORE, '                unknown_steps: d.unknown_steps.clone(),', '                unknown_steps: vec![],', M, 'consent_steps', 'covers_the_steps'),
 ]
 
-GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM, 'rp': RP, 'rr': RR, 'ws': WS}
+# NV1: a key sent over plain http to this computer is asked about first.
+CONSENT_KEY = C + 'ai-core/src/consent.rs'
+LK = [
+    ('local-key-not-asked', CONSENT_KEY, 'locality: Self::locality_for(connection),', 'locality: connection.locality,', M, 'local_key', 'needs_agreement'),
+    ('local-key-https-asked-too', CONSENT_KEY, '.is_some_and(|e| !e.https)', '.is_some_and(|_| true)', M, 'local_key', 'no_key_or_https'),
+    ('local-key-keyless-asked-too', CONSENT_KEY, 'connection.auth.secret_ref().is_some()\n            && connection', 'true\n            && connection', M, 'local_key', 'no_key_or_https'),
+    ('local-key-sent-unasked', CONSENT_KEY, '            Locality::Remote\n        } else {\n            connection.locality', '            connection.locality\n        } else {\n            connection.locality', CL, 'local_key', 'not_sent_until'),
+    ('local-key-not-shown', C + 'ai-egui/src/text.rs', 'if d.key_in_clear {', 'if false {', 'craft-ai-egui', 'lib', 'key_sent_unencrypted'),
+    ('local-key-flag-unset', CONSENT_KEY, 'key_in_clear: Self::sends_key_in_clear(connection),', 'key_in_clear: false,', M, 'local_key', 'needs_agreement'),
+]
+
+GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM, 'rp': RP, 'rr': RR, 'lk': LK, 'ws': WS}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

@@ -55,6 +55,9 @@ pub fn disclosure_lines(d: &Disclosure) -> Vec<String> {
     if !d.unknown_steps.is_empty() {
         lines.push(unknown_steps_line(&d.unknown_steps));
     }
+    if d.key_in_clear {
+        lines.push(KEY_IN_CLEAR_LINE.to_owned());
+    }
     lines
 }
 
@@ -95,6 +98,10 @@ pub fn unknown_steps_line(steps: &[String]) -> String {
     }
     format!("the workflow uses add-on steps that may send this off this computer: {names}")
 }
+
+/// Says the saved key goes too, and why that is asked about although the address is on this
+/// computer.
+pub const KEY_IN_CLEAR_LINE: &str = "your saved key, unencrypted: whichever program is using this address on this computer receives it, and on a computer shared with other people that could be someone else's program";
 
 /// The headline above the list.
 pub fn consent_headline(d: &Disclosure, app_label: &str) -> String {
@@ -193,6 +200,7 @@ mod tests {
             items,
             param_names: params.iter().map(|s| (*s).to_owned()).collect(),
             unknown_steps: vec![],
+            key_in_clear: false,
         }
     }
 
@@ -219,6 +227,17 @@ mod tests {
         assert!(odd.contains("(unnamed step), SendToHost, "), "{odd}");
         assert!(odd.ends_with(&"A".repeat(80)), "{odd}");
         assert!(!odd.contains(&"A".repeat(81)), "{odd}");
+    }
+
+    #[test]
+    fn a_key_sent_unencrypted_is_named_and_the_reason_given() {
+        let mut d = disclosure(vec![], &[]);
+        assert!(disclosure_lines(&d).iter().all(|l| !l.contains("key")));
+        d.key_in_clear = true;
+        let lines = disclosure_lines(&d);
+        assert_eq!(lines.last().map(String::as_str), Some(KEY_IN_CLEAR_LINE));
+        assert!(KEY_IN_CLEAR_LINE.contains("saved key, unencrypted"));
+        assert!(KEY_IN_CLEAR_LINE.contains("someone else's program"));
     }
 
     #[test]

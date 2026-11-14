@@ -148,7 +148,7 @@ fn a_fill_sends_the_mask_as_a_second_picture_with_the_key_only_in_a_header() {
         "{instruction}"
     );
     assert!(
-        instruction.contains("placeholder with: a red door."),
+        instruction.contains("The requested change is: \"a red door\"."),
         "{instruction}"
     );
     assert_eq!(

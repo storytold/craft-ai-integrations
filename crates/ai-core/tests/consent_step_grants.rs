@@ -21,6 +21,7 @@ fn disclosure(steps: &[&str], kinds: &[PayloadKind]) -> Disclosure {
             .collect(),
         param_names: vec![],
         unknown_steps: steps.iter().map(|s| (*s).to_owned()).collect(),
+        key_in_clear: false,
     }
 }
 

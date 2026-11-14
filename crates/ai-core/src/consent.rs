@@ -9,10 +9,11 @@
 //! text does not renew an image permission that has run out. Records saved before capabilities
 //! were scoped
 //! cover nothing, so they ask once more. The clock is the caller's (unix seconds). Local
-//! disclosures never need consent; a local workflow with steps not known to stay local is
-//! planned as remote and names those steps, which an agreement must name too. The disclosure
-//! names exactly what this app sends, which is why consent stays in the app even when the key
-//! came from the launcher.
+//! disclosures never need consent, except two that are planned as remote: a connection that
+//! sends a key over plain http (see [`Disclosure::locality_for`]), and a local workflow with
+//! steps not known to stay local, which names those steps so an agreement must name them too.
+//! The disclosure names exactly what this app sends, which is why consent stays in the app even
+//! when the key came from the launcher.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +51,10 @@ pub struct Disclosure {
     /// other steps, or for none, does not cover them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_steps: Vec<String>,
+    /// The connection's saved key goes with the request, unencrypted, to an address on this
+    /// computer (see [`Disclosure::sends_key_in_clear`]). Never the key itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub key_in_clear: bool,
 }
 
 impl Disclosure {
@@ -64,6 +69,30 @@ impl Disclosure {
             .unwrap_or_else(|| connection.provider.clone())
     }
 
+    /// Where a request on `connection` may end up. A key sent over plain http to an address on
+    /// this computer goes to whichever program holds that port, and on a computer shared by
+    /// several accounts that can be another person's program. Nothing here can tell whose it
+    /// is, so such a request counts as leaving this computer and is asked about first. Over
+    /// https, or with no key, the connection's own locality stands.
+    pub fn locality_for(connection: &Connection) -> Locality {
+        if Self::sends_key_in_clear(connection) {
+            Locality::Remote
+        } else {
+            connection.locality
+        }
+    }
+
+    /// Whether a request on `connection` sends its saved key over plain http, which only an
+    /// address on this computer may use. Whichever program holds that port reads the key.
+    pub fn sends_key_in_clear(connection: &Connection) -> bool {
+        connection.auth.secret_ref().is_some()
+            && connection
+                .endpoint
+                .as_deref()
+                .and_then(|e| Endpoint::parse(e).ok())
+                .is_some_and(|e| !e.https)
+    }
+
     /// What `request` on `connection` would send for `app`, as the consent screen shows it.
     pub fn for_request(app: &AppId, connection: &Connection, request: &Request) -> Self {
         let destination = Self::destination_for(connection);
@@ -71,7 +100,8 @@ impl Disclosure {
             app: app.clone(),
             connection: connection.id.clone(),
             capability: request.capability.clone(),
-            locality: connection.locality,
+            locality: Self::locality_for(connection),
+            key_in_clear: Self::sends_key_in_clear(connection),
             destination,
             items: request
                 .inputs

@@ -30,6 +30,7 @@ fn disclosure(locality: Locality) -> Disclosure {
         }],
         param_names: vec!["size".into()],
         unknown_steps: vec![],
+        key_in_clear: false,
     }
 }
 

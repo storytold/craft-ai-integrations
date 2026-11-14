@@ -35,6 +35,7 @@ fn harness() -> Harness<'static, State> {
                 items: vec![],
                 param_names: vec![],
                 unknown_steps: vec![],
+                key_in_clear: false,
             },
             prompt: ConsentPromptState::default(),
             last: None,
@@ -143,6 +144,7 @@ fn the_original_prompt_offers_no_duration() {
         items: vec![],
         param_names: vec![],
         unknown_steps: vec![],
+        key_in_clear: false,
     };
     let mut h = Harness::new_ui_state(
         |ui, last: &mut Option<ConsentChoice>| {
