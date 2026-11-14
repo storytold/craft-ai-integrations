@@ -9,12 +9,14 @@ use crate::feature::{AppStatus, AppUse, Feature};
 use crate::recipe::CloudOption;
 
 mod ben2_vitmatte;
+mod depth_anything;
 mod florence2;
 mod inspyrenet;
 mod sam21;
 mod sam3;
 use ben2_vitmatte::ben2_vitmatte;
 use craft_ai_core::{CapabilityId, InputRole};
+use depth_anything::depth_anything;
 pub use florence2::FLORENCE2_LARGE_DIR;
 use inspyrenet::inspyrenet;
 use sam3::sam3;
@@ -88,6 +90,17 @@ fn try_builtin() -> Option<Vec<Feature>> {
     // Built in only: InSPyReNet (Burn, any graphics card) and BEN2 + ViTMatte (rten, on the
     // processor); no hosted route yet.
     background.locals = vec![inspyrenet(), ben2_vitmatte()];
+
+    let mut depth = feature(
+        "estimate-depth",
+        "Estimate depth",
+        "Work out how near each part of the picture is, as a grey map where white is near.",
+        "image.depth",
+    )?;
+    depth.inputs = vec![InputRole::Source];
+    depth.uses = uses(&[("PhotoCraft", "Estimate Depth for the surface brush")]);
+    // Built in only: Depth Anything V2 Small on Candle, on the processor; no hosted route.
+    depth.locals = vec![depth_anything()];
 
     let mut remove = feature(
         "remove-object",
@@ -214,6 +227,6 @@ fn try_builtin() -> Option<Vec<Feature>> {
     ];
 
     Some(vec![
-        select, background, remove, fill, expand, extend, image, video,
+        select, background, remove, fill, expand, extend, image, video, depth,
     ])
 }

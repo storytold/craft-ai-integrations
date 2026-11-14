@@ -57,8 +57,8 @@ fn each_sample_matches_its_tool_and_validates_against_its_role() {
         }
     }
     assert_eq!(
-        with_samples, 5,
-        "select, remove, fill, image and video have samples; expand and extend do not"
+        with_samples, 6,
+        "select, remove, fill, image, video and depth have samples; expand and extend do not"
     );
 }
 
@@ -80,4 +80,22 @@ fn a_tool_with_no_adapter_has_no_sample() {
         let f = builtin().into_iter().find(|f| f.id == id).unwrap();
         assert!(sample_request(&f).is_none(), "{id}");
     }
+}
+
+/// Estimate depth's sample is one small picture with a gradient and a darker disc, nothing else.
+#[test]
+fn the_depth_sample_is_a_small_gradient_picture() {
+    let depth = builtin()
+        .into_iter()
+        .find(|f| f.id == "estimate-depth")
+        .unwrap();
+    let request = sample_request(&depth).unwrap();
+    assert_eq!(request.inputs.len(), 1, "a picture and nothing else");
+    let (w, h, pixels) = decode(&inline(&request, &InputRole::Source));
+    assert_eq!((w, h), (64, 64));
+    assert!(pixels[10] < pixels[60], "the ground brightens to the right");
+    assert!(
+        pixels[32 * 64 + 32] < pixels[32 * 64 + 50],
+        "the disc is darker"
+    );
 }

@@ -127,7 +127,7 @@ enabled from a weights file, the client planning and starting a job, the output 
 
 For the launcher to offer the model, add a `NativeRoute` (engine name and model id, matching
 `engine()` and `model().id` above) to the recipe whose weights it reads, in
-`crates/ai-features/src/catalogue.rs`. A tool can list several recipes; its built-in runtimes are
+`crates/ai-features/src/catalogue/` (the feature list is `mod.rs`, and each recipe has its own file, for example `depth_anything.rs`). A tool can list several recipes; its built-in runtimes are
 taken from the first recipe that can run, the same one `ToolDesk::enable_local` registers.
 Nothing else in any app changes.
 

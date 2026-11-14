@@ -114,6 +114,38 @@ pub(crate) fn encode_mask(alpha: &[f32], width: usize, height: usize) -> Result<
     Ok(out)
 }
 
+/// Depth 0..65535 per pixel as a 16-bit grayscale PNG (white is near). `values` must be exactly
+/// `width * height` long.
+pub(crate) fn encode_depth16(
+    values: &[u16],
+    width: usize,
+    height: usize,
+) -> Result<Vec<u8>, AiError> {
+    fn fail<E>(_: E) -> AiError {
+        AiError::new(
+            craft_ai_core::ErrorKind::Internal,
+            "The depth map could not be saved.",
+        )
+    }
+    if width.checked_mul(height) != Some(values.len()) {
+        return Err(fail(()));
+    }
+    let big_endian: Vec<u8> = values.iter().flat_map(|v| v.to_be_bytes()).collect();
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(
+        &mut out,
+        u32::try_from(width).map_err(fail)?,
+        u32::try_from(height).map_err(fail)?,
+    );
+    encoder.set_color(ColorType::Grayscale);
+    encoder.set_depth(BitDepth::Sixteen);
+    encoder.set_compression(png::Compression::Fast);
+    let mut writer = encoder.write_header().map_err(fail)?;
+    writer.write_image_data(&big_endian).map_err(fail)?;
+    writer.finish().map_err(fail)?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +203,29 @@ mod tests {
             back.bytes.iter().step_by(3).copied().collect::<Vec<_>>(),
             vec![0, 255, 128, 255]
         );
+    }
+
+    /// A depth map is a 16-bit grayscale PNG at the given size and keeps every value exactly.
+    #[test]
+    fn a_depth_map_round_trips_as_16_bit_grayscale() {
+        let values = [0u16, 1, 256, 65_535, 40_000, 12_345];
+        let png = encode_depth16(&values, 3, 2).unwrap();
+        let mut reader = png::Decoder::new(Cursor::new(&png)).read_info().unwrap();
+        let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut buf).unwrap();
+        assert_eq!(
+            (frame.width, frame.height, frame.color_type, frame.bit_depth),
+            (3, 2, ColorType::Grayscale, BitDepth::Sixteen)
+        );
+        let back: Vec<u16> = buf[..frame.buffer_size()]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_be_bytes(*c))
+            .collect();
+        assert_eq!(back, values);
+        // A length that is not width x height is refused, not written wrongly.
+        assert!(encode_depth16(&values, 4, 2).is_err());
     }
 
     /// A one-row picture inside the pixel limit but with a row wider than the PNG decoder's default

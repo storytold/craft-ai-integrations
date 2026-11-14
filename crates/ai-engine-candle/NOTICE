@@ -16,3 +16,17 @@ Apache License 2.0 only, not under the MIT option of the rest of this repository
 The SAM 3 weights are not part of this repository and are never distributed with it. A person
 downloads Meta's facebook/sam3 checkpoint only when they choose to, under Meta's SAM License
 (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate, non-OSI licence.
+
+The Depth Anything V2 Small runner (`src/depth.rs` and `src/depth/`) uses the `depth_anything_v2`
+and `dinov2` network code of the `candle-transformers` crate (https://github.com/huggingface/candle,
+licensed MIT OR Apache-2.0), unported and taken as a dependency. The code around it (resizing, the
+tiled high-quality pass, the 16-bit result) was written by the PhotoCraft contributors (2026) as
+the `photocraft-depth` crate (https://github.com/storytold/photocraft, crates/depth) and moved into
+this crate under the craft-ai-engine runner contract. PhotoCraft is licensed MIT OR Apache-2.0, and
+that code is used here under the Apache License 2.0, like the rest of this crate.
+
+The Depth Anything V2 Small weights (https://huggingface.co/depth-anything/Depth-Anything-V2-Small,
+Apache-2.0) and the DINOv2 ViT-S/14 backbone (https://github.com/facebookresearch/dinov2, Apache-2.0)
+are not part of this repository and are never distributed with it. A person downloads the
+candle-format conversions at https://huggingface.co/pcuenq/candle-depth-anything-v2-small when they
+choose to.
