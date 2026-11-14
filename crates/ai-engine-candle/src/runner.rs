@@ -33,7 +33,7 @@ const MODEL: &str = "sam3";
 
 /// Every runner this crate offers, for an `EngineRegistry`.
 pub fn runners() -> Vec<Arc<dyn ModelRunner>> {
-    vec![Arc::new(Sam3Runner)]
+    vec![Arc::new(Sam3Runner), crate::depth::runner()]
 }
 
 /// SAM 3 on the Candle engine.
