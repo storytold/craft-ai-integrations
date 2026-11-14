@@ -53,12 +53,12 @@ fn bare() -> Inventory {
     }
 }
 
-/// The catalogue has eight features with unique ids, each with a title, summary and app uses,
+/// The catalogue has nine features with unique ids, each with a title, summary and app uses,
 /// every hosted option names a real preset and no feature claims an app ships it yet.
 #[test]
 fn the_catalogue_is_complete_and_consistent() {
     let all = builtin();
-    assert_eq!(all.len(), 8, "a bad capability id empties the list");
+    assert_eq!(all.len(), 9, "a bad capability id empties the list");
     let ids: HashSet<_> = all.iter().map(|f| f.id.as_str()).collect();
     assert_eq!(ids.len(), all.len());
     let presets: HashSet<_> = PRESETS.iter().map(|p| p.key).collect();
@@ -273,7 +273,7 @@ fn every_tool_has_a_role_that_names_its_inputs() {
     }
 }
 
-/// What five of PhotoCraft's six AI tools need from the shared layer: (tool id, capability, inputs
+/// What six of PhotoCraft's seven AI tools need from the shared layer: (tool id, capability, inputs
 /// sent). The sixth, Image to Image, is not here on purpose: its entry ("Change a picture",
 /// `image.edit`, hosted through OpenAI) was taken out of the catalogue until the tool is added
 /// properly. It is in the first commit of the PR that added this list, to be put back from there.
@@ -287,6 +287,7 @@ const PHOTOCRAFT_TOOLS: &[(&str, &str, &[&str])] = &[
     ("remove-object", "image.inpaint", &["source", "mask"]),
     ("remove-background", "image.matte", &["source"]),
     ("select-subject", "image.segment", &["source", "prompt"]),
+    ("estimate-depth", "image.depth", &["source"]),
 ];
 
 #[test]

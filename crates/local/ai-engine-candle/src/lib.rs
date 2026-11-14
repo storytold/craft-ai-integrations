@@ -1,5 +1,6 @@
-//! SAM 3 (Segment Anything with Concepts, Meta, 2025) as a built-in engine: the `candle` runner
-//! behind the `image.segment` capability, for every app that asks for it.
+//! Built-in models on the Candle engine, for every app that asks for them: SAM 3 (Segment Anything
+//! with Concepts, Meta, 2025) behind the `image.segment` capability, and Depth Anything V2 Small
+//! (see the `depth` module's docs) behind `image.depth`, the Estimate depth tool.
 //!
 //! An app does not use this crate directly. It puts [`runners`] in an
 //! [`EngineRegistry`](craft_ai_engine::EngineRegistry) and asks the client for a capability; see
@@ -21,6 +22,12 @@
 //! catalogue (`craft-ai-features`) names the exact files, sizes and SHA-256.
 //!
 //! # Provenance and licence
+//!
+//! Depth Anything V2 Small: the network is `candle-transformers`'s own `depth_anything_v2` and
+//! `dinov2` code (MIT OR Apache-2.0); the picture handling around it is from PhotoCraft's
+//! `photocraft-depth` crate. See `NOTICE`.
+//!
+//! SAM 3:
 //!
 //! The model code in this crate comes from LightCraft's `lightcraft-segment` crate
 //! (storytold/lightcraft, `crates/segment`, as of its `origin/main` on 17/10/2026, including the
@@ -51,10 +58,12 @@ mod tracker;
 mod vit;
 mod weights;
 
+mod depth;
 mod image_io;
 mod jpeg;
 mod runner;
 
+pub use depth::{BACKBONE_FILE, DepthRunner, HEAD_FILE};
 pub use runner::{Sam3Runner, runners};
 
 use std::path::{Path, PathBuf};
