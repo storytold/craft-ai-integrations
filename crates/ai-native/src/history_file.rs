@@ -87,15 +87,24 @@ impl HistoryFile {
         }
         line.push(b'\n');
         with_lock(&self.path, || {
+            // Records can hold prompts: the file is the user's alone, whatever the umask, and a
+            // file left readable by an older version is tightened before it is rotated or
+            // written to, so neither the live file nor the copy it becomes stays readable.
+            #[cfg(unix)]
+            {
+                tighten(&self.path)?;
+                // `read` includes the rotated copy, so an old readable one is tightened too.
+                tighten(&self.rotated_path())?;
+            }
             let len = fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
             if len > 0 && len + line.len() as u64 > self.max_bytes {
                 fs::rename(&self.path, self.rotated_path())?;
             }
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .read(true)
-                .open(&self.path)?;
+            let mut options = OpenOptions::new();
+            options.create(true).append(true).read(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&self.path)?;
             // A crash can leave a line with no newline. Starting on a fresh line keeps the next
             // record readable instead of gluing it to the damage.
             if ends_mid_line(&mut file)? {
@@ -132,6 +141,24 @@ impl HistoryFile {
             }
             Ok(())
         })
+    }
+}
+
+/// Tightens an existing history file to owner-only access. A file an older version created under
+/// a permissive umask is fixed here, before it is written to or renamed, so the rotated copy is
+/// private too.
+#[cfg(unix)]
+fn tighten(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            if metadata.permissions().mode() & 0o777 != 0o600 {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(())
+        }
+        // A missing file gains the mode when it is created; anything else is not ours to change.
+        _ => Ok(()),
     }
 }
 

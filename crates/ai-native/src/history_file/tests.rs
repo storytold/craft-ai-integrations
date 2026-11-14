@@ -173,3 +173,57 @@ fn a_file_far_over_the_cap_is_refused_not_loaded() {
     fs::write(file.path(), vec![b'a'; 1024 + MAX_LINE_BYTES + 1]).unwrap();
     assert!(file.read().is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_history_file_is_private_to_the_user_even_if_it_was_not_before() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jobs.jsonl");
+    let file = HistoryFile::new(&path).with_max_bytes(1024);
+    file.append(&start("a")).unwrap();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), 0o600);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    file.append(&end("a")).unwrap();
+    assert_eq!(mode(&path), 0o600);
+    // Rotation renames the live file, so the rotated copy keeps the private mode too.
+    for i in 0..40 {
+        file.append(&start(&format!("r{i}"))).unwrap();
+    }
+    assert_eq!(mode(&file.rotated_path()), 0o600);
+    assert_eq!(mode(&path), 0o600);
+}
+
+/// A readable file an older version wrote, caught over the cap on its first append: the rotation
+/// renames it, so it must be tightened before that happens, not after.
+#[cfg(unix)]
+#[test]
+fn a_legacy_readable_file_that_rotates_is_private_before_it_is_renamed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jobs.jsonl");
+    let file = HistoryFile::new(&path).with_max_bytes(1024);
+    fs::write(&path, vec![b'a'; 1024]).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    file.append(&end("b")).unwrap();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&file.rotated_path()), 0o600);
+    assert_eq!(mode(&path), 0o600);
+}
+
+/// An append below the cap does not rotate, but `read` still shows the rotated copy an older
+/// version left readable: it is tightened by the append.
+#[cfg(unix)]
+#[test]
+fn an_old_readable_rotated_file_is_tightened_by_an_append_that_does_not_rotate() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jobs.jsonl");
+    let file = HistoryFile::new(&path).with_max_bytes(1 << 20);
+    fs::write(file.rotated_path(), b"").unwrap();
+    fs::set_permissions(file.rotated_path(), fs::Permissions::from_mode(0o644)).unwrap();
+    file.append(&start("a")).unwrap();
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&file.rotated_path()), 0o600);
+}
