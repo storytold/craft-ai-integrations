@@ -592,6 +592,7 @@ from mutation_first_run import FR  # noqa: E402
 from mutation_gemini import GI  # noqa: E402
 from mutation_mcp_gateway import MG  # noqa: E402
 from mutation_keys import KF  # noqa: E402
+from mutation_engine_memory import CM, MM  # noqa: E402
 from mutation_run_record import RR  # noqa: E402
 from mutation_reply_parse import RP  # noqa: E402
 
@@ -685,7 +686,7 @@ WS = [
     ('steps-not-recorded', CONSENT_CORE, '                unknown_steps: d.unknown_steps.clone(),', '                unknown_steps: vec![],', M, 'consent_steps', 'covers_the_steps'),
 ]
 
-GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'rp': RP, 'ws': WS, 'rr': RR}
+GROUPS = {'mg': MG, 'gi': GI, 'fr': FR, 'be': BE, 'bo': BO, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 'at': AT, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF, 'eg': EG_CASES, 'ar': AR, 'rx': RX, 'kf': KF, 'mm': MM, 'cm': CM, 'rp': RP, 'rr': RR, 'ws': WS}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

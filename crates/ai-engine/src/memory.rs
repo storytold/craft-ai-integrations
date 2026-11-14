@@ -1,0 +1,399 @@
+//! Models kept in memory: what each one holds, letting go of them, and refusing a load that will
+//! not fit.
+//!
+//! A model stays loaded after its first run, because loading is the slow part. Nothing here runs
+//! on a timer: the app asks what is loaded, asks to unload, or asks to unload what has sat idle,
+//! whenever it chooses.
+//!
+//! Invariants: an unload never interrupts a run. A model a job holds is marked, and the job lets
+//! go of it as it finishes. A [`Residency`] says "loaded" exactly when its slot holds a model.
+
+use std::path::Path;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::time::{Duration, Instant};
+
+use craft_ai_core::{AiError, ModelId};
+use craft_ai_features::gigabytes;
+
+use crate::runner::LoadedModel;
+
+/// Reads how much memory this computer has free, in bytes. `None` when it cannot tell, and then
+/// no load is refused.
+pub type FreeMemory = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// One model held in memory, for a list a person can read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedModelInfo {
+    pub model: ModelId,
+    /// The model's name as a person sees it.
+    pub label: String,
+    /// Roughly how much memory it holds.
+    pub bytes: u64,
+    /// True when `bytes` is a stand-in (the weights file's size), because the model did not say.
+    pub estimated: bool,
+    /// A job is using it now, so an unload waits for that job to finish.
+    pub running: bool,
+    /// How long since a job last finished with it.
+    pub idle: Duration,
+}
+
+/// What an unload did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Unloaded {
+    /// Let go of now.
+    pub freed: Vec<ModelId>,
+    /// In use by a job; let go of as that job finishes.
+    pub after_run: Vec<ModelId>,
+}
+
+/// The slot a loaded model lives in. A job holds it for its whole turn.
+pub(crate) type Slot = Mutex<Option<Box<dyn LoadedModel>>>;
+
+#[derive(Default)]
+struct State {
+    /// Bytes held, and whether that figure is an estimate. `Some` exactly while loaded.
+    held: Option<(u64, bool)>,
+    /// A job holds the slot.
+    running: bool,
+    last_used: Option<Instant>,
+    unload_requested: bool,
+}
+
+/// What [`Residency::unload`] found.
+pub(crate) enum Outcome {
+    /// Taken out of its slot; dropping it frees the memory.
+    Freed(Box<dyn LoadedModel>),
+    /// A job holds it; it is let go of as that job finishes.
+    AfterRun,
+    /// Not loaded, or not idle long enough.
+    Untouched,
+}
+
+/// The memory side of one entry, readable without waiting for a run to finish.
+///
+/// Lock order: a job holds the slot, then takes this lock. [`Residency::unload`] holds this lock
+/// and only ever *tries* the slot, so the two never wait on each other. A slot it cannot take
+/// means a job holds it, which is how a running model is told apart. A job reads the unload
+/// request and lets go of the slot while it holds this lock, so an unload either finds the slot
+/// free or leaves a request the holder is certain to see: never one left for the next job.
+#[derive(Default)]
+pub(crate) struct Residency(Mutex<State>);
+
+impl Residency {
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Called by a job as soon as it holds the slot.
+    pub(crate) fn enter(&self) {
+        self.lock().running = true;
+    }
+
+    pub(crate) fn loaded(&self, bytes: u64, estimated: bool) {
+        self.lock().held = Some((bytes, estimated));
+    }
+
+    /// Ends a job's turn, however it went: lets go of the slot, emptying it first when `discard`
+    /// is set (the model was left in a bad state) or an unload was asked for meanwhile. Returns
+    /// the model taken out, for the caller to drop once no lock is held.
+    ///
+    /// The slot is released while this lock is held. An unload therefore never sees a job that
+    /// has left but still holds the slot, which would defer the unload to the next job.
+    pub(crate) fn leave(
+        &self,
+        mut slot: MutexGuard<'_, Option<Box<dyn LoadedModel>>>,
+        discard: bool,
+    ) -> Option<Box<dyn LoadedModel>> {
+        let mut state = self.lock();
+        state.running = false;
+        state.last_used = Some(Instant::now());
+        let taken = if discard || state.unload_requested {
+            state.unload_requested = false;
+            state.held = None;
+            slot.take()
+        } else {
+            None
+        };
+        drop(slot);
+        drop(state);
+        taken
+    }
+
+    /// Unloads the model in `slot`. With `idle`, only one unused for at least that long; a busy
+    /// one is then left alone rather than marked.
+    pub(crate) fn unload(&self, slot: &Slot, idle: Option<Duration>) -> Outcome {
+        let mut state = self.lock();
+        if let Some(older_than) = idle {
+            let rested = state.last_used.is_none_or(|at| at.elapsed() >= older_than);
+            if state.held.is_none() || !rested {
+                return Outcome::Untouched;
+            }
+        }
+        let mut held = match slot.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            // A job holds the slot: it is running, or has just taken the slot. It reads this
+            // request when it leaves. The model may not be loaded yet; then it never stays.
+            Err(TryLockError::WouldBlock) => {
+                if idle.is_some() {
+                    return Outcome::Untouched;
+                }
+                state.unload_requested = true;
+                return Outcome::AfterRun;
+            }
+        };
+        state.held = None;
+        state.unload_requested = false;
+        held.take().map_or(Outcome::Untouched, Outcome::Freed)
+    }
+
+    pub(crate) fn info(&self, model: &ModelId, label: &str) -> Option<LoadedModelInfo> {
+        let state = self.lock();
+        let (bytes, estimated) = state.held?;
+        Some(LoadedModelInfo {
+            model: model.clone(),
+            label: label.to_owned(),
+            bytes,
+            estimated,
+            running: state.running,
+            idle: state.last_used.map(|at| at.elapsed()).unwrap_or_default(),
+        })
+    }
+}
+
+/// The weights file's size, the stand-in for a model's memory when its runner does not say.
+pub(crate) fn file_size(weights: &Path) -> Option<u64> {
+    std::fs::metadata(weights).ok().map(|m| m.len())
+}
+
+/// Refuses a load of `needed` bytes when `free` reports less. Says nothing when either is
+/// unknown, since a wrong refusal is worse than a slow load.
+pub(crate) fn check_fits(
+    label: &str,
+    needed: Option<u64>,
+    free: Option<u64>,
+) -> Result<(), AiError> {
+    let (Some(needed), Some(free)) = (needed, free) else {
+        return Ok(());
+    };
+    if needed <= free {
+        return Ok(());
+    }
+    Err(AiError::unsupported(format!(
+        "There isn't enough free memory to load {label}. It needs about {}, and about {} is free. \
+         Unload other AI models or close other programs, then try again.",
+        gigabytes(needed),
+        gigabytes(free),
+    )))
+}
+
+/// Memory set aside for loads that passed the free-memory check and have not finished loading.
+///
+/// Free memory is read before a load allocates anything, so two loads judged at once would both
+/// count the same free memory. Providers sharing one `LoadAdmission` judge their loads one at a
+/// time, each against free memory less what loads already admitted will take. A load's share is
+/// given back when its load ends, loaded or failed; by then the reader sees the real figure.
+/// Clones share one count.
+#[derive(Clone, Default)]
+pub struct LoadAdmission(Arc<Mutex<u64>>);
+
+/// One admitted load's share of a [`LoadAdmission`], given back when dropped.
+pub(crate) struct Admitted {
+    pool: Arc<Mutex<u64>>,
+    bytes: u64,
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        let mut set_aside = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
+        *set_aside = set_aside.saturating_sub(self.bytes);
+    }
+}
+
+impl LoadAdmission {
+    /// Admits a load needing `needed` bytes when it fits in free memory less what is set aside,
+    /// and sets its share aside. The reader runs with the count held, so loads are judged in turn.
+    pub(crate) fn admit(
+        &self,
+        label: &str,
+        needed: Option<u64>,
+        free: Option<&FreeMemory>,
+    ) -> Result<Admitted, AiError> {
+        let mut set_aside = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let free = free
+            .and_then(|read| read())
+            .map(|bytes| bytes.saturating_sub(*set_aside));
+        check_fits(label, needed, free)?;
+        let bytes = needed.unwrap_or_default();
+        *set_aside = set_aside.saturating_add(bytes);
+        Ok(Admitted {
+            pool: self.0.clone(),
+            bytes,
+        })
+    }
+
+    /// Bytes set aside now (for tests).
+    #[cfg(test)]
+    fn set_aside(&self) -> u64 {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_load_that_fits_or_cannot_be_judged_goes_ahead() {
+        assert!(check_fits("M", Some(10), Some(10)).is_ok());
+        assert!(check_fits("M", Some(10), Some(20)).is_ok());
+        assert!(check_fits("M", None, Some(1)).is_ok());
+        assert!(check_fits("M", Some(10), None).is_ok());
+    }
+
+    #[test]
+    fn a_load_that_will_not_fit_says_both_sizes_in_words() {
+        let err = check_fits(
+            "Remove background",
+            Some(8_000_000_000),
+            Some(2_500_000_000),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, craft_ai_core::ErrorKind::Unsupported);
+        assert!(err.message.contains("Remove background"), "{}", err.message);
+        assert!(err.message.contains("8.0 GB"), "{}", err.message);
+        assert!(err.message.contains("2.5 GB"), "{}", err.message);
+    }
+
+    struct Held;
+
+    impl LoadedModel for Held {
+        fn run(
+            &mut self,
+            _: &craft_ai_core::Request,
+            _: &crate::RunContext,
+        ) -> Result<Vec<craft_ai_core::Output>, AiError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn loaded() -> (Residency, Slot) {
+        let r = Residency::default();
+        r.loaded(5, true);
+        (r, Mutex::new(Some(Box::new(Held))))
+    }
+
+    fn model() -> ModelId {
+        ModelId::new("m").unwrap()
+    }
+
+    /// An unload during a run only marks the model; the run's own exit then empties the slot.
+    /// Without the request check in `leave`, the model would stay loaded after the run.
+    #[test]
+    fn an_unload_during_a_run_waits_for_the_run_to_leave() {
+        let (r, slot) = loaded();
+        let held = slot.lock().unwrap();
+        r.enter();
+        assert!(matches!(r.unload(&slot, None), Outcome::AfterRun));
+        assert!(r.info(&model(), "M").is_some(), "still loaded mid-run");
+        assert!(r.leave(held, false).is_some(), "the run let go of it");
+        assert!(slot.lock().unwrap().is_none());
+        assert!(r.info(&model(), "M").is_none());
+    }
+
+    /// The moment a job's `leave` returns, its slot is free, so an unload frees the model at
+    /// once rather than leaving a request for the next job.
+    #[test]
+    fn an_unload_just_after_a_job_left_frees_the_model_at_once() {
+        let (r, slot) = loaded();
+        let held = slot.lock().unwrap();
+        r.enter();
+        assert!(r.leave(held, false).is_none());
+        assert!(matches!(r.unload(&slot, None), Outcome::Freed(_)));
+        assert!(!r.lock().unload_requested, "no request left behind");
+    }
+
+    /// A job that has taken the slot but not yet marked itself running still gets the request.
+    #[test]
+    fn an_unload_between_taking_the_slot_and_entering_is_not_lost() {
+        let (r, slot) = loaded();
+        let held = slot.lock().unwrap();
+        assert!(matches!(r.unload(&slot, None), Outcome::AfterRun));
+        r.enter();
+        assert!(r.leave(held, false).is_some());
+    }
+
+    #[test]
+    fn idle_unload_skips_busy_and_recent_models_and_frees_rested_ones() {
+        let (r, slot) = loaded();
+        {
+            let held = slot.lock().unwrap();
+            r.enter();
+            assert!(matches!(
+                r.unload(&slot, Some(Duration::ZERO)),
+                Outcome::Untouched
+            ));
+            assert!(
+                r.leave(held, false).is_none(),
+                "an idle sweep leaves no request"
+            );
+        }
+        assert!(matches!(
+            r.unload(&slot, Some(Duration::from_secs(3600))),
+            Outcome::Untouched
+        ));
+        assert!(matches!(
+            r.unload(&slot, Some(Duration::ZERO)),
+            Outcome::Freed(_)
+        ));
+        assert!(slot.lock().unwrap().is_none());
+        assert!(r.info(&model(), "M").is_none());
+        assert!(
+            matches!(r.unload(&slot, None), Outcome::Untouched),
+            "nothing left to free"
+        );
+    }
+
+    /// A model a failed run left in a bad state is let go of even with no unload asked.
+    #[test]
+    fn a_discarded_model_is_emptied_on_leave() {
+        let (r, slot) = loaded();
+        let held = slot.lock().unwrap();
+        r.enter();
+        assert!(r.leave(held, true).is_some());
+        assert!(r.info(&model(), "M").is_none());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    fn free(bytes: Option<u64>) -> FreeMemory {
+        Arc::new(move || bytes)
+    }
+
+    #[test]
+    fn a_second_load_counts_what_the_first_set_aside() {
+        let gate = LoadAdmission::default();
+        let read = free(Some(3));
+        let first = gate.admit("A", Some(2), Some(&read)).unwrap();
+        assert_eq!(gate.set_aside(), 2);
+        let err = gate.admit("B", Some(2), Some(&read)).err().unwrap();
+        assert_eq!(err.kind, craft_ai_core::ErrorKind::Unsupported);
+        assert!(
+            gate.admit("C", Some(1), Some(&read)).is_ok(),
+            "one byte still fits"
+        );
+        drop(first);
+        assert_eq!(gate.set_aside(), 0, "given back when the load ends");
+        assert!(gate.admit("B", Some(2), Some(&read)).is_ok());
+    }
+
+    #[test]
+    fn a_refused_load_sets_nothing_aside() {
+        let gate = LoadAdmission::default();
+        assert!(gate.admit("A", Some(5), Some(&free(Some(3)))).is_err());
+        assert_eq!(gate.set_aside(), 0);
+    }
+}

@@ -32,6 +32,13 @@ pub trait ModelRunner: Send + Sync {
     /// part. Return `Unsupported` for a file that is not this model, with words a person can act
     /// on, since the message reaches the screen.
     fn load(&self, weights: &Path) -> Result<Box<dyn LoadedModel>, AiError>;
+
+    /// Roughly how much memory loading `weights` will take, checked against free memory before a
+    /// load. The default is the file's size; override it when the model needs much more (a
+    /// working buffer) or the file is compressed. `None` skips the check.
+    fn memory_needed(&self, weights: &Path) -> Option<u64> {
+        crate::memory::file_size(weights)
+    }
 }
 
 /// A model that is in memory and ready to run.
@@ -45,6 +52,12 @@ pub trait LoadedModel: Send {
     /// Call [`RunContext::progress`] as work advances and [`RunContext::check_cancelled`] between
     /// steps, so Cancel is quick.
     fn run(&mut self, request: &Request, ctx: &RunContext) -> Result<Vec<Output>, AiError>;
+
+    /// Roughly how much memory this model holds now, for a person deciding what to unload.
+    /// `None` (the default) shows the weights file's size instead, marked as an estimate.
+    fn memory_bytes(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// What a running job lets the runner do: report, listen for Cancel, say something.

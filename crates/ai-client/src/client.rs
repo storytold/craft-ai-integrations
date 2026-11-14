@@ -193,7 +193,7 @@ pub struct AiClient {
     app: AppId,
     pub(crate) shared: SharedStore,
     pub(crate) secrets: Arc<dyn SecretStore>,
-    factory: ProviderFactory,
+    pub(crate) factory: ProviderFactory,
     history: Option<Arc<HistoryFile>>,
     keep_prompts: bool,
     catalog: Catalog,
@@ -303,12 +303,17 @@ impl AiClient {
     }
 
     /// Replaces the provider factory, to add adapters. A send rule already chosen with
-    /// [`with_retries`](Self::with_retries) is applied to it, so the order of the two calls does
-    /// not matter.
+    /// [`with_retries`](Self::with_retries), and a free-memory reader given with
+    /// [`with_free_memory`](Self::with_free_memory), are applied to it, so the order of the calls
+    /// does not matter.
     pub fn with_factory(mut self, factory: ProviderFactory) -> Self {
+        let free = self.factory.free_memory.take();
         self.factory = factory;
         if self.send_rule_chosen() {
             self.factory.set_send_retry(self.submit_retry());
+        }
+        if free.is_some() {
+            self.factory.set_free_memory(free);
         }
         self
     }

@@ -44,6 +44,7 @@
 mod app_tools;
 mod assignments;
 mod client;
+mod client_memory;
 mod declarative;
 mod disclosed_size;
 mod engine;
@@ -73,7 +74,10 @@ pub use craft_ai_comfy_env::{
     DownloadConfig as ModelDownloadConfig, Downloader as ModelDownloader, Phase as SetupPhase,
     Progress as SetupProgress,
 };
-pub use craft_ai_engine::{EngineRegistry, LoadedModel, ModelRunner, RunContext};
+pub use craft_ai_engine::{
+    EngineRegistry, FreeMemory, LoadedModel, LoadedModelInfo, ModelRunner, RunContext, Unloaded,
+};
+pub use engines::LoadedEngineModel;
 pub use factory::{BuildFn, ProviderFactory};
 pub use folders::{
     CheckedNative, FolderAdded, FolderDesk, NativeFiles, NativeInstall, NativeSetupPlan,
