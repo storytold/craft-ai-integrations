@@ -192,7 +192,7 @@ fn a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding() {
         let mut out = Vec::new();
         let mut encoder = Encoder::new(&mut out, 100);
         for i in 0..n {
-            let mut seg = super::EXTENDED_XMP_PREFIX.to_vec();
+            let mut seg = craft_ai_core::jpeg::EXTENDED_XMP_PREFIX.to_vec();
             seg.extend_from_slice(&[b'0'; 32]);
             seg.extend_from_slice(&n.to_be_bytes());
             seg.extend_from_slice(&i.to_be_bytes());
@@ -204,15 +204,32 @@ fn a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding() {
             .unwrap();
         out
     };
-    let fine = with_fragments(super::MAX_XMP_FRAGMENTS as u32);
+    let fine = with_fragments(craft_ai_core::jpeg::MAX_XMP_FRAGMENTS as u32);
     assert_eq!(
-        super::extended_xmp_fragments(&fine),
-        super::MAX_XMP_FRAGMENTS
+        craft_ai_core::jpeg::extended_xmp_fragments(&fine),
+        craft_ai_core::jpeg::MAX_XMP_FRAGMENTS
     );
     assert_eq!(decode_jpeg(&fine).unwrap().width, 16);
-    let hostile = with_fragments(super::MAX_XMP_FRAGMENTS as u32 + 1);
+    assert_eq!(decode_jpeg(&with_stray_byte(fine)).unwrap().width, 16);
+    let hostile = with_fragments(craft_ai_core::jpeg::MAX_XMP_FRAGMENTS as u32 + 1);
     let e = decode_jpeg(&hostile).err().unwrap();
     assert!(e.message.contains("could not be read"), "{}", e.message);
+    let e = decode_jpeg(&with_stray_byte(hostile)).err().unwrap();
+    assert!(e.message.contains("could not be read"), "{}", e.message);
+}
+
+/// The same file with one stray byte before its second Extended XMP fragment. The decoder skips
+/// it and keeps reading fragments, so a guard must count past it.
+fn with_stray_byte(mut jpeg: Vec<u8>) -> Vec<u8> {
+    let marker = |from: usize, jpeg: &[u8]| {
+        from + jpeg[from..]
+            .windows(2)
+            .position(|w| w == [0xFF, 0xE1])
+            .unwrap()
+    };
+    let second = marker(marker(0, &jpeg) + 2, &jpeg);
+    jpeg.insert(second, 0x42);
+    jpeg
 }
 
 /// Cut-off and corrupted JPEGs give a plain error or a picture, and never a panic.

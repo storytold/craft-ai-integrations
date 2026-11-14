@@ -26,6 +26,7 @@
 //! | [`cost`] | [`estimate`](cost::estimate): a price worked out from a model's saved pricing |
 //! | [`store`] | [`StoreFile`], the launcher's versioned shared store |
 //! | [`picks`] | model presets: [`Pick`], the curated [`Catalog`], and [`picks::choose`] |
+//! | [`jpeg`] | the Extended XMP fragment cap every JPEG decoder checks first |
 //! | [`segment`] | the `image.segment` contract: clicks, a box, and what a selection found |
 //! | [`spec`] | a provider described as data: types, checker and substitutions |
 //! | [`provider`] | the [`Provider`] trait |
@@ -52,6 +53,7 @@ pub mod error;
 pub mod history;
 pub mod ids;
 pub mod job;
+pub mod jpeg;
 pub mod mock;
 pub mod model;
 pub mod model_folders;
