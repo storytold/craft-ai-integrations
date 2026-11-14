@@ -33,6 +33,7 @@ honouring `CARGO_BUILD_JOBS` from the build resource.
 | `mutation_check.py cm` | The same through the app's client (`ai-client/src/engines.rs`, `factory.rs`, `client.rs`): unloading one model needs its connection, a replaced engine's models are not listed, a free-memory reader applies in any build order. Cases in `mutation_engine_memory.py`. |
 | `mutation_check.py rr` | Run records (`ai-client/src/run_record.rs`): error and notice text is cleaned of keys, request text, text parameter values (nested ones too, and each in JSON-escaped form) and links, a line holding a key (plain or JSON-escaped) is refused, an empty secret does not refuse everything, a result link is never kept, results are hashed, and outcome, notices, usage and start time are kept. Cases in `mutation_run_record.py`. |
 | `mutation_check.py rp` | A reply's cost once parsed (`ai-http/src/json.rs`): each charge of the estimate, and the byte cap and parse budget of every OpenAI, Gemini, Vertex, declarative and ComfyUI reply reader. Cases in `mutation_reply_parse.py`. |
+| `mutation_check.py pf` | Private files: the per-user SAM 3 lock folder (owner, mode, links), the folders and history log `ai-native` creates, the corrupt-store copy and the ComfyUI extra-paths file. Most tests are Unix-only. Cases in `mutation_private_files.py`. |
 | `sam3_mutation_check.py` | `sg1 sg2 sg2b sg2c sg3` (SAM 3 masks, sessions, slots, cancel). |
 
 ```sh

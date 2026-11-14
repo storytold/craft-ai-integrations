@@ -81,7 +81,7 @@ impl Sam3Session {
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
                 .collect(),
-            lock_dir: std::env::temp_dir().join("craft-ai-sam3"),
+            lock_dir: crate::sam3_lease::default_dir(),
             lease: None,
             revision: 0,
             canceller: Sam3Canceller::default(),
@@ -89,8 +89,9 @@ impl Sam3Session {
         })
     }
 
-    /// Keep the slot locks in `dir` instead of the default folder under the system temp
-    /// directory. All sessions that share a server must agree on the folder.
+    /// Keep the slot locks in `dir` instead of the default `sam3-locks` folder in the person's AI
+    /// folder. All sessions that share a server must agree on the folder, and it must be private
+    /// to this user: on Unix a folder others can write is refused.
     pub fn with_lock_dir(mut self, dir: PathBuf) -> Self {
         self.lock_dir = dir;
         self

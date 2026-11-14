@@ -5,7 +5,7 @@
 //! files stay where they are). The map is stored in the shared file so every app and the
 //! launcher see the same folders.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use craft_ai_comfy_env::{FolderScan, KnownFile, render_extra_paths, scan_model_folder};
 use craft_ai_core::model_folders::{FolderOrigin, ModelFolder};
@@ -199,16 +199,9 @@ impl FolderDesk {
                 "the model folder list could not be written for ComfyUI",
             )
         };
-        let dir = file.parent().ok_or_else(|| io(()))?;
-        std::fs::create_dir_all(dir).map_err(|_| io(()))?;
-        let mut temp = file.as_os_str().to_owned();
-        temp.push(".tmp");
-        let temp = PathBuf::from(temp);
-        std::fs::write(&temp, text).map_err(|_| io(()))?;
-        std::fs::rename(&temp, file).map_err(|_| {
-            let _ = std::fs::remove_file(&temp);
-            io(())
-        })
+        // A new private file renamed into place: a link planted at a temporary name is replaced,
+        // never written through, and a missing folder is created private.
+        craft_ai_native::owner_only::write_atomic(file, text.as_bytes()).map_err(io)
     }
 
     fn find(&self, id: &str) -> Result<ModelFolder, AiError> {

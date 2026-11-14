@@ -200,10 +200,9 @@ fn take_local_string(text: windows_sys::core::PWSTR) -> String {
     out
 }
 
-/// The owner and access list of `path` as SDDL, read in-process. Tests only: they check what
-/// the creation calls stored. Running PowerShell's `Get-Acl` instead failed on the
-/// `windows-latest` CI runner.
-#[cfg(test)]
+/// The owner and access list of `path` as SDDL, read in-process. [`super::check_private_dir`]
+/// judges an existing folder by it, and the tests check what the creation calls stored with it
+/// (PowerShell's `Get-Acl` failed on the `windows-latest` CI runner).
 pub(super) fn sddl_of(path: &Path) -> io::Result<String> {
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
