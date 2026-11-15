@@ -27,40 +27,40 @@ OUT = Path(__file__).resolve().parent / 'verification'
 OUT.mkdir(exist_ok=True)
 C = 'crates/'
 CRLF, LF = '\r\n', '\n'
-CONN = C + 'ai-core/src/connection.rs'
-CUSTOM = C + 'ai-core/src/draft/custom.rs'
-DRAFT = C + 'ai-core/src/draft.rs'
-HTTP = C + 'ai-openai/src/http.rs'
-PROBE_O = C + 'ai-openai/src/probe.rs'
-CATALOG = C + 'ai-openai/src/catalog.rs'
-PROBE_C = C + 'ai-client/src/manage/probe.rs'
-MANAGE = C + 'ai-client/src/manage.rs'
-FACTORY = C + 'ai-client/src/factory.rs'
-CHAT = C + 'ai-openai/src/chat.rs'
-STREAM = C + 'ai-openai/src/stream.rs'
-JOBS = C + 'ai-openai/src/jobs.rs'
+CONN = C + 'foundation/ai-core/src/connection.rs'
+CUSTOM = C + 'foundation/ai-core/src/draft/custom.rs'
+DRAFT = C + 'foundation/ai-core/src/draft.rs'
+HTTP = C + 'api/ai-openai/src/http.rs'
+PROBE_O = C + 'api/ai-openai/src/probe.rs'
+CATALOG = C + 'api/ai-openai/src/catalog.rs'
+PROBE_C = C + 'app/ai-client/src/manage/probe.rs'
+MANAGE = C + 'app/ai-client/src/manage.rs'
+FACTORY = C + 'app/ai-client/src/factory.rs'
+CHAT = C + 'api/ai-openai/src/chat.rs'
+STREAM = C + 'api/ai-openai/src/stream.rs'
+JOBS = C + 'api/ai-openai/src/jobs.rs'
 
-PACK = C + 'ai-comfy-env/src/source/pack/mod.rs'
-PACK_RESOLVE = C + 'ai-comfy-env/src/source/pack/resolve.rs'
-PACK_INSTALL = C + 'ai-comfy-env/src/source/pack/install.rs'
-PACK_ARCHIVE = C + 'ai-comfy-env/src/source/pack/archive.rs'
-HOSTS = C + 'ai-comfy-env/src/source/hosts.rs'
-FORMAT = C + 'ai-comfy-env/src/source/format.rs'
-SPEC = C + 'ai-comfy-env/src/source/spec.rs'
-DOWNLOAD = C + 'ai-comfy-env/src/download.rs'
-SAM21 = C + 'ai-comfyui/src/sam21_session.rs'
-DETECTOR = C + 'ai-comfyui/src/detector.rs'
+PACK = C + 'local/ai-comfy-env/src/source/pack/mod.rs'
+PACK_RESOLVE = C + 'local/ai-comfy-env/src/source/pack/resolve.rs'
+PACK_INSTALL = C + 'local/ai-comfy-env/src/source/pack/install.rs'
+PACK_ARCHIVE = C + 'local/ai-comfy-env/src/source/pack/archive.rs'
+HOSTS = C + 'local/ai-comfy-env/src/source/hosts.rs'
+FORMAT = C + 'local/ai-comfy-env/src/source/format.rs'
+SPEC = C + 'local/ai-comfy-env/src/source/spec.rs'
+DOWNLOAD = C + 'local/ai-comfy-env/src/download.rs'
+SAM21 = C + 'local/ai-comfyui/src/sam21_session.rs'
+DETECTOR = C + 'local/ai-comfyui/src/detector.rs'
 CU = 'craft-ai-comfyui'
-SCAN = C + 'ai-comfy-env/src/scan.rs'
-TRANSPORT = C + 'ai-comfy-env/src/download/transport.rs'
-HF = C + 'ai-comfy-env/src/source/resolve/hf.rs'
-GH = C + 'ai-comfy-env/src/source/resolve/github.rs'
-CIV = C + 'ai-comfy-env/src/source/resolve/civitai.rs'
-API = C + 'ai-comfy-env/src/source/resolve/api.rs'
-RESOLVE = C + 'ai-comfy-env/src/source/resolve/mod.rs'
-REGISTRY = C + 'ai-comfy-env/src/source/registry.rs'
-INSTALL = C + 'ai-comfy-env/src/source/install.rs'
-LICENCES = C + 'ai-comfy-env/src/source/registry/licences.rs'
+SCAN = C + 'local/ai-comfy-env/src/scan.rs'
+TRANSPORT = C + 'local/ai-comfy-env/src/download/transport.rs'
+HF = C + 'local/ai-comfy-env/src/source/resolve/hf.rs'
+GH = C + 'local/ai-comfy-env/src/source/resolve/github.rs'
+CIV = C + 'local/ai-comfy-env/src/source/resolve/civitai.rs'
+API = C + 'local/ai-comfy-env/src/source/resolve/api.rs'
+RESOLVE = C + 'local/ai-comfy-env/src/source/resolve/mod.rs'
+REGISTRY = C + 'local/ai-comfy-env/src/source/registry.rs'
+INSTALL = C + 'local/ai-comfy-env/src/source/install.rs'
+LICENCES = C + 'local/ai-comfy-env/src/source/registry/licences.rs'
 
 M = 'craft-ai-core'
 O = 'craft-ai-openai'
@@ -79,7 +79,7 @@ U1 = [
     ('form-header-dropped', DRAFT, 'enabled: self.enabled,\n            key_header,\n        };', 'enabled: self.enabled,\n            key_header: None,\n        };', M, 'custom_connection', 'named_header_is_kept'),
     ('edit-loses-header', DRAFT, 'key_header: c.key_header.clone().unwrap_or_default(),', 'key_header: String::new(),', M, 'custom_connection', 'named_header_is_kept'),
     ('custom-test-wrong-provider', CUSTOM, 'self.provider.trim() == "openai-compatible"', 'self.provider.trim() == "openai"', M, 'custom_connection', 'starts_from_the_other'),
-    ('custom-billing-assumed-free', C + 'ai-core/src/draft/presets.rs', 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
+    ('custom-billing-assumed-free', C + 'foundation/ai-core/src/draft/presets.rs', 'billing: Billing::Unknown,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', 'billing: Billing::Free,\n        needs_key: true,\n        note: "Any server that speaks the OpenAI API.",', M, 'custom_connection', 'starts_from_the_other'),
     ('named-key-sent-as-bearer', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(_) => ("Authorization".to_owned(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('named-key-value-prefixed', HTTP, 'Some(name) => (name.clone(), key.expose().to_owned()),', 'Some(name) => (name.clone(), format!("Bearer {}", key.expose())),', O, 'custom', 'named_header_carries'),
     ('redirects-followed', HTTP, '.max_redirects(0)', '.max_redirects(5)', O, 'custom', 'redirect_never_carries'),
@@ -190,7 +190,7 @@ U3 = [
     ('staged-leftover-trusted', INSTALL, '        let _ = std::fs::remove_file(&staged_file);\n\n        let (digest', '        let (digest', E, 'source_install', 'leftover_file_in_staging'),
     ('local-copy-size-unchecked', INSTALL, 'if size != candidate.size_bytes {', 'if false {', E, 'source_install', 'copied_and_the_original'),
     ('folder-unchecked', INSTALL, 'let target_dir = self.comfy.models_dir_for(folder).ok_or(Refusal::Folder)?;', 'let target_dir = self.comfy.base.join("models").join(folder);', E, 'source_install', 'cannot_leave_the_models'),
-    ('settings-hosts-not-passed-on', C + 'ai-comfy-env/src/source/settings.rs', 'allowed_hosts: Some(self.download_hosts(kind)),', 'allowed_hosts: None,', E, 'source_install', 'reach_the_downloader'),
+    ('settings-hosts-not-passed-on', C + 'local/ai-comfy-env/src/source/settings.rs', 'allowed_hosts: Some(self.download_hosts(kind)),', 'allowed_hosts: None,', E, 'source_install', 'reach_the_downloader'),
     ('registry-overwrites-damage', REGISTRY, 'serde_json::from_str(&text).map_err(|_| unreadable())', 'Ok(serde_json::from_str(&text).unwrap_or_default())', E, 'source_install', 'read_with_care'),
     ('bundle-path-allows-dot-names', DOWNLOAD, "&& !part.starts_with('.')", '&& true', E, 'download', 'file_names_that_could_escape'),
     ('bundle-path-depth-unbounded', DOWNLOAD, 'if parts.len() > 3 {', 'if parts.len() > 3000 {', E, 'download', 'file_names_that_could_escape'),
@@ -198,8 +198,8 @@ U3 = [
     ('bundle-parent-link-followed', DOWNLOAD, 'if !actual.starts_with(&root) {', 'if false {', E, 'download', 'links_outside_the_destination'),
     ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
     ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
-    ('model-paths-file-size-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {', 'if !meta.is_file() {', E, 'detect', 'a_model_paths_file_that_cannot_be_used_adds_nothing'),
-    ('model-paths-file-cap-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if self.model_dirs.len() < MAX_EXTRA_DIRS && !self.model_dirs.contains(&entry) {', 'if !self.model_dirs.contains(&entry) {', E, 'detect', 'the_folder_cap_counts'),
+    ('model-paths-file-size-unchecked', C + 'local/ai-comfy-env/src/detect.rs', 'if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {', 'if !meta.is_file() {', E, 'detect', 'a_model_paths_file_that_cannot_be_used_adds_nothing'),
+    ('model-paths-file-cap-unchecked', C + 'local/ai-comfy-env/src/detect.rs', 'if self.model_dirs.len() < MAX_EXTRA_DIRS && !self.model_dirs.contains(&entry) {', 'if !self.model_dirs.contains(&entry) {', E, 'detect', 'the_folder_cap_counts'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {
@@ -257,10 +257,10 @@ U4 = [
 ]
 
 CF = 'craft-ai-comfyui'
-CF_OUT = C + 'ai-comfyui/src/output.rs'
-CF_IN = C + 'ai-comfyui/src/input.rs'
-CF_PROV = C + 'ai-comfyui/src/provider.rs'
-CF_FLOW = C + 'ai-comfyui/src/workflow.rs'
+CF_OUT = C + 'local/ai-comfyui/src/output.rs'
+CF_IN = C + 'local/ai-comfyui/src/input.rs'
+CF_PROV = C + 'local/ai-comfyui/src/provider.rs'
+CF_FLOW = C + 'local/ai-comfyui/src/workflow.rs'
 UPLOAD_ORDER_OLD = """let source = self.read_role(request, InputRole::Source)?;
             let mask = self.read_role(request, InputRole::Mask)?;
             let source = self.upload(InputRole::Source, &source)?;
@@ -304,10 +304,10 @@ P4 = [
     ('start-image-sent-unchecked', CF_PROV, START_IMAGE_OLD, START_IMAGE_NEW, CF, 'video_start_image', 'never_uploaded'),
 ]
 
-MEDIA = C + 'ai-media/src/store.rs'
-MEDIA_ERRORS = C + 'ai-media/src/store_errors.rs'
+MEDIA = C + 'foundation/ai-media/src/store.rs'
+MEDIA_ERRORS = C + 'foundation/ai-media/src/store_errors.rs'
 CM = 'craft-ai-media'
-RETRY = C + 'ai-core/src/retry.rs'
+RETRY = C + 'foundation/ai-core/src/retry.rs'
 RETRY_GATE = '|error: &AiError| error.is_retryable() && in_time(),'
 TRY_LIMIT = 'if attempt >= self.max_attempts.clamp(1, 5) {'
 BUDGET = '(elapsed.saturating_add(wait) <= self.budget).then_some(wait)'
@@ -335,9 +335,9 @@ P10 = [
 
 # rx: a cut media download resumes only against a named version and only with a piece that
 # fits, and a clearly expired link is refused before any request (crates/foundation/ai-media).
-EXPIRY = C + 'ai-media/src/expiry.rs'
-PARTIAL = C + 'ai-media/src/partial.rs'
-MEDIA_LIB = C + 'ai-media/src/lib.rs'
+EXPIRY = C + 'foundation/ai-media/src/expiry.rs'
+PARTIAL = C + 'foundation/ai-media/src/partial.rs'
+MEDIA_LIB = C + 'foundation/ai-media/src/lib.rs'
 RX = [
     ('weak-etag-used', PARTIAL, 'return text("etag").filter(|e| strong_etag(e)).map(str::to_owned);', 'return text("etag").map(str::to_owned);', CM, 'lib', 'a_weak_etag_is_not_the_version'),
     ('date-used-beside-an-etag', PARTIAL, 'if headers.contains_key("etag") {', 'if text("etag").filter(|e| strong_etag(e)).is_some() {', CM, 'lib', 'a_weak_etag_is_not_the_version'),
@@ -379,10 +379,10 @@ RX = [
 
 # ar: provider API calls are retried only where safe (crates/app/ai-client/src/client_wait.rs). A
 # dropped send must never be sent again; a failed poll must not end the wait, but a refusal must.
-WAIT = C + 'ai-client/src/client_wait.rs'
-CLIENT = C + 'ai-client/src/client.rs'
-GEMINI_LIB = C + 'ai-gemini/src/lib.rs'
-OPENAI_JOBS = C + 'ai-openai/src/jobs.rs'
+WAIT = C + 'app/ai-client/src/client_wait.rs'
+CLIENT = C + 'app/ai-client/src/client.rs'
+GEMINI_LIB = C + 'api/ai-gemini/src/lib.rs'
+OPENAI_JOBS = C + 'api/ai-openai/src/jobs.rs'
 SEND_GATE = 'error.kind == ErrorKind::RateLimited'
 POLL_GATE = 'Err(error) if error.is_retryable() => {'
 AR = [
@@ -403,7 +403,7 @@ AR = [
     ('cancel-during-pause-ignored', RETRY, '            if !worth_retrying(&error) {\n                return Err(tried(error, attempt));\n            }\n            attempt', '            attempt', M, 'lib', 'run_asks_again_after_the_pause'),
     ('later-factory-ignores-the-rule', CLIENT, '        if self.send_rule_chosen() {\n            self.factory.set_send_retry(self.submit_retry());\n        }\n', '', CL, 'factory_send_retry', 'a_later_factory_takes_the_send_rule'),
     ('client-send-rule-not-passed', WAIT, '        self.factory.set_send_retry(submit);\n', '', CL, 'factory_send_retry', 'the_clients_send_rule_reaches_the_worker'),
-    ('apps-builder-replaced', FACTORY, '        self.standard_senders.remove(&name);\n        self.builders.insert(name, Arc::new(build));', '        self.builders.insert(name, Arc::new(build));', CL, 'factory_send_retry', 'an_apps_own_builder_is_kept'),
+    ('apps-builder-replaced', FACTORY, '        self.standard_senders.remove(&name);\n        self.engines.remove(&name);\n        self.builders.insert(name, Arc::new(build));', '        self.engines.remove(&name);\n        self.builders.insert(name, Arc::new(build));', CL, 'factory_send_retry', 'an_apps_own_builder_is_kept'),
     ('openai-send-rule-not-applied', FACTORY, '    config.send_retry = send_retry;\n', '', CL, 'factory_send_retry', 'never_turns_the_worker_retry_off'),
     ('gemini-worker-never-retries', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| false,', 'craft-ai-gemini', 'provider', 'a_rate_limited_send_is_sent_again'),
     ('gemini-worker-retries-anything', GEMINI_LIB, '|e| e.kind == ErrorKind::RateLimited && still_wanted(&jobs, &job),', '|_: &AiError| true,', 'craft-ai-gemini', 'provider', 'a_server_error_is_not_sent_again'),
@@ -411,10 +411,10 @@ AR = [
     ('openai-worker-retries-anything', OPENAI_JOBS, '|e| e.kind == ErrorKind::RateLimited && !cell.is_cancelled(),', '|_: &AiError| true,', O, 'provider', 'an_out_of_credit_send_is_not_sent_again'),
 ]
 
-STORE = C + 'ai-core/src/store.rs'
-ROLE = C + 'ai-core/src/role.rs'
-TOOLS = C + 'ai-client/src/tools.rs'
-CLIENT = C + 'ai-client/src/client.rs'
+STORE = C + 'foundation/ai-core/src/store.rs'
+ROLE = C + 'foundation/ai-core/src/role.rs'
+TOOLS = C + 'app/ai-client/src/tools.rs'
+CLIENT = C + 'app/ai-client/src/client.rs'
 STATUS_RESOLVE = 'let resolved = match store.resolve(&self.app, role) {'
 # v1: one binding, every app (ai-client/tests/one_binding.rs)
 V1 = [
@@ -427,9 +427,9 @@ V1 = [
     ('choose-writes-nothing', TOOLS, '            set_default(store, binding);\n            Ok(())', '            let _ = binding;\n            Ok(())', CL, 'one_binding', ''),
 ]
 
-PICK_G = C + 'ai-client/src/picker_groups.rs'
-PICK_C = C + 'ai-client/src/picker.rs'
-PICK_E = C + 'ai-egui/src/picker.rs'
+PICK_G = C + 'app/ai-client/src/picker_groups.rs'
+PICK_C = C + 'app/ai-client/src/picker.rs'
+PICK_E = C + 'app/ai-egui/src/picker.rs'
 EG = 'craft-ai-egui'
 # v2: the tool-first model picker (ai-client/tests/picker.rs, ai-egui/tests/picker_view.rs)
 V2 = [
@@ -462,9 +462,9 @@ V2 = [
     ('note-hidden', PICK_E, 'if !group.note.is_empty() {', 'if false {', EG, 'picker_view', ''),
 ]
 
-OPT = C + 'ai-features/src/options.rs'
-POPUP_E = C + 'ai-egui/src/popup.rs'
-TOOLS_RS = C + 'ai-client/src/tools.rs'
+OPT = C + 'foundation/ai-features/src/options.rs'
+POPUP_E = C + 'app/ai-egui/src/popup.rs'
+TOOLS_RS = C + 'app/ai-client/src/tools.rs'
 FE = 'craft-ai-features'
 # v3: the in-app missing-model popup (ai-client/tests/popup.rs, ai-egui/tests/popup_view.rs)
 V3 = [
@@ -485,8 +485,8 @@ V3 = [
     ('size-in-the-wrong-unit', PICK_E, 'text::bytes(size)', 'text::bytes(size / 1000)', EG, 'popup_view', ''),
 ]
 
-SD_LIB = C + 'ai-seedance/src/lib.rs'
-DRAFT_RS = C + 'ai-core/src/draft.rs'
+SD_LIB = C + 'api/ai-seedance/src/lib.rs'
+DRAFT_RS = C + 'foundation/ai-core/src/draft.rs'
 SDC = 'craft-ai-seedance'
 BYTEPLUS = 'https://ark.ap-southeast.bytepluses.com/api/v3'
 # sd: Seedance connects through BytePlus ModelArk (ai-seedance/tests/provider.rs, draft tests)
@@ -495,11 +495,11 @@ SD = [
     ('volcengine-address-accepted', SD_LIB, 'base == "' + BYTEPLUS + '"', 'base == "https://ark.cn-beijing.volces.com/api/v3"', SDC, 'provider', ''),
     ('query-string-allowed', SD_LIB, "base.contains(['?', '#'])", 'false', SDC, 'provider', ''),
     ('old-model-served', SD_LIB, 'const MODEL: &str = "dreamina-seedance-2-0-260128";', 'const MODEL: &str = "doubao-seedance-2-0-260128";', SDC, 'provider', ''),
-    ('preset-points-at-volcengine', C + 'ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
-    ('preset-named-volcengine', C + 'ai-core/src/draft/presets.rs', 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
+    ('preset-points-at-volcengine', C + 'foundation/ai-core/src/draft/presets.rs', 'endpoint: "' + BYTEPLUS + '",', 'endpoint: "https://ark.cn-beijing.volces.com/api/v3",', M, 'lib', 'seedance_connects'),
+    ('preset-named-volcengine', C + 'foundation/ai-core/src/draft/presets.rs', 'name: "Seedance (BytePlus ModelArk)",', 'name: "Seedance (Volcengine Ark)",', M, 'lib', 'seedance_connects'),
 ]
 
-VTX_LIB = C + 'ai-vertex/src/lib.rs'
+VTX_LIB = C + 'api/ai-vertex/src/lib.rs'
 VTXC = 'craft-ai-vertex'
 # vx: the Vertex express adapter sends its key in a header, never in the URL (ai-vertex/tests/provider.rs).
 # A request line is what TLS-intercepting proxies and access logs record (C4 of the 2026-10-17 audit).
@@ -508,7 +508,7 @@ VX = [
     ('vertex-key-header-dropped', VTX_LIB, '.header("x-goog-api-key", self.key.expose())', '', VTXC, 'provider', ''),
 ]
 
-LOCAL_RS = C + 'ai-client/src/local.rs'
+LOCAL_RS = C + 'app/ai-client/src/local.rs'
 # lc: a tool's local model as a connection an app can read (ai-client/tests/local.rs)
 LC = [
     ('non-local-address-accepted', LOCAL_RS, "if !endpoint.is_loopback() || trimmed.contains(['?', '#']) {", "if trimmed.contains(['?', '#']) {", CL, 'local', ''),
@@ -522,10 +522,10 @@ LC = [
     ('picker-ignores-which-recipe-is-installed', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || true)', CL, 'local_recipes', 'keeps_the_setup_link'),
     ('picker-recipe-connection-never-counts', PICK_G, '&& (!is_recipe_connection(c, feature) || m.id.as_str() == recipe)', '&& (!is_recipe_connection(c, feature) || false)', CL, 'local_recipes', 'setup_link'),
     ('other-adapter-connection-replaced', LOCAL_RS, 'Some(existing) if existing.provider != connection.provider => {', 'Some(existing) if false => {', CL, 'local_recipes', 'never_replaces'),
-    ('advice-from-first-recipe-only', C + 'ai-client/src/engine.rs', 'feature.first_usable_recipe() else', 'feature.locals.first().filter(|r| r.usable) else', CL, 'local_recipes', 'engine_advice_follows'),
+    ('advice-from-first-recipe-only', C + 'app/ai-client/src/engine.rs', 'feature.first_usable_recipe() else', 'feature.locals.first().filter(|r| r.usable) else', CL, 'local_recipes', 'engine_advice_follows'),
     ('runtime-from-first-recipe-only', LOCAL_RS, '            .iter()\n            .find(|r| r.usable)\n            .and_then(|r| r.native.first())', '            .first()\n            .and_then(|r| r.native.first())', CL, 'local_recipes', 'built_in_runtime_comes_from'),
-    ('plans-reuse-first-recipe', C + 'ai-features/src/plan.rs', '.map(|recipe| plan_recipe(feature, recipe, inventory))', '.map(|_| plan(feature, inventory))', FE, 'recipes', ''),
-    ('options-share-one-recipe-id', C + 'ai-features/src/options.rs', 'id: format!("local:{}:{}", feature.id, recipe.workflow),', 'id: format!("local:{}", feature.id),', FE, 'recipes', 'own_setup_option'),
+    ('plans-reuse-first-recipe', C + 'foundation/ai-features/src/plan.rs', '.map(|recipe| plan_recipe(feature, recipe, inventory))', '.map(|_| plan(feature, inventory))', FE, 'recipes', ''),
+    ('options-share-one-recipe-id', C + 'foundation/ai-features/src/options.rs', 'id: format!("local:{}:{}", feature.id, recipe.workflow),', 'id: format!("local:{}", feature.id),', FE, 'recipes', 'own_setup_option'),
     ('replaces-a-choice-made', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if true {', CL, 'local', ''),
     ('never-binds', LOCAL_RS, 'if !store.defaults.iter().any(|b| b.role == binding.role) {', 'if false {', CL, 'local', ''),
     ('moved-address-kept-old', LOCAL_RS, 'Some(existing) => *existing = connection,', 'Some(_) => {}', CL, 'local', ''),
@@ -562,17 +562,17 @@ NR = [
     ('native-connection-id-shared-with-comfyui', LOCAL_RS, 'format!("local-{feature}-{provider}")', 'format!("local-{feature}")', CL, 'local_native', 'left_alone'),
 ]
 
-CT_CLIENT = C + 'ai-client/src/client.rs'
-CT_TOOLS = C + 'ai-client/src/tools.rs'
-CT_PICKER = C + 'ai-client/src/picker.rs'
-CT_STORE = C + 'ai-core/src/store.rs'
+CT_CLIENT = C + 'app/ai-client/src/client.rs'
+CT_TOOLS = C + 'app/ai-client/src/tools.rs'
+CT_PICKER = C + 'app/ai-client/src/picker.rs'
+CT_STORE = C + 'foundation/ai-core/src/store.rs'
 T = 'custom_tool_conformance'
 # Declared custom tool, two app clients (tests/custom_tool_conformance.rs).
 CT = [
     ('adapter-absence-reads-ready', CT_CLIENT, 'if !self.factory.knows(&resolved.connection.provider) {\n            return unavailable(NO_ADAPTER.to_owned());', 'if false {\n            return unavailable(NO_ADAPTER.to_owned());', CL, T, 'without_the_adapter'),
     ('picker-hides-missing-adapter', CT_PICKER, 'RoleStatus::Unavailable { reason } => Some(reason),', 'RoleStatus::Unavailable { reason } => {\n                    let _ = reason;\n                    None\n                }', CL, T, 'without_the_adapter'),
-    ('consent-not-enforced', C + 'ai-client/src/client_run.rs', 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
-    ('request-not-forwarded', C + 'ai-client/src/client_run.rs', '|| provider.submit(&plan.model, &plan.request),', '|| provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())),', CL, T, 'two_apps_run'),
+    ('consent-not-enforced', C + 'app/ai-client/src/client_run.rs', 'if plan.needs_consent(ledger) {', 'if false {', CL, T, 'remote_service'),
+    ('request-not-forwarded', C + 'app/ai-client/src/client_run.rs', '|| provider.submit(&plan.model, &plan.request),', '|| provider.submit(&plan.model, &craft_ai_core::Request::new(plan.request.capability.clone())),', CL, T, 'two_apps_run'),
     ('cancel-not-forwarded', CT_CLIENT, 'pub fn cancel(&self) -> Result<(), AiError> {\n        self.provider.cancel(&self.id)', 'pub fn cancel(&self) -> Result<(), AiError> {\n        let _ = &self.provider;\n        Ok(())', CL, T, 'cancelling_one'),
     ('old-store-needs-the-new-field', CT_STORE, '#[serde(default, skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', '#[serde(skip_serializing_if = "Vec::is_empty")]\n    pub custom_tools', CL, T, 'before_custom_tools'),
     ('removal-keeps-the-launcher-choice', CT_TOOLS, 'store.defaults.retain(|binding| &binding.role != id);', 'let _ = id;', CL, T, 'before_custom_tools'),
@@ -607,7 +607,7 @@ from mutation_run_record import RR  # noqa: E402
 from mutation_reply_parse import RP  # noqa: E402
 from mutation_private_files import PF  # noqa: E402
 
-PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
+PS_RS = C + 'local/ai-comfy-env/src/source/pack/status.rs'
 PS = [
     ('record-not-consulted', PS_RS, '.find(|r| r.folder.eq_ignore_ascii_case(&folder.name))', '.find(|_| false)', E, 'nodepack_status', 'reports_the_commit'),
     ('first-record-taken-for-any-folder', PS_RS, '.find(|r| r.folder.eq_ignore_ascii_case(&folder.name))', '.next()', E, 'nodepack_status', 'changes_nothing_on_disk'),
@@ -620,8 +620,8 @@ PS = [
     ('damaged-record-read-as-empty', PS_RS, 'registry.packs()?', 'registry.packs().unwrap_or_default()', E, 'nodepack_status', 'damaged_record'),
     ('only-the-first-known-name-tried', PS_RS, '.find_map(|known|', '.take(1).find_map(|known|', E, 'nodepack_status', 'any_of_the_known'),
 ]
-LG_RS = C + 'ai-comfy-env/src/source/registry/licences.rs'
-LG_IN = C + 'ai-comfy-env/src/source/install.rs'
+LG_RS = C + 'local/ai-comfy-env/src/source/registry/licences.rs'
+LG_IN = C + 'local/ai-comfy-env/src/source/install.rs'
 LGT = 'source_licences'
 LG = [
     ('licence-name-ignored', LG_RS, '&& self.name == c.licence.name', '&& true', E, LGT, 'new_version_changed_terms'),
@@ -639,7 +639,7 @@ LG = [
     ('install-forgets-the-yes', LG_IN, 'if candidate.licence.accept_required && consents.licence {', 'if false {', E, LGT, 'outlives_the_file'),
 ]
 COMFY = 'craft-ai-comfyui'
-WF_LIBRARY = C + 'ai-comfyui/src/library.rs'
+WF_LIBRARY = C + 'local/ai-comfyui/src/library.rs'
 # The workflow library keeps stored file names inside the library directory whatever the id
 # holds (ids are model ids and may contain `/`, `:` and `.`), keeps distinct ids distinct, and
 # saves/removes a workflow by its stored id among the library's json files only.
@@ -668,10 +668,10 @@ S21 = [
 ]
 
 # NV2: a library workflow using steps not known to keep data local is named and asked about.
-STEPS = C + 'ai-comfyui/src/local_steps.rs'
-CONSENT_CORE = C + 'ai-core/src/consent.rs'
-CLIENT_RUN = C + 'ai-client/src/client_run.rs'
-EGUI_TEXT = C + 'ai-egui/src/text.rs'
+STEPS = C + 'local/ai-comfyui/src/local_steps.rs'
+CONSENT_CORE = C + 'foundation/ai-core/src/consent.rs'
+CLIENT_RUN = C + 'app/ai-client/src/client_run.rs'
+EGUI_TEXT = C + 'app/ai-egui/src/text.rs'
 WS = [
     ('steps-any-class-known', STEPS, '.filter(|class| !KNOWN_LOCAL_STEPS.contains(class))', '.filter(|_| false)', 'craft-ai-comfyui', 'local_steps', 'every_other_step'),
     ('steps-identity-cut', STEPS, '.map(str::to_owned)', '.map(|c| c.chars().take(80).collect())', 'craft-ai-comfyui', 'local_steps', 'exact_however_long'),
@@ -687,7 +687,7 @@ WS = [
     ('steps-build-unchecked', 'crates/app/ai-client/src/factory/comfyui.rs', 'self.workflows,', 'load(factory.comfyui_library.as_deref())?,', 'craft-ai-client', 'comfyui_steps', 'replaced_while_the_key'),
     ('steps-snapshot-before-key', 'crates/app/ai-client/src/client_run.rs', 'let snapshot = if is_comfyui(&plan.connection) {', 'let _ = secret_for(&*self.secrets, &plan.connection)?;\n        let snapshot = if is_comfyui(&plan.connection) {', 'craft-ai-client', 'comfyui_steps', 'refused_before_key_read'),
     ('steps-selected-model-required', 'crates/app/ai-client/src/factory/comfyui.rs', 'let steps = workflows\n                .iter()\n                .find(|w| w.id() == model)', 'let steps = workflows\n                .iter()\n                .find(|_| true)', 'craft-ai-client', 'comfyui_steps', 'absent_selected_workflow'),
-    ('steps-own-builder-bypassed', C + 'ai-client/src/factory/comfyui.rs', 'if !self.comfyui_built_in {', 'if false {', CL, 'comfyui_steps', 'own_comfyui_builder'),
+    ('steps-own-builder-bypassed', C + 'app/ai-client/src/factory/comfyui.rs', 'if !self.comfyui_built_in {', 'if false {', CL, 'comfyui_steps', 'own_comfyui_builder'),
     ('steps-grant-widens-wider-record', CONSENT_CORE, '.find(|r| r.same_scope(d) && r.expires_at == expires_at)', '.find(|r| r.covers(d) && r.expires_at == expires_at)', M, 'consent_steps', 'does_not_widen'),
     ('steps-renewal-shortens-wider-record', CONSENT_CORE, '.filter(|r| r.same_scope(d) && r.expires_at != expires_at)', '.filter(|r| r.covers(d) && r.expires_at != expires_at)', M, 'consent_steps', 'does_not_widen'),
     ('steps-grant-set-broadened', CONSENT_CORE, '.all(|s| d.unknown_steps.contains(s))', '.all(|_| true)', M, 'consent_step_grants', 'a_narrow_image_grant'),
@@ -698,13 +698,13 @@ WS = [
 ]
 
 # NV1: a key sent over plain http to this computer is asked about first.
-CONSENT_KEY = C + 'ai-core/src/consent.rs'
+CONSENT_KEY = C + 'foundation/ai-core/src/consent.rs'
 LK = [
     ('local-key-not-asked', CONSENT_KEY, 'locality: Self::locality_for(connection),', 'locality: connection.locality,', M, 'local_key', 'needs_agreement'),
     ('local-key-https-asked-too', CONSENT_KEY, '.is_some_and(|e| !e.https)', '.is_some_and(|_| true)', M, 'local_key', 'no_key_or_https'),
     ('local-key-keyless-asked-too', CONSENT_KEY, 'connection.auth.secret_ref().is_some()\n            && connection', 'true\n            && connection', M, 'local_key', 'no_key_or_https'),
     ('local-key-sent-unasked', CONSENT_KEY, '            Locality::Remote\n        } else {\n            connection.locality', '            connection.locality\n        } else {\n            connection.locality', CL, 'local_key', 'not_sent_until'),
-    ('local-key-not-shown', C + 'ai-egui/src/text.rs', 'if d.key_in_clear {', 'if false {', 'craft-ai-egui', 'lib', 'key_sent_unencrypted'),
+    ('local-key-not-shown', C + 'app/ai-egui/src/text.rs', 'if d.key_in_clear {', 'if false {', 'craft-ai-egui', 'lib', 'key_sent_unencrypted'),
     ('local-key-flag-unset', CONSENT_KEY, 'key_in_clear: Self::sends_key_in_clear(connection),', 'key_in_clear: false,', M, 'local_key', 'needs_agreement'),
 ]
 
@@ -753,8 +753,14 @@ def main():
         newline = '\r\n' if b'\r\n' in original else '\n'
         try:
             path.write_bytes(text.replace(old, new).replace('\n', newline).encode('utf-8'))
-            # target 'lib' runs the crate's own unit tests instead of an integration test file.
-            where = ['--lib'] if target == 'lib' else ['--test', target]
+            # target 'lib' runs the crate's own unit tests, 'example:NAME' the unit tests inside an
+            # example, anything else an integration test file.
+            if target == 'lib':
+                where = ['--lib']
+            elif target.startswith('example:'):
+                where = ['--example', target.removeprefix('example:')]
+            else:
+                where = ['--test', target]
             command = ['cargo', 'test', '--locked', '-p', package, *where, test, '--', '--nocapture']
             proc = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             timed_out = False

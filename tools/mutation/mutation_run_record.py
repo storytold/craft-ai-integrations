@@ -8,7 +8,8 @@ R = 'crates/app/ai-client/src/run_record.rs'
 CL = 'craft-ai-client'
 T = 'run_record'
 P = 'crates/app/ai-client/examples/live_openai/output_paths.rs'
-PT = 'live_output_paths'
+# The output-path tests are unit tests inside the live_openai example, not an integration test file.
+PT = 'example:live_openai'
 
 RR = [
     # Run-record and image destinations cannot corrupt the real shared store, even through aliases.

@@ -20,7 +20,7 @@ NF = [
     ('native-plan-skips-the-disk-check', F + 'plan.rs', '    fill_files(&mut out, &route.models, inventory);\n    check_disk(&mut out, inventory);', '    fill_files(&mut out, &route.models, inventory);', FE, 'native_setup', 'free_space'),
     ('native-offer-ignores-the-provider', F + 'setup.rs', 'selected_provider.is_none_or(|provider| n.provider == provider)', 'true', FE, 'setup', 'selected_provider'),
     ('built-in-offer-compares-comfyui-files', F + 'setup.rs', 'let compared = if let Some(native) = native {', 'let compared = if let Some(native) = native.filter(|_| false) {', FE, 'setup', 'needs_only_the_model'),
-    ('option-offered-for-a-route-without-files', F + 'options.rs', '                .filter(|n| !n.models.is_empty())\n            else {', '            else {', FE, 'native_setup', 'not_unbuilt_burn'),
+    ('option-offered-for-a-route-without-files', F + 'options.rs', '                .filter(|n| !n.models.is_empty())\n            else {', '            else {', FE, 'native_setup', 'a_runtime_route_without_files_gets_no_option'),
     ('native-options-before-later-locals', F + 'options.rs', 'locals.extend(natives);', 'locals.splice(0..0, natives);', FE, 'native_setup', 'follow_every_local'),
     ('built-in-offer-uses-the-comfyui-terms', F + 'setup.rs', 'agreement: agreement_for(route),', 'agreement: agreement(),', FE, 'setup', 'agrees_to_its_own'),
     ('native-option-loses-its-model-id', F + 'options.rs', 'model: native.model.clone(),', 'model: String::new(),', FE, 'native_setup', 'candle_with_its_own_size'),

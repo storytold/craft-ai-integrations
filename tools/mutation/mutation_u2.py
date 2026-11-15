@@ -7,13 +7,13 @@ C = 'crates/'
 M = 'craft-ai-core'
 D = 'craft-ai-declarative'
 CL = 'craft-ai-client'
-S = C + 'ai-core/src/spec.rs'
-SC = C + 'ai-core/src/spec/check.rs'
-ST = C + 'ai-core/src/spec/template.rs'
-DL = C + 'ai-declarative/src/lib.rs'
-DH = C + 'ai-declarative/src/http.rs'
-DF = C + 'ai-declarative/src/flow.rs'
-DC = C + 'ai-client/src/declarative.rs'
+S = C + 'foundation/ai-core/src/spec.rs'
+SC = C + 'foundation/ai-core/src/spec/check.rs'
+ST = C + 'foundation/ai-core/src/spec/template.rs'
+DL = C + 'api/ai-declarative/src/lib.rs'
+DH = C + 'api/ai-declarative/src/http.rs'
+DF = C + 'api/ai-declarative/src/flow.rs'
+DC = C + 'app/ai-client/src/declarative.rs'
 
 # (name, file, old, new, package, test target, test filter)
 U2 = [
@@ -52,7 +52,7 @@ U2 = [
     ('spec-query-limit-loosened', SC, 'if call.query.len() > 8 {', 'if call.query.len() > 9 {', M, 'spec_calls', 'query_values'),
     ('template-lone-brace-allowed', ST, "} else if here.starts_with('}') {", '} else if false {', M, 'spec_template', 'braces_are_closed'),
     ('template-extra-name-known', ST, '"job_id" => Some(Self::JobId),', '"job_id" | "seed" => Some(Self::JobId),', M, 'spec_template', 'three_names'),
-    ('template-key-substituted', ST, '.map(|(k, v)| Ok((k.clone(), render_value(v, values)?)))', '.map(|(k, v)| Ok((render_text(k, values)?, render_value(v, values)?)))', M, 'spec_template', 'key_is_never_substituted'),
+    ('template-key-substituted', ST, '.map(|(k, v)| Ok((k.clone(), render_value(v, values, budget)?)))', '.map(|(k, v)| Ok((render_text(k, values, budget)?, render_value(v, values, budget)?)))', M, 'spec_template', 'key_is_never_substituted'),
     ('template-key-brace-allowed', ST, "if key.contains(['{', '}']) {", 'if false {', M, 'spec_template', 'keys_are_literal'),
     ('run-redirect-followed', DH, '.max_redirects(0)', '.max_redirects(5)', D, 'queue', 'redirect_on_a_read'),
     ('run-none-auth-sends-key', DH, 'SpecAuth::None => None,', 'SpecAuth::None => Some(("Authorization", format!("Bearer {}", key.expose()))),', D, 'direct', 'no_key_sends_none'),
@@ -66,7 +66,7 @@ U2 = [
     ('run-file-kind-unchecked', DF, 'if sniff::media_type(head).map(|(kind, _)| kind) != Some(media) {', 'if false {', D, 'direct', 'not_the_declared_kind'),
     ('run-call-resent-while-running', DL, '(Some(_), _) if job.attempted => return Ok(stable(job)),', '(Some(_), _) if false => return Ok(stable(job)),', D, 'direct', 'second_poll_while'),
     ('run-full-list-drops-running-jobs', DL, '.filter(|(_, j)| j.snapshot.state.is_terminal())\n                .min_by_key', '.min_by_key', D, 'direct', 'full_list_forgets'),
-    ('run-room-made-after-the-paid-call', DL, '// Make room before anything billable is sent.\n            let mut jobs = self.lock()?;\n            self.make_room(&mut jobs)?;', 'let _ = ();', D, 'direct', 'room_before_the_billable'),
+    ('run-room-made-after-the-paid-call', DL, 'let filled = flow::fill(&submit.call, &values)?;\n                {\n                    let mut jobs = self.lock()?;\n                    self.make_room(&mut jobs)?;\n                }', 'let filled = flow::fill(&submit.call, &values)?;', D, 'direct', 'room_before_the_billable'),
     ('run-poll-budget-tightened', DL, 'if job.polls > limits.max_polls', 'if job.polls >= limits.max_polls', D, 'queue', 'poll_budget'),
     ('run-poll-budget-loosened', DL, 'if job.polls > limits.max_polls', 'if job.polls > limits.max_polls + 100', D, 'queue', 'poll_budget'),
     ('run-failed-cancel-still-cancels', DL, 'self.send(&flow::fill(call, &values)?)?;\n        }\n        let mut jobs = self.lock()?;', 'let _ = self.send(&flow::fill(call, &values)?);\n        }\n        let mut jobs = self.lock()?;', D, 'queue', 'cancel_call_the_service_refuses'),
