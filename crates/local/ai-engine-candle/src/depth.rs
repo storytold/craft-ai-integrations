@@ -250,12 +250,7 @@ impl LoadedModel for Loaded {
         ctx.progress(95);
         ctx.check_cancelled()?;
 
-        let values = resample_plane_with(
-            &map.data,
-            (map.width as usize, map.height as usize),
-            (picture.width, picture.height),
-            |v| (v.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16,
-        );
+        let values = depth_values(&map, (picture.width, picture.height));
         let png = encode_depth16(&values, picture.width, picture.height)?;
         if png.len() as u64 > self.max_reply_bytes {
             return Err(too_big_to_return());
@@ -265,6 +260,30 @@ impl LoadedModel for Loaded {
             label: None,
         }])
     }
+}
+
+/// The map resampled to `w x h` as 16-bit values spanning the whole range: resampling smooths a
+/// lone extreme of the 0..1 map away from 0 or 1, so a map that is not constant is stretched, in
+/// place, until its lowest value is 0 and its highest 65535. A constant map stays as it is (zeros).
+fn depth_values(map: &DepthMap, (w, h): (usize, usize)) -> Vec<u16> {
+    let mut values = resample_plane_with(
+        &map.data,
+        (map.width as usize, map.height as usize),
+        (w, h),
+        |v| (v.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16,
+    );
+    let (lo, hi) = values
+        .iter()
+        .fold((u16::MAX, u16::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    if lo < hi && (lo, hi) != (u16::MIN, u16::MAX) {
+        let range = u64::from(hi - lo);
+        for v in &mut values {
+            // At most 65535 * 65535 + 32767: no overflow in u64, and the result is at most 65535.
+            let scaled = (u64::from(*v - lo) * u64::from(u16::MAX) + range / 2) / range;
+            *v = u16::try_from(scaled).unwrap_or(u16::MAX);
+        }
+    }
+    values
 }
 
 /// Every runner here that is the depth one, for [`crate::runners`].

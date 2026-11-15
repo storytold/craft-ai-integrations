@@ -333,6 +333,27 @@ fn resampling_converts_as_it_writes() {
 }
 
 #[test]
+fn resampling_is_the_same_with_and_without_the_column_cache() {
+    // A one-row source is constant down each column, so every output row, whatever the output's
+    // height, must equal the one-row output. A height below the threshold computes the columns
+    // on demand, one at or above it reads them from the cache.
+    let src = [0.0f32, 3.0, 1.0, 7.0, 2.0];
+    let width = 13;
+    let reference = resample_plane_with(&src, (5, 1), (width, 1), |v| v);
+    assert_eq!(reference.len(), width);
+    assert!(reference.windows(2).any(|p| p[0] != p[1]));
+    for rows in [
+        COLUMN_CACHE_MIN_ROWS - 1,
+        COLUMN_CACHE_MIN_ROWS,
+        COLUMN_CACHE_MIN_ROWS + 1,
+    ] {
+        let tall = resample_plane_with(&src, (5, 1), (width, rows), |v| v);
+        assert_eq!(tall.len(), width * rows);
+        assert!(tall.chunks(width).all(|row| row == reference.as_slice()));
+    }
+}
+
+#[test]
 fn tiled_pipeline_with_a_fake_estimator() {
     let (w, h) = (1100u32, 800u32);
     let rgb = vec![0.5f32; (w * h * 3) as usize];

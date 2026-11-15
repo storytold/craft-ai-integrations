@@ -61,8 +61,10 @@ impl Net {
         let sq = pad_square(&prep.data, pw, ph, side);
         let input = Tensor::from_vec(sq, (1, 3, side, side), &self.device).map_err(be)?;
         let out = self.net.forward(&input).map_err(be)?;
-        // The head's output grid need not equal the input (candle's DPT head gives 520 x 520 for a
-        // 518 x 518 input): read its size from the tensor and map it back onto the square input.
+        // The head's output grid need not equal the input: candle's DPT head ends in a 1 x 1
+        // convolution with a padding of 1, so it gives 520 x 520 for a 518 x 518 input, the input's
+        // grid inside a one-pixel border of bias values. Read the size from the tensor and map it
+        // back onto the square input.
         let dims = out.dims().to_vec();
         let (oh, ow) = match dims.as_slice() {
             [.., oh, ow] => (*oh, *ow),
@@ -76,7 +78,7 @@ impl Net {
         if ow == 0 || oh == 0 || flat.len() != ow * oh {
             return Err(backend(format!("unexpected output shape {dims:?}")));
         }
-        let cropped = crop_resample(&flat, (ow, oh), side, (pw, ph));
+        let cropped = crop_head_output(&flat, (ow, oh), side, (pw, ph));
         postprocess(&cropped, prep.width, prep.height)
     }
 }
@@ -100,6 +102,30 @@ fn pad_square(data: &[f32], pw: usize, ph: usize, side: usize) -> Vec<f32> {
         }
     }
     sq
+}
+
+/// The `pw x ph` top-left part of the square `side x side` input's depth, from the head's
+/// `ow x oh` output. An output of exactly `(side + 2) x (side + 2)` is the input's grid inside a
+/// one-pixel padding border (see [`Net::run`]): the border is dropped and the values are copied
+/// as they are, no resampling. Any other size is taken to cover the whole input and is resampled
+/// with [`crop_resample`].
+pub(super) fn crop_head_output(
+    out: &[f32],
+    (ow, oh): (usize, usize),
+    side: usize,
+    (pw, ph): (usize, usize),
+) -> Vec<f32> {
+    let bordered = side.checked_add(2).is_some_and(|b| (ow, oh) == (b, b));
+    if !bordered || pw > side || ph > side {
+        return crop_resample(out, (ow, oh), side, (pw, ph));
+    }
+    let mut res = Vec::with_capacity(pw * ph);
+    for y in 0..ph {
+        // Row `y` of the input is row `y + 1` of the output, columns likewise.
+        let start = (y + 1) * ow + 1;
+        res.extend((start..start + pw).map(|i| out.get(i).copied().unwrap_or(0.0)));
+    }
+    res
 }
 
 /// The `pw x ph` top-left part of a `side x side` input, sampled bilinearly (pixel centres) from

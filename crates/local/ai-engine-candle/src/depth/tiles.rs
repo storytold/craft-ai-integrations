@@ -96,6 +96,10 @@ pub(super) fn plan_tiles(w: u32, h: u32, max_tiles: u32) -> Vec<TileRect> {
     out
 }
 
+/// Fewest output rows for which [`resample_plane_with`] keeps a per-column cache: with this many
+/// rows to reuse it, the cache is at most a sixty-fourth of the output's size.
+const COLUMN_CACHE_MIN_ROWS: usize = 64;
+
 /// Bilinear resize of one plane (pixel centres aligned), turning each value with `map` as it is
 /// written, so a caller that wants another type never holds a second full-size plane.
 pub(super) fn resample_plane_with<T>(
@@ -110,24 +114,31 @@ pub(super) fn resample_plane_with<T>(
     }
     let at = |x: usize, y: usize| src.get(y * sw + x).copied().unwrap_or(0.0);
     let (fx, fy) = (sw as f32 / dw as f32, sh as f32 / dh as f32);
-    let xs: Vec<(usize, usize, f32)> = (0..dw)
-        .map(|x| {
-            let u = ((x as f32 + 0.5) * fx - 0.5).clamp(0.0, (sw - 1) as f32);
-            let x0 = u.floor() as usize;
-            (x0, (x0 + 1).min(sw - 1), u - x0 as f32)
-        })
-        .collect();
+    let col = |x: usize| {
+        let u = ((x as f32 + 0.5) * fx - 0.5).clamp(0.0, (sw - 1) as f32);
+        let x0 = u.floor() as usize;
+        (x0, (x0 + 1).min(sw - 1), u - x0 as f32)
+    };
+    // The columns' coordinates are the same on every row, so they are worked out once when there
+    // are enough rows to share them. A very wide, short picture would otherwise hold a cache as
+    // large as its output (24,000,000 x 1 is half a gigabyte); the result is the same either way.
+    let cache: Option<Vec<(usize, usize, f32)>> =
+        (dh >= COLUMN_CACHE_MIN_ROWS).then(|| (0..dw).map(col).collect());
     let mut out = Vec::with_capacity(dw * dh);
     for y in 0..dh {
         let v = ((y as f32 + 0.5) * fy - 0.5).clamp(0.0, (sh - 1) as f32);
         let y0 = v.floor() as usize;
         let y1 = (y0 + 1).min(sh - 1);
         let wy = v - y0 as f32;
-        out.extend(xs.iter().map(|&(x0, x1, wx)| {
+        let sample = |(x0, x1, wx): (usize, usize, f32)| {
             let a = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * wx;
             let b = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * wx;
             map(a + (b - a) * wy)
-        }));
+        };
+        match &cache {
+            Some(cols) => out.extend(cols.iter().map(|&c| sample(c))),
+            None => out.extend((0..dw).map(|x| sample(col(x)))),
+        }
     }
     out
 }

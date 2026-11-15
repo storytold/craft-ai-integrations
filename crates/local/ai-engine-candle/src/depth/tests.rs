@@ -320,3 +320,37 @@ fn memory_needed_counts_both_files_at_32_bits_plus_activations() {
         Some(2 * 1500 + ACTIVATION_BYTES)
     );
 }
+
+#[test]
+fn depth_values_span_the_full_range_after_resampling() {
+    // One 1.0 among zeros, resampled from 3 x 3 up to 8 x 8: the bilinear blend leaves the peak
+    // short of 1.0, and the output must still reach both ends of the 16-bit range.
+    let mut data = vec![0.0f32; 9];
+    data[4] = 1.0;
+    let map = DepthMap {
+        width: 3,
+        height: 3,
+        data,
+    };
+    let plain = resample_plane_with(&map.data, (3, 3), (8, 8), |v| {
+        (v.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16
+    });
+    assert!(plain.iter().max().copied().unwrap_or(0) < u16::MAX);
+    let values = depth_values(&map, (8, 8));
+    assert_eq!(values.len(), 64);
+    assert_eq!(values.iter().max().copied(), Some(u16::MAX));
+    assert_eq!(values.iter().min().copied(), Some(0));
+    // A constant map stays as it is, whatever its level.
+    let flat = DepthMap {
+        width: 2,
+        height: 2,
+        data: vec![0.0; 4],
+    };
+    assert_eq!(depth_values(&flat, (3, 3)), vec![0u16; 9]);
+    let level = DepthMap {
+        width: 2,
+        height: 2,
+        data: vec![0.5; 4],
+    };
+    assert_eq!(depth_values(&level, (3, 3)), vec![32768u16; 9]);
+}
