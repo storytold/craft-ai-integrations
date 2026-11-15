@@ -129,6 +129,52 @@ fn corrupt_file_blocks_update_but_replace_recovers_and_keeps_a_copy() {
     assert_eq!(std::fs::read_to_string(backup).unwrap(), "{ truncated");
 }
 
+/// The backup holds the same settings, so a link planted at its name is replaced, never written
+/// through to wherever it points.
+#[test]
+fn a_link_at_the_backup_name_is_replaced_not_written_through() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("written-through-the-link");
+    let s = store_at(&dir);
+    std::fs::create_dir_all(s.path().parent().unwrap()).unwrap();
+    std::fs::write(s.path(), "{ truncated").unwrap();
+    let backup = std::path::PathBuf::from(format!("{}.corrupt", s.path().display()));
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&target, &backup);
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(&target, &backup);
+    if linked.is_err() {
+        eprintln!("skipped: this account cannot create symbolic links");
+        return;
+    }
+    s.replace(&StoreFile::default()).unwrap();
+    assert!(!target.exists(), "the copy went through the planted link");
+    assert!(
+        !std::fs::symlink_metadata(&backup)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{ truncated");
+}
+
+/// `fs::copy` would give the backup the original's mode; it is private whatever that was.
+#[cfg(unix)]
+#[test]
+fn the_copy_of_a_corrupt_store_is_private_even_when_the_original_was_not() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = store_at(&dir);
+    std::fs::create_dir_all(s.path().parent().unwrap()).unwrap();
+    std::fs::write(s.path(), "{ truncated").unwrap();
+    std::fs::set_permissions(s.path(), std::fs::Permissions::from_mode(0o644)).unwrap();
+    s.replace(&StoreFile::default()).unwrap();
+    let backup = format!("{}.corrupt", s.path().display());
+    let mode = std::fs::metadata(backup).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
 #[test]
 fn oversize_and_non_text_files_are_errors() {
     let dir = tempfile::tempdir().unwrap();

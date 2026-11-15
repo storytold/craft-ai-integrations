@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use craft_ai_core::HistoryRecord;
 
 use crate::fsutil::{read_capped, with_lock};
-use crate::paths;
+use crate::{owner_only, paths};
 
 /// Default cap for the live file, 4 MiB (roughly 10,000 jobs).
 pub const DEFAULT_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -91,6 +91,7 @@ impl HistoryFile {
             if len > 0 && len + line.len() as u64 > self.max_bytes {
                 fs::rename(&self.path, self.rotated_path())?;
             }
+            create_private(&self.path)?;
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -132,6 +133,18 @@ impl HistoryFile {
             }
             Ok(())
         })
+    }
+}
+
+/// Creates the log as a new owner-only file when it is missing. Records can hold prompts, and on
+/// Windows a file created by `OpenOptions` takes its folder's access list, which a folder this
+/// crate did not create (one `CRAFT_AI_DIR` names) may share with other accounts.
+fn create_private(path: &Path) -> io::Result<()> {
+    match owner_only::create_file(path) {
+        Ok(_) => Ok(()),
+        // Appended to as it is: an existing file is never taken over.
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
     }
 }
 

@@ -2108,6 +2108,7 @@ dependencies = [
  "craft-ai-native",
  "libc",
  "png",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "tempfile",

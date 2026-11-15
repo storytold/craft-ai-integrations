@@ -213,3 +213,50 @@ fn a_link_planted_at_the_temp_name_is_not_followed() {
     assert_eq!(fs::read(&p).unwrap(), b"{}");
     assert!(!fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
 }
+
+/// A folder this crate did not create (one `CRAFT_AI_DIR` names) still gets a private log.
+#[test]
+fn a_new_history_file_in_an_inheriting_folder_is_owner_only() {
+    use craft_ai_core::history::{EndRecord, HISTORY_SCHEMA, Outcome};
+    let dir = inheriting_dir();
+    let p = dir.path().join("jobs.jsonl");
+    let file = crate::HistoryFile::new(&p);
+    let record = craft_ai_core::HistoryRecord::End(EndRecord {
+        v: HISTORY_SCHEMA,
+        run: "a".into(),
+        at_ms: 1,
+        outcome: Outcome::Done,
+        usage: None,
+    });
+    file.append(&record).unwrap();
+    assert_owner_only(&p);
+    // Later appends keep the file and its list.
+    file.append(&record).unwrap();
+    assert_owner_only(&p);
+    assert_eq!(file.read().unwrap().records.len(), 2);
+}
+
+#[test]
+fn the_copy_of_a_corrupt_store_is_owner_only_in_an_inheriting_folder() {
+    let dir = inheriting_dir();
+    let p = dir.path().join("connections.json");
+    fs::write(&p, b"{ truncated").unwrap();
+    crate::shared::SharedStore::new(&p)
+        .replace(&craft_ai_core::StoreFile::default())
+        .unwrap();
+    let backup = dir.path().join("connections.json.corrupt");
+    assert_eq!(fs::read(&backup).unwrap(), b"{ truncated");
+    assert_owner_only(&backup);
+}
+
+#[test]
+fn write_atomic_is_owner_only_in_an_inheriting_folder() {
+    let dir = inheriting_dir();
+    let p = dir.path().join("extra_model_paths.yaml");
+    write_atomic(
+        &p, b"a: b
+",
+    )
+    .unwrap();
+    assert_owner_only(&p);
+}

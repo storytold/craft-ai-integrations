@@ -30,6 +30,9 @@ craft-ai-native = { path = "../ai-native", package = "craft-ai-native" }
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK, so a pipe given as an image or workflow file is refused instead of waited on.
 libc = "0.2"
+# The effective user id, so the SAM 3 lock folder is used only when this user owns it. Already in
+# the tree through tempfile; this names one more of its features, not a new crate.
+rustix = { version = "1.1.6", default-features = false, features = ["std", "process"] }
 
 [dev-dependencies]
 craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }

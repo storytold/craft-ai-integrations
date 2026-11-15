@@ -212,6 +212,35 @@ fn the_extra_paths_file_matches_the_folders_and_is_replaced_not_added_to() {
     );
 }
 
+/// The file sits in a folder the caller chose, so a link planted beside it at a predictable
+/// temporary name must not carry the folder list somewhere else.
+#[test]
+fn the_extra_paths_file_is_not_written_through_a_planted_link() {
+    let w = world();
+    let d = desk(&w);
+    d.add(w.models.path(), Some("one")).unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("written-through-the-link");
+    let file = out.path().join("comfy_extra_paths.yaml");
+    // The name `owner_only::write_atomic` writes first, as `ai-native`'s `fsutil` derives it.
+    let planted = out.path().join(format!(
+        ".comfy_extra_paths.yaml.tmp-{}",
+        std::process::id()
+    ));
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&target, &planted);
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(&target, &planted);
+    if linked.is_err() {
+        eprintln!("skipped: this account cannot create symbolic links");
+        return;
+    }
+    d.write_extra_paths(&file).unwrap();
+    assert!(!target.exists(), "the file went through the planted link");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("vae"));
+}
+
 /// A plain add never creates a folder; `add_new` does, and only for an absolute path.
 #[test]
 fn a_proposed_folder_that_does_not_exist_yet_is_made_when_accepted() {
