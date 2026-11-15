@@ -12,6 +12,7 @@ mod detector;
 mod http;
 mod input;
 mod library;
+pub mod local_steps;
 mod output;
 mod provider;
 mod sam21_session;
