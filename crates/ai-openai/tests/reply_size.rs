@@ -35,7 +35,16 @@ fn provider(url: &str) -> OpenAiProvider {
 }
 
 fn run(url: &str, model: &str, request: &Request) -> craft_ai_core::conformance::Completed {
-    let pause = || std::thread::sleep(std::time::Duration::from_millis(5));
+    run_paced(url, model, request, std::time::Duration::from_millis(5))
+}
+
+fn run_paced(
+    url: &str,
+    model: &str,
+    request: &Request,
+    poll_interval: std::time::Duration,
+) -> craft_ai_core::conformance::Completed {
+    let pause = || std::thread::sleep(poll_interval);
     run_lifecycle_paced(
         &provider(url),
         &ModelId::new(model).unwrap(),
@@ -152,7 +161,16 @@ fn a_large_picture_still_arrives() {
     assert!(b64.len() > 20 * 1024 * 1024);
     let body = json!({"data":[{"b64_json": b64}]}).to_string();
     let server = Server::start(move |_| Reply::Json(200, body.clone()));
-    let done = run(&server.url, "gpt-image-1", &image());
+    // This is a size/acceptance check, not a throughput benchmark. Instrumented builds
+    // need time to parse and decode the 20+ MiB reply. Keep the conformance helper
+    // (legal transitions, stable terminal state, no repeated events) and its 1000-poll
+    // hang bound, but allow about 50 seconds instead of five for this large fixture.
+    let done = run_paced(
+        &server.url,
+        "gpt-image-1",
+        &image(),
+        std::time::Duration::from_millis(50),
+    );
     assert_eq!(done.state, JobState::Succeeded);
     assert!(matches!(done.events.first(),
         Some(Event::Output(o)) if matches!(&o.payload, Payload::Inline { data, .. } if data.len() == png.len())));
