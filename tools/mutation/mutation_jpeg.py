@@ -7,10 +7,10 @@ decoder tests also put a stray byte before the fragments, which the decoder skip
 header walk stopped there and under-counted.
 """
 
-CORE = 'crates/ai-core/src/jpeg.rs'
-RTEN = 'crates/ai-engine-rten/src/picture.rs'
-CANDLE = 'crates/ai-engine-candle/src/jpeg.rs'
-MEDIA = 'crates/ai-media/src/result_image.rs'
+CORE = 'crates/foundation/ai-core/src/jpeg.rs'
+RTEN = 'crates/local/ai-engine-rten/src/picture.rs'
+CANDLE = 'crates/local/ai-engine-candle/src/jpeg.rs'
+MEDIA = 'crates/foundation/ai-media/src/result_image.rs'
 FILTER = 'a_jpeg_made_of_tiny_xmp_fragments_is_refused_before_decoding'
 JX = [
     ('jpeg-cap-off-by-one', CORE,

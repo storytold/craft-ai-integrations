@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the SAM 2.1 tiny Burn architecture in crates/ai-engine-burn/src/model/.
+"""Regenerate the SAM 2.1 tiny Burn architecture in crates/local/ai-engine-burn/src/model/.
 
     python tools/burn/generate_sam21.py <folder with encoder.onnx and decoder.onnx>
     python tools/burn/generate_sam21.py <folder> --check     # exit 1 if the tree differs
@@ -8,14 +8,14 @@ Why a script: burn-onnx turns the published ONNX graphs into Rust, but its 0.22.
 run as emitted (five defects, patched and asserted below) and one file would be 6,000 lines. The
 script is the only way that code is produced, so a reviewer can rerun it and compare.
 
-Steps: check the two files against the sizes and SHA-256 pinned in crates/ai-burn-setup, ask the
+Steps: check the two files against the sizes and SHA-256 pinned in crates/local/ai-burn-setup, ask the
 pinned burn-onnx (the `conversion` feature of that crate) for the Rust, apply the five patches
 (each must match exactly the stated number of times), drop the generated loaders (they panic on a
 bad file; the runner loads weights itself and returns errors), split by submodule so no file is
 over the line limit, run rustfmt and write the files.
 
 REVISION rule: it names the compiled architecture and the converter that made its weights, and is
-part of the saved-weights cache key (crates/ai-burn-setup/src/sam21.rs). Change it, here and there
+part of the saved-weights cache key (crates/local/ai-burn-setup/src/sam21.rs). Change it, here and there
 together, whenever burn-onnx or Burn is bumped, a patch changes, or the source files change. A Rust
 test in the engine crate fails if the two disagree.
 """
@@ -29,8 +29,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SETUP_SAM21 = ROOT / 'crates/ai-burn-setup/src/sam21.rs'
-OUT = ROOT / 'crates/ai-engine-burn/src/model'
+SETUP_SAM21 = ROOT / 'crates/local/ai-burn-setup/src/sam21.rs'
+OUT = ROOT / 'crates/local/ai-engine-burn/src/model'
 REVISION = 'sam21-tiny-burn-0.22.1-onnx-0.22.0-v1'
 BURN_ONNX = '0.22.0'
 MAX_LINES = 700

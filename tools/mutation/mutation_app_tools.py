@@ -9,7 +9,7 @@ greyed, not an error" are delegated to AiClient::status and SharedStore::load, w
 passed straight to AiClient::start, which refuses a missing agreement (group `ct`,
 `consent-not-enforced`); ignoring a granted ledger would refuse a job, not send one.
 """
-A = 'crates/ai-client/src/app_tools.rs'
+A = 'crates/app/ai-client/src/app_tools.rs'
 CL = 'craft-ai-client'
 T = 'app_tools'
 
@@ -32,7 +32,7 @@ AT = [
     ('cancel-reads-the-result-away', A, '            if job.cancel().is_err() {', '            if !stop(&job) {', CL, 'app_tools_stop', 'as_the_job_finishes'),
     ('zero-wait-starts-a-job', A, '        if limit.is_zero() {', '        if limit.is_zero() && false {', CL, 'app_tools_stop', 'zero_wait'),
     ('online-job-asked-every-step', A, 'Locality::Remote => REMOTE_STEP,', 'Locality::Remote => STEP,', CL, 'app_tools_stop', 'online_job'),
-    ('no-limit-overflows', 'crates/ai-client/src/client_wait.rs', 'now.checked_add(timeout.min(LONGEST_WAIT)).unwrap_or(now)', 'now + timeout', CL, 'app_tools_stop', 'no_limit'),
+    ('no-limit-overflows', 'crates/app/ai-client/src/client_wait.rs', 'now.checked_add(timeout.min(LONGEST_WAIT)).unwrap_or(now)', 'now + timeout', CL, 'app_tools_stop', 'no_limit'),
     ('unreadable-store-is-an-unknown-tool', A, '.map_err(|e| e.to_string())\n    }', '.or_else(|_| Ok(Vec::new()))\n    }', CL, 'app_tools_stop', 'unreadable_store'),
 ]
 

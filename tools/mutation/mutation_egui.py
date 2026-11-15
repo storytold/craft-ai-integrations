@@ -6,7 +6,7 @@ receipt to `tools/mutation/verification/eg-mutations.json` with per-case logs be
 
 Format: (name, file, old, new, package, test target, test filter).
 """
-PANEL = 'crates/ai-egui/src/panel.rs'
+PANEL = 'crates/app/ai-egui/src/panel.rs'
 EG = 'craft-ai-egui'
 
 EG_CASES = [

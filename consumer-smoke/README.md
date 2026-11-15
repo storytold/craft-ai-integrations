@@ -4,7 +4,7 @@ This separate `[workspace]` checks the dependency recipe an app copies when it a
 `craft-ai-egui`. It is **not** a repository workspace member and it changes no root manifest or
 root lockfile.
 
-- Path dependencies: `../crates/ai-egui` and the same `../crates/ai-core` package.
+- Path dependencies: `../crates/app/ai-egui` and the same `../crates/foundation/ai-core` package.
 - One `craft-ai-core` identity: `src/lib.rs` names `ConnectionDraft`, `ConnectionId` and
   `DraftError` through `craft_ai_core` and takes them from the public widget state. A second core
   copy makes the crate fail to compile.

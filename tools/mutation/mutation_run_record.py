@@ -4,10 +4,10 @@
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-R = 'crates/ai-client/src/run_record.rs'
+R = 'crates/app/ai-client/src/run_record.rs'
 CL = 'craft-ai-client'
 T = 'run_record'
-P = 'crates/ai-client/examples/live_openai/output_paths.rs'
+P = 'crates/app/ai-client/examples/live_openai/output_paths.rs'
 PT = 'live_output_paths'
 
 RR = [

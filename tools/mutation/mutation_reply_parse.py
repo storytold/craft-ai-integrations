@@ -5,16 +5,16 @@ budget; each adapter gives its readers a budget and, for OpenAI, a byte cap per 
 Each case loosens one charge or one budget and runs the test that must notice.
 """
 
-JSON = 'crates/ai-http/src/json.rs'
+JSON = 'crates/foundation/ai-http/src/json.rs'
 HTTP = 'craft-ai-http'
-O_HTTP = 'crates/ai-openai/src/http.rs'
-O_LIB = 'crates/ai-openai/src/lib.rs'
-O_PROBE = 'crates/ai-openai/src/probe.rs'
-O_JOBS = 'crates/ai-openai/src/jobs.rs'
-O_CHAT = 'crates/ai-openai/src/chat.rs'
-O_STREAM = 'crates/ai-openai/src/stream.rs'
+O_HTTP = 'crates/api/ai-openai/src/http.rs'
+O_LIB = 'crates/api/ai-openai/src/lib.rs'
+O_PROBE = 'crates/api/ai-openai/src/probe.rs'
+O_JOBS = 'crates/api/ai-openai/src/jobs.rs'
+O_CHAT = 'crates/api/ai-openai/src/chat.rs'
+O_STREAM = 'crates/api/ai-openai/src/stream.rs'
 O = 'craft-ai-openai'
-COMFY = 'crates/ai-comfyui/src/http.rs'
+COMFY = 'crates/local/ai-comfyui/src/http.rs'
 UNLIMITED = 'usize::MAX'
 
 RP = [
@@ -39,9 +39,9 @@ RP = [
     ('openai-images-budget-unbounded', O_HTTP, '    bytes: 128 * 1024 * 1024,\n    parsed: 160 * 1024 * 1024,', '    bytes: 128 * 1024 * 1024,\n    parsed: ' + UNLIMITED + ',', O, 'reply_size', 'an_image_reply_of_tiny_objects_is_refused'),
     ('openai-images-budget-below-a-picture', O_HTTP, '    bytes: 128 * 1024 * 1024,\n    parsed: 160 * 1024 * 1024,', '    bytes: 128 * 1024 * 1024,\n    parsed: 16 * 1024 * 1024,', O, 'reply_size', 'a_large_picture_still_arrives'),
     # Gemini, Vertex and declarative routes: one budget each.
-    ('gemini-parse-unbounded', 'crates/ai-gemini/src/lib.rs', 'parse(&bytes, MAX_REPLY_PARSED)', 'parse(&bytes, ' + UNLIMITED + ')', 'craft-ai-gemini', 'worker_and_errors', 'a_reply_of_tiny_objects_is_refused'),
-    ('vertex-parse-unbounded', 'crates/ai-vertex/src/lib.rs', 'parse(&bytes, MAX_REPLY_PARSED)', 'parse(&bytes, ' + UNLIMITED + ')', 'craft-ai-vertex', 'provider', 'a_reply_of_tiny_objects_is_refused'),
-    ('declarative-parse-unbounded', 'crates/ai-declarative/src/http.rs', 'parse(&bytes, MAX_REPLY_PARSED)', 'parse(&bytes, ' + UNLIMITED + ')', 'craft-ai-declarative', 'direct', 'a_reply_of_tiny_objects_is_refused'),
+    ('gemini-parse-unbounded', 'crates/api/ai-gemini/src/lib.rs', 'parse(&bytes, MAX_REPLY_PARSED)', 'parse(&bytes, ' + UNLIMITED + ')', 'craft-ai-gemini', 'worker_and_errors', 'a_reply_of_tiny_objects_is_refused'),
+    ('vertex-parse-unbounded', 'crates/api/ai-vertex/src/lib.rs', 'parse(&bytes, MAX_REPLY_PARSED)', 'parse(&bytes, ' + UNLIMITED + ')', 'craft-ai-vertex', 'provider', 'a_reply_of_tiny_objects_is_refused'),
+    ('declarative-parse-unbounded', 'crates/api/ai-declarative/src/http.rs', 'parse(&bytes, MAX_REPLY_PARSED)', 'parse(&bytes, ' + UNLIMITED + ')', 'craft-ai-declarative', 'direct', 'a_reply_of_tiny_objects_is_refused'),
     # ComfyUI: ordinary replies and the node list.
     ('comfyui-small-reply-unbounded', COMFY, 'const SMALL_REPLY_PARSED: usize = 16 * 1024 * 1024;', 'const SMALL_REPLY_PARSED: usize = ' + UNLIMITED + ';', 'craft-ai-comfyui', 'reply_size', 'a_small_reply_of_tiny_objects_is_refused'),
     ('comfyui-small-reply-takes-the-node-list-budget', COMFY, 'self.get_json_bounded(path, SMALL_REPLY, SMALL_REPLY_PARSED)', 'self.get_json_bounded(path, SMALL_REPLY, NODE_LIST_PARSED)', 'craft-ai-comfyui', 'reply_size', 'a_small_reply_of_tiny_objects_is_refused'),

@@ -53,9 +53,9 @@ retain the local copy and keep its safety behaviour aligned rather than replacin
 
 ## Verification entry points
 
-- `crates/ai-core/tests/draft_provenance.rs`: endpoint edits and late test results.
-- `crates/ai-core/tests/required_inputs.rs`: model compatibility and binding resolution.
-- `crates/ai-client/tests/required_inputs.rs`: app-facing consistency and no early key access.
+- `crates/foundation/ai-core/tests/draft_provenance.rs`: endpoint edits and late test results.
+- `crates/foundation/ai-core/tests/required_inputs.rs`: model compatibility and binding resolution.
+- `crates/app/ai-client/tests/required_inputs.rs`: app-facing consistency and no early key access.
 - `python tools/mutation/mutation_check.py ca`: deliberate bugs for those safety boundaries.
 
 Run the mutation group exclusively, then rerun clean tests after source restoration. These checks

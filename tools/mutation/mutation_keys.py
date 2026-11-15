@@ -5,8 +5,8 @@ for a machine with no OS keychain (`ai-native/src/secrets/standard.rs`, `file.rs
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-S = 'crates/ai-native/src/secrets/standard.rs'
-F = 'crates/ai-native/src/secrets/file.rs'
+S = 'crates/foundation/ai-native/src/secrets/standard.rs'
+F = 'crates/foundation/ai-native/src/secrets/file.rs'
 N = 'craft-ai-native'
 
 KF = [
@@ -18,6 +18,6 @@ KF = [
     ('create-asked-beside-a-keychain', S, 'Some(false) if !keychain => PassphraseNeed::Create,', 'Some(false) => PassphraseNeed::Create,', N, 'lib', 'passphrase_is_asked_for'),
     ('save-refusal-names-no-fix', S, '"this computer has no system keychain, so choose a passphrase to keep keys in an \\\n                 encrypted file",', '"no store",', N, 'lib', 'says_what_to_do'),
     ('failed-check-reads-as-missing', S, 'found.unwrap_or(true)', 'found.unwrap_or(false)', N, 'lib', 'a_failed_file_check_counts_as_locked'),
-    ('passphrase-request-hidden-on-save', 'crates/ai-client/src/manage.rs', 'let shown = if e.kind == ErrorKind::Auth {', 'let shown = if false {', 'craft-ai-client', 'manage_passphrase', 'needs_a_passphrase'),
+    ('passphrase-request-hidden-on-save', 'crates/app/ai-client/src/manage.rs', 'let shown = if e.kind == ErrorKind::Auth {', 'let shown = if false {', 'craft-ai-client', 'manage_passphrase', 'needs_a_passphrase'),
     ('unlocked-delete-ignores-failed-check', F, 'match self.path.try_exists() {', 'match self.path.try_exists().or(Ok::<bool, std::io::Error>(false)) {', N, 'lib', 'an_unlocked_delete_that_cannot_check'),
 ]

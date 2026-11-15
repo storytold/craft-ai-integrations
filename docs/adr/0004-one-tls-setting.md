@@ -9,7 +9,7 @@ Many adapters and downloaders make network calls. If each built its own HTTP age
 
 ## Decision
 
-`craft-ai-http` holds the only HTTP agent configuration, using the platform's certificate check. Every adapter and downloader builds its agent through it. The test `crates/ai-http/tests/every_agent_uses_it.rs` reads every crate's source and fails when a `ureq::Agent::config_builder()` call is not followed by `craft-ai-http`'s TLS setting and proxy.
+`craft-ai-http` holds the only HTTP agent configuration, using the platform's certificate check. Every adapter and downloader builds its agent through it. The test `crates/foundation/ai-http/tests/every_agent_uses_it.rs` reads every crate's source and fails when a `ureq::Agent::config_builder()` call is not followed by `craft-ai-http`'s TLS setting and proxy.
 
 ## Consequences
 

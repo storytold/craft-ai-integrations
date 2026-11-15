@@ -1,4 +1,4 @@
-"""PyTorch reference for the parity test in crates/ai-engine-burn/src/inspyrenet/parity.rs: the
+"""PyTorch reference for the parity test in crates/local/ai-engine-burn/src/inspyrenet/parity.rs: the
 input, every stage and the prediction of InSPyReNet Swin-B, run by transparent-background's own
 code (pip install transparent-background torch safetensors) on a synthetic 384² picture.
 

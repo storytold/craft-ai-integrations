@@ -12,14 +12,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(__file__).resolve().parent / 'verification'
 OUT.mkdir(exist_ok=True)
-MASKS = ROOT / 'crates/ai-comfyui/src/sam3_masks.rs'
-SESSION = ROOT / 'crates/ai-comfyui/src/sam3_session.rs'
-DETECT = ROOT / 'crates/ai-comfyui/src/sam3_detect.rs'
-INSTANCES = ROOT / 'crates/ai-comfyui/src/sam3_session/instances.rs'
-CAND_TYPES = ROOT / 'crates/ai-comfyui/src/sam3_candidates.rs'
-CAND_SESSION = ROOT / 'crates/ai-comfyui/src/sam3_session/candidates.rs'
-LEASE = ROOT / 'crates/ai-comfyui/src/sam3_lease.rs'
-QUEUE = ROOT / 'crates/ai-comfyui/src/sam3_session/queue.rs'
+MASKS = ROOT / 'crates/local/ai-comfyui/src/sam3_masks.rs'
+SESSION = ROOT / 'crates/local/ai-comfyui/src/sam3_session.rs'
+DETECT = ROOT / 'crates/local/ai-comfyui/src/sam3_detect.rs'
+INSTANCES = ROOT / 'crates/local/ai-comfyui/src/sam3_session/instances.rs'
+CAND_TYPES = ROOT / 'crates/local/ai-comfyui/src/sam3_candidates.rs'
+CAND_SESSION = ROOT / 'crates/local/ai-comfyui/src/sam3_session/candidates.rs'
+LEASE = ROOT / 'crates/local/ai-comfyui/src/sam3_lease.rs'
+QUEUE = ROOT / 'crates/local/ai-comfyui/src/sam3_session/queue.rs'
 GROUP = sys.argv[1] if len(sys.argv) > 1 else 'sg1'
 CASES = [
     ('first-mask-only', MASKS, 'for file in files {\n        if remaining == 0',

@@ -413,7 +413,7 @@ rendering still need your own platform test.
 
 Build a world with no network: a temporary store, an in-memory key store, the launcher's choice
 written with `ToolDesk::choose`, and a scripted adapter registered on a `ProviderFactory`. The
-test file `crates/ai-client/tests/support/adopting_scene.rs` does exactly this, and every block on
+test file `crates/app/ai-client/tests/support/adopting_scene.rs` does exactly this, and every block on
 this page runs on top of it.
 
 <!-- snippet: two_apps -->
