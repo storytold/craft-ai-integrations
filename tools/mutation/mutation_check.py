@@ -366,7 +366,7 @@ RX = [
     ('signed-query-compared', PARTIAL, '    at.set_query(None);\n', '', CM, 'resume', 'a_freshly_signed_redirect'),
     ('start-over-costs-a-try', MEDIA, 'Err(Stop::StartOver(_)) if resuming =>', 'Err(Stop::StartOver(_)) if false =>', CM, 'resume', 'a_refused_range_does_not_cost'),
     ('per-try-time-not-shrunk', MEDIA, '.timeout_global(Some(left));', '.timeout_global(Some(self.config.transfer_timeout));', CM, 'resume', 'whole_save_has_one_time_limit'),
-    ('pause-after-the-deadline', MEDIA, '|error: &AiError| error.is_retryable() && in_time(),', '|error: &AiError| error.is_retryable(),', CM, 'resume', 'whole_save_has_one_time_limit'),
+    ('pause-after-the-deadline', MEDIA, '|error: &AiError| error.is_retryable() && in_time(),', '|error: &AiError| error.is_retryable(),', CM, 'resume', 'time_running_out_during_a_pause_is_the_time_limit'),
     ('late-error-not-named', MEDIA, '.map_err(|e| if in_time() { e } else { out_of_time() })', '.map_err(|e| e)', CM, 'resume', 'whole_save_has_one_time_limit'),
     ('skipped-link-loses-deadline', MEDIA_LIB, 'skipped.expires_at = at;', 'let _ = (skipped, at);', CM, 'expiry', 'past_the_copy_limit_keeps'),
     ('no-clock-grace', EXPIRY, 'now > expires_at.saturating_add(CLOCK_GRACE_SECS)', 'now > expires_at', CM, 'expiry', 'inside_the_clock_grace'),

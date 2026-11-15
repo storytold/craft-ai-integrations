@@ -16,7 +16,8 @@
 //!   long download that is cut can still carry on.
 //! - The whole save, every try, redirect and pause included, ends within `transfer_timeout`:
 //!   each request gets only the time left. A host that keeps cutting the transfer cannot hold
-//!   the job's worker for the number of tries times that limit.
+//!   the job's worker for the number of tries times that limit. A save stopped because the time
+//!   ran out says so, even when the time ran out during a pause between tries.
 //! - A cut transfer whose host named the file's version carries on where it stopped on the next
 //!   try, instead of starting over (see `partial.rs`). Without a version it starts over. When
 //!   the host's answer does not continue the kept copy (a 416, another version, a piece that
@@ -133,14 +134,17 @@ impl MediaStore {
         let in_time = || deadline.is_none_or(|d| Instant::now() < d);
         // A cut download carried from one try to the next; dropped (and deleted) on return.
         let mut kept: Option<Partial> = None;
-        self.config.retry.run(
-            |error: &AiError| error.is_retryable() && in_time(),
-            || {
-                self.fetch_once(handle, &mut kept, deadline)
-                    .map_err(|e| if in_time() { e } else { out_of_time() })
-            },
-            std::thread::sleep,
-        )
+        // The time is judged once, after the last try. The retry rule is asked again after each
+        // pause, so the time can run out during a pause, and the answer is then the time limit,
+        // not the last try's own error.
+        self.config
+            .retry
+            .run(
+                |error: &AiError| error.is_retryable() && in_time(),
+                || self.fetch_once(handle, &mut kept, deadline),
+                std::thread::sleep,
+            )
+            .map_err(|e| if in_time() { e } else { out_of_time() })
     }
 
     /// One try. With `kept` set it asks only for the missing bytes; whatever the answer, `kept`
