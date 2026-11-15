@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::child::tests::fake;
 use super::*;
 
-fn entry(id: &str, name: &str) -> AppEntry {
+pub(super) fn entry(id: &str, name: &str) -> AppEntry {
     AppEntry {
         id: id.into(),
         name: name.into(),
@@ -33,7 +33,7 @@ fn app_conn(tools: Value) -> Conn {
 }
 
 /// Two fake apps; `starts` counts connections made.
-fn hub(starts: Arc<AtomicUsize>) -> Hub {
+pub(super) fn hub(starts: Arc<AtomicUsize>) -> Hub {
     Hub::with_connector(
         vec![
             entry("photocraft", "PhotoCraft"),
@@ -52,7 +52,7 @@ fn hub(starts: Arc<AtomicUsize>) -> Hub {
     )
 }
 
-fn text(v: &Value) -> Value {
+pub(super) fn text(v: &Value) -> Value {
     serde_json::from_str(v["content"][0]["text"].as_str().unwrap()).unwrap_or(Value::Null)
 }
 
@@ -427,7 +427,7 @@ fn the_launchers_switch_is_asked_before_every_call() {
 
 /// A fake PhotoCraft whose `tools/call` says it arrived on `entered`, then waits for `release`;
 /// `calls` counts the calls that reached it.
-fn slow_conn(
+pub(super) fn slow_conn(
     entered: std::sync::mpsc::Sender<()>,
     release: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
     calls: Arc<AtomicUsize>,

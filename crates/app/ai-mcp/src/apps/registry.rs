@@ -2,10 +2,12 @@
 //! `craft-ai-agents`, which the launcher writes it with and every app checks it with. The list is
 //! also the person's consent: without it the gateway offers no app, and it asks again before every
 //! tool call ([`switched_on`]), so turning the switch off stops a gateway a client already runs.
+//! The list is read once at start, so each app is also asked about again ([`allowed`]): one
+//! taken off the list is no longer listed, started or called.
 
 pub use craft_ai_agents::{
-    APPS_FILE, AppEntry, DIR_ENV, Found, KNOWN_APPS, MAX_APPS, agents_dir as mcp_dir, known_name,
-    load, parse, switched_on, valid_id,
+    APPS_FILE, AppEntry, DIR_ENV, Found, KNOWN_APPS, MAX_APPS, agents_dir as mcp_dir, allowed,
+    known_name, load, parse, switched_on, valid_id,
 };
 
 /// The apps to offer: the launcher's list, or none while agents are turned off. The second value
