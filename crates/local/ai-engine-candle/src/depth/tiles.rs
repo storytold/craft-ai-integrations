@@ -104,13 +104,28 @@ const COLUMN_CACHE_MIN_ROWS: usize = 64;
 /// written, so a caller that wants another type never holds a second full-size plane.
 pub(super) fn resample_plane_with<T>(
     src: &[f32],
-    (sw, sh): (usize, usize),
-    (dw, dh): (usize, usize),
+    sizes: (usize, usize),
+    out_sizes: (usize, usize),
     map: impl Fn(f32) -> T,
 ) -> Vec<T> {
+    let mut out = Vec::with_capacity(out_sizes.0.saturating_mul(out_sizes.1));
+    resample_plane_each(src, sizes, out_sizes, |v| out.push(map(v)));
+    out
+}
+
+/// The same bilinear resize, calling `f` on every output value in row-major order instead of
+/// storing them, so a caller can walk the result more than once without a full-size plane.
+pub(super) fn resample_plane_each(
+    src: &[f32],
+    (sw, sh): (usize, usize),
+    (dw, dh): (usize, usize),
+    mut f: impl FnMut(f32),
+) {
     if sw == 0 || sh == 0 || dw == 0 || dh == 0 || src.len() < sw * sh {
-        let n = dw.saturating_mul(dh);
-        return (0..n).map(|_| map(0.0)).collect();
+        for _ in 0..dw.saturating_mul(dh) {
+            f(0.0);
+        }
+        return;
     }
     let at = |x: usize, y: usize| src.get(y * sw + x).copied().unwrap_or(0.0);
     let (fx, fy) = (sw as f32 / dw as f32, sh as f32 / dh as f32);
@@ -124,7 +139,6 @@ pub(super) fn resample_plane_with<T>(
     // large as its output (24,000,000 x 1 is half a gigabyte); the result is the same either way.
     let cache: Option<Vec<(usize, usize, f32)>> =
         (dh >= COLUMN_CACHE_MIN_ROWS).then(|| (0..dw).map(col).collect());
-    let mut out = Vec::with_capacity(dw * dh);
     for y in 0..dh {
         let v = ((y as f32 + 0.5) * fy - 0.5).clamp(0.0, (sh - 1) as f32);
         let y0 = v.floor() as usize;
@@ -133,14 +147,13 @@ pub(super) fn resample_plane_with<T>(
         let sample = |(x0, x1, wx): (usize, usize, f32)| {
             let a = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * wx;
             let b = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * wx;
-            map(a + (b - a) * wy)
+            a + (b - a) * wy
         };
         match &cache {
-            Some(cols) => out.extend(cols.iter().map(|&c| sample(c))),
-            None => out.extend((0..dw).map(|x| sample(col(x)))),
+            Some(cols) => cols.iter().for_each(|&c| f(sample(c))),
+            None => (0..dw).for_each(|x| f(sample(col(x)))),
         }
     }
-    out
 }
 
 /// Raised-cosine weight along one axis for a tile `[a, b)` of a picture `len` long: 1 in the

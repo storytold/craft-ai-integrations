@@ -396,3 +396,16 @@ fn tiled_pipeline_with_a_fake_estimator() {
     };
     assert!(estimate_tiled(&broken, &rgb, (w, h), 16, &|_| Ok(())).is_err());
 }
+
+#[test]
+fn resample_plane_each_visits_the_values_resample_plane_with_stores() {
+    let src = [0.0, 0.25, 1.0, 0.5, 0.75, 0.1];
+    for dims in [(3usize, 2usize), (5, 4), (2, 70), (1, 1)] {
+        let mut seen = Vec::new();
+        resample_plane_each(&src, (3, 2), dims, |v| seen.push(v));
+        assert_eq!(seen, resample_plane_with(&src, (3, 2), dims, |v| v));
+    }
+    let mut empty = Vec::new();
+    resample_plane_each(&[], (0, 0), (2, 2), |v| empty.push(v));
+    assert_eq!(empty, vec![0.0; 4]);
+}

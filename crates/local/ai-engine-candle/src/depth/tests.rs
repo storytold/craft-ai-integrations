@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use craft_ai_engine::testing::check_runner;
 use serde_json::json;
 
+use super::tiles::resample_plane_with;
 use super::*;
 
 /// A stand-in network: depth is the horizontal position, at a size of its own choosing, and it
@@ -340,7 +341,7 @@ fn depth_values_span_the_full_range_after_resampling() {
     assert_eq!(values.len(), 64);
     assert_eq!(values.iter().max().copied(), Some(u16::MAX));
     assert_eq!(values.iter().min().copied(), Some(0));
-    // A constant map stays as it is, whatever its level.
+    // A constant map is all zeros, whatever its level.
     let flat = DepthMap {
         width: 2,
         height: 2,
@@ -352,5 +353,29 @@ fn depth_values_span_the_full_range_after_resampling() {
         height: 2,
         data: vec![0.5; 4],
     };
-    assert_eq!(depth_values(&level, (3, 3)), vec![32768u16; 9]);
+    assert_eq!(depth_values(&level, (3, 3)), vec![0u16; 9]);
+}
+
+#[test]
+fn depth_values_of_a_map_that_resamples_to_one_level_are_zeros() {
+    // [0, 0.5, 1] squeezed to one pixel blends to 0.5 alone: constant, so zero (not 32768).
+    let map = DepthMap {
+        width: 3,
+        height: 1,
+        data: vec![0.0, 0.5, 1.0],
+    };
+    assert_eq!(depth_values(&map, (1, 1)), vec![0u16]);
+}
+
+#[test]
+fn depth_values_keep_floats_that_round_alike_apart() {
+    // 4 x 1 down to 2 x 1 gives 0.5 and 0.500002: distinct floats that both round to 32768 as
+    // 16-bit values, so stretching after quantising would merge them.
+    let map = DepthMap {
+        width: 4,
+        height: 1,
+        data: vec![0.0, 1.0, 0.500001, 0.500003],
+    };
+    let values = depth_values(&map, (2, 1));
+    assert_eq!(values, vec![0u16, u16::MAX]);
 }
