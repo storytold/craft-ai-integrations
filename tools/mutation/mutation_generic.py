@@ -4,9 +4,9 @@ sinks, the plain refusal of clicks and the stored selection workflow).
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-PV = 'crates/ai-comfyui/src/provider.rs'
-WF = 'crates/ai-comfyui/src/workflow.rs'
-LB = 'crates/ai-comfyui/src/library.rs'
+PV = 'crates/local/ai-comfyui/src/provider.rs'
+WF = 'crates/local/ai-comfyui/src/workflow.rs'
+LB = 'crates/local/ai-comfyui/src/library.rs'
 CC = 'craft-ai-comfyui'
 
 GS_CASES = [

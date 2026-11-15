@@ -31,6 +31,7 @@ Known additions used by integrations but absent from the inspected upstream cont
 |---|---|
 | `ConsentTerm` and the consent-ledger convenience methods in `consent_term.rs` | Consumers use shared consent durations and temporary agreements. |
 | `model_folders` and `StoreFile::model_folders`, its default and validation errors | The client stores the person's shared model-folder map in this field. Removing it would stop that API compiling or lose the map on a rewrite. |
+| `jpeg`: `MAX_XMP_FRAGMENTS` and the Extended XMP fragment counter | Every JPEG decoder in this workspace (rten, candle, returned pictures) refuses an over-cap file through this one check before decoding. |
 
 These are pure contract additions and need their own upstream review. No change here authorises
 opening a PR or publishing them in craft-libs. The local `draft/presets.rs` split is only file
@@ -52,9 +53,9 @@ retain the local copy and keep its safety behaviour aligned rather than replacin
 
 ## Verification entry points
 
-- `crates/ai-core/tests/draft_provenance.rs`: endpoint edits and late test results.
-- `crates/ai-core/tests/required_inputs.rs`: model compatibility and binding resolution.
-- `crates/ai-client/tests/required_inputs.rs`: app-facing consistency and no early key access.
+- `crates/foundation/ai-core/tests/draft_provenance.rs`: endpoint edits and late test results.
+- `crates/foundation/ai-core/tests/required_inputs.rs`: model compatibility and binding resolution.
+- `crates/app/ai-client/tests/required_inputs.rs`: app-facing consistency and no early key access.
 - `python tools/mutation/mutation_check.py ca`: deliberate bugs for those safety boundaries.
 
 Run the mutation group exclusively, then rerun clean tests after source restoration. These checks

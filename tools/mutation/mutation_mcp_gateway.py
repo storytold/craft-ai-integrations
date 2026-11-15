@@ -3,9 +3,9 @@
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-A = 'crates/ai-mcp/src/apps/'
+A = 'crates/app/ai-mcp/src/apps/'
 P = 'craft-ai-mcp'
-L = 'crates/ai-agents/src/lib.rs'
+L = 'crates/app/ai-agents/src/lib.rs'
 Q = 'craft-ai-agents'
 
 MG = [
@@ -16,7 +16,7 @@ MG = [
     ('timed-out-connection-kept', A + 'child.rs', 'timeout.as_secs()\n                    );\n                    self.closed = Some(why.clone());', 'timeout.as_secs()\n                    );', P, 'lib', 'a_silent_app_times_out'),
     ('dead-connection-reused', A + 'mod.rs', 'if conn.as_ref().is_none_or(|c| c.closed().is_some()) {', 'if conn.is_none() {', P, 'lib', 'a_dead_connection_is_replaced'),
     ('unknown-tool-forwarded', A + 'mod.rs', '.any(|t| t.get("name").and_then(Value::as_str) == Some(tool))\n            {', '.any(|_| true)\n            {', P, 'lib', 'bad_arguments_are_tool_errors'),
-    ('stdio-line-not-capped', 'crates/ai-mcp/src/stdio.rs', r"if line.last() != Some(&b'\n') && n > MAX_LINE {", 'if false {', P, 'lib', 'an_overlong_line_is_refused'),
+    ('stdio-line-not-capped', 'crates/app/ai-mcp/src/stdio.rs', r"if line.last() != Some(&b'\n') && n > MAX_LINE {", 'if false {', P, 'lib', 'an_overlong_line_is_refused'),
     ('partial-tool-list-accepted', A + 'child.rs', '        // A partial list would be cached as complete, and calls to the rest refused.\n        Err(', '        return Ok(tools);\n        #[allow(unreachable_code)]\n        Err(', P, 'lib', 'a_tool_list_that_never_ends'),
     ('changed-tools-kept', A + 'mod.rs', 'let changed = conn.as_mut().is_some_and(Conn::take_tools_changed);', 'let changed = conn.as_mut().is_some_and(Conn::take_tools_changed) && false;', P, 'lib', 'read_again_after_the_app_says'),
     ('failed-write-not-reported', A + 'child.rs', '                    let _ = write_failed\n                        .send(Incoming::Closed(format!("writing to the app failed: {e}")));\n', '                    let _ = &write_failed;\n', P, 'lib', 'a_failed_write_ends_the_waiting_request'),
@@ -28,5 +28,5 @@ MG = [
     ('list-waits-on-a-call', A + 'mod.rs', 'let running = self.hold(s, false, |c| {', 'let running = self.hold(s, true, |c| {', P, 'lib', 'a_long_call_does_not_hold_up'),
     ('held-app-not-stopped', A + 'mod.rs', '        if slot.stop.load(Ordering::SeqCst)\n', '        if false\n', P, 'lib', 'an_app_held_for_a_moment_is_stopped'),
     ('restarted-app-list-not-kept', A + 'mod.rs', '                    *lock(&slot.tools) = Some(Arc::clone(&list));\n                    list', '                    list', P, 'lib', 'a_call_that_restarts_its_app_does_not_hold_up'),
-    ('invalid-id-dispatched', 'crates/ai-mcp/src/mcp.rs', '|| id.as_ref().is_some_and(|v| !valid_id(v))', '|| false', P, 'lib', 'malformed_envelopes_are_invalid_requests'),
+    ('invalid-id-dispatched', 'crates/app/ai-mcp/src/mcp.rs', '|| id.as_ref().is_some_and(|v| !valid_id(v))', '|| false', P, 'lib', 'malformed_envelopes_are_invalid_requests'),
 ]

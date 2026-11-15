@@ -10,8 +10,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-craft-ai-egui = { path = "../crates/ai-egui", package = "craft-ai-egui" }
-craft-ai-core = { path = "../crates/ai-core", package = "craft-ai-core" }
+craft-ai-egui = { path = "../crates/app/ai-egui", package = "craft-ai-egui" }
+craft-ai-core = { path = "../crates/foundation/ai-core", package = "craft-ai-core" }
 # A host draws the widgets in its own Ui. Tests/examples use bundled fonts; the library does not.
 egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
 

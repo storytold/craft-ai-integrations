@@ -7,23 +7,23 @@ data, consent and jobs. It does not own any app's interface. Each app decides ho
 
 ## In this repository
 
-| Group | Crates | Owns |
-|---|---|---|
-| Core | `ai-core`, `ai-native`, `ai-client`, `ai-features` | The data model and provider trait (wasm-safe), secret stores, the shared store and its location, history and consent files, the app-facing client and tool desk, the tool catalogue and setup options. |
-| Adapters | `ai-openai`, `ai-bfl`, `ai-vertex`, `ai-artcraft`, `ai-seedance`, `ai-comfyui`, `ai-sam3` | One crate per provider API shape. Each is registered in `ai-client`'s `ProviderFactory`. |
-| HTTP | `ai-http` | The one TLS setting every adapter and downloader uses (the platform's certificate check), and a test that fails if any crate builds an agent without it. |
-| Engines | `ai-engine`, `ai-engine-candle`, `ai-engine-rten`, `ai-engine-burn`, `ai-burn-setup` | Models run on this computer: the runner contract, registry and shared provider (`ai-engine`), and one crate per engine that registers its models (`ai-engine-candle`, `ai-engine-rten` and `ai-engine-burn`, behind `ai-client`'s `candle`, `rten` and `burn` features). `ai-burn-setup` prepares the saved weights Burn reads, once on this computer. A new model or engine never touches an app. |
-| Local runtime | `ai-comfy-env`, `ai-media` | Finding an existing ComfyUI, model sources and checksummed downloads, node packs, and durable media transfer. |
-| Widgets | `ai-egui` | Theme-neutral egui 0.37 widgets (status, consent, progress, connection panel, history, model picker) for apps that have no chrome of their own. See the consumer recipe below. |
-| External interfaces | `ai-agents` | The switch that lets AI agents use the Craft apps: the launcher's app list, read and written in one place for the launcher, the gateway and every app. |
-| External interfaces | `ai-mcp` | The MCP gateway to the Craft apps: one stdio MCP server that starts each installed app's `<app>-cli mcp` on demand and offers four tools to find and run their tools. No AI layer dependencies. |
+Crates sit in four folders under `crates/`, by what they reach:
 
-Crates keep the flat `crates/` folder on purpose. The exact planning checkouts reproduced no app
-dependency on `craft-ai-egui`; recheck any current path consumer before moving a crate.
+| Folder | Crates | Owns |
+|---|---|---|
+| `foundation/` | `ai-core`, `ai-http`, `ai-features`, `ai-native`, `ai-media` | The data model and provider trait (wasm-safe), the one TLS and proxy setting every call uses (with a test that fails if any crate builds an agent without it), the tool catalogue and setup options, secret stores and the shared store, and durable copies of provider media. Hosted and local crates both depend on these. |
+| `api/` | `ai-openai`, `ai-gemini`, `ai-vertex`, `ai-bfl`, `ai-seedance`, `ai-artcraft`, `ai-declarative` | Hosted services that take a key and may cost money. One crate per provider API shape, plus the runner for a provider described by a data file. Each is registered in `ai-client`'s `ProviderFactory`. |
+| `local/` | `ai-comfyui`, `ai-comfy-env`, `ai-sam3`, `ai-engine`, `ai-engine-candle`, `ai-engine-rten`, `ai-engine-burn`, `ai-burn-setup` | Models run on this computer. Local servers reached over loopback (ComfyUI, finding and filling an existing ComfyUI install, SAM 3), and built-in engines: the runner contract, registry and shared provider (`ai-engine`), one crate per engine behind `ai-client`'s `candle`, `rten` and `burn` features, and `ai-burn-setup`, which prepares the saved weights Burn reads. A new model or engine never touches an app. |
+| `app/` | `ai-client`, `ai-egui`, `ai-agents`, `ai-mcp` | What an app or agent calls: the app-facing client and tool desk, theme-neutral egui 0.37 widgets (see the consumer recipe below), the switch that lets AI agents use the Craft apps, and the stdio MCP gateway to the apps' own tools (no AI layer dependencies). |
+
+A new crate goes in the folder that matches what it reaches. A crate that calls a hosted service
+is `api/`, even when it also has local parts. Package names do not include the folder, so a
+consumer pinned to a git revision does not change when a crate moves. A path dependency does.
 
 `docs/design/` holds design notes. `docs/adr/` records each decision that shapes the layer and
-why, one file each. `docs/STATUS.md` says what is tested and what is open. The deliberate-bug
-scripts are in `tools/mutation/`; everything a script saves goes through `tools/mutation/scrub.py`.
+why, one file each. `docs/STATUS.md` says what is tested and what is open. `docs/evidence/` keeps
+the run records of real runs. The deliberate-bug scripts are in `tools/mutation/`; everything a
+script saves goes through `tools/mutation/scrub.py`.
 
 ## Not in this repository
 

@@ -120,13 +120,33 @@ registry.extend(my_engine::runners());
 client = client.with_factory({ let mut f = ProviderFactory::standard(); f.register_engines(registry); f });
 ```
 
-`crates/ai-client/tests/engines.rs` runs this path end to end with a fake runner, and
-`crates/ai-client/tests/candle_live.rs` does it with the real SAM 3 (skipped without the
+`crates/app/ai-client/tests/engines.rs` runs this path end to end with a fake runner, and
+`crates/app/ai-client/tests/candle_live.rs` does it with the real SAM 3 (skipped without the
 checkpoint): the tool
 enabled from a weights file, the client planning and starting a job, the output coming back.
 
 For the launcher to offer the model, add a `NativeRoute` (engine name and model id, matching
 `engine()` and `model().id` above) to the recipe whose weights it reads, in
-`crates/ai-features/src/catalogue.rs`. A tool can list several recipes; its built-in runtimes are
+`crates/foundation/ai-features/src/catalogue.rs`. A tool can list several recipes; its built-in runtimes are
 taken from the first recipe that can run, the same one `ToolDesk::enable_local` registers.
 Nothing else in any app changes.
+
+## 4. Memory
+
+A model stays loaded after its first run, because loading is the slow part. The provider keeps
+track of what each model holds, so an app can show it and let a person free it.
+
+- `LoadedModel::memory_bytes` says roughly how much the loaded model holds. Leave the default
+  (`None`) and the weights file's size is shown instead, marked as an estimate. It is read again
+  after each run, so a model that keeps work between runs is shown at its new size.
+- `ModelRunner::memory_needed` says roughly how much a load will take. The default is the weights
+  file's size. Override it when the model needs much more than its file.
+
+On the app side, `AiClient::loaded_models` lists what is loaded, with the engine and the
+connection each model was set up through. `unload_model` frees one, `unload_all_models` frees
+them all, and `unload_idle_models` frees models unused for a given time. A model in use finishes
+its job first. Nothing runs on a timer: the app decides when to call these. Give the client
+`with_free_memory` and a load that will not fit fails in plain words before anything is loaded.
+Loads that start at once are judged in turn: each counts the memory that loads already under
+way will take, on any built-in engine of the same client. The model files on disk are never touched. (`EngineProvider` has the same calls for a provider
+used on its own.)

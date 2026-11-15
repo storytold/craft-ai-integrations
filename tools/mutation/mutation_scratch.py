@@ -3,7 +3,7 @@
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter). Target 'lib' runs unit tests.
 """
-C = 'crates/ai-comfyui/src/'
+C = 'crates/local/ai-comfyui/src/'
 CU = 'craft-ai-comfyui'
 BS = chr(92)
 RN = BS + 'r' + BS + 'n'

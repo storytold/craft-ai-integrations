@@ -3,7 +3,7 @@
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-S = 'crates/ai-egui/src/consent.rs'
+S = 'crates/app/ai-egui/src/consent.rs'
 EG = 'craft-ai-egui'
 
 CE = [

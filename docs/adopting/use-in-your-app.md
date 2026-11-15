@@ -78,8 +78,9 @@ For a tool nobody has declared yet, write the `Role` yourself. That is the subje
 
 ## 4. Ask `status`, and draw what it says
 
-`status` answers one question: can this tool run right now, in this app? It reads no key and
-sends nothing.
+`status` answers one question: can this tool run right now, in this app? It sends nothing. For a
+connection that needs a key it checks that a key is saved, which asks the key store (the system
+keychain may prompt); the key is never used or returned.
 
 <!-- snippet: status -->
 ```rust
@@ -110,6 +111,27 @@ developer words to it, and do not translate it into something vaguer.
 
 Call `status` again whenever the tool is about to be used, not once at start-up. A person can
 change their choice in the launcher while your app is open.
+
+**One call for every tool.** An app that only needs to know what is available, for a menu or a
+settings page, can skip the role lookup. `craft_ai_client::AppTools::standard("wordcraft")` reads
+the same shared choices and `report()` lists every catalogue tool, then every custom tool someone
+declared, with its `RoleStatus`. It sends nothing and writes nothing. A tool bound to a connection
+that needs a key is checked for a saved key, so the key store is asked (the system keychain may
+prompt) and the key is dropped unused. Call `report()` when a menu or page opens, not every frame.
+To run a tool, use `AppTools` as below. `role(id)` and `client()` are the lower-level path, for an
+app that calls `plan` and `start` itself.
+
+**One way to run a tool.** `AppTools` also does steps 6 to 8 for you, so no app writes its own job
+loop. `request(id)` starts a request with the tool's capability, `plan(id, request)` checks it
+against the model the person chose (nothing is sent), you do the consent step in section 7, and
+`run(&plan, &ledger)` starts the job, waits and returns its outputs; a text reply comes back as one
+text output. `canceller()` gives a handle that stops every job being waited for, from any thread;
+its `waiting()` says how many there are. Some online services cannot stop a job once it has
+started, so `cancel()` returns a sentence to show when a job did not stop. `run` blocks, so call it
+off the drawing thread. It gives up and cancels a job after three minutes; `run_for(&plan, &ledger,
+limit)` lets an app that expects longer, such as video, choose its own limit. A job that cannot be
+stopped at that point is reported as possibly still running, never as stopped. Every app runs a tool this way, so
+a chosen model behaves the same in all of them; only what the app does with the outputs differs.
 
 ## 5. Build the request
 
@@ -173,6 +195,19 @@ A local model needs no consent. Anything that leaves the computer does, and the 
 it. `start` refuses with `ConsentRequired` unless the ledger covers this app, this connection,
 this destination, this capability and each kind of data in the plan.
 
+A ComfyUI workflow on this computer counts as leaving it when it uses add-on steps outside
+ComfyUI's own known-local steps, because such a step can send what it is given anywhere. The
+plan then names those steps in `Disclosure::unknown_steps`, and agreement covers exactly those
+steps. Show them on your consent screen; the shared `disclosure_lines` already adds a line for
+them.
+
+A connection to a server on this computer that uses a key over plain `http` counts as leaving
+it. Whichever program holds that port receives the key, and on a computer shared by several
+accounts that can be another person's program. The plan is marked remote, so the person is asked
+once for that address. Over `https`, or with no key, a server on this computer needs no consent.
+The plan's disclosure sets `key_in_clear`, and the shared `disclosure_lines` adds a line saying
+the saved key goes too, unencrypted, and why. An app with its own consent screen must show it.
+
 <!-- snippet: consent -->
 ```rust
 use craft_ai_core::{ConsentLedger, ConsentTerm, ErrorKind};
@@ -214,7 +249,7 @@ The rules for your prompt:
 
 ## 8. Start, watch, cancel
 
-`start` checks consent again, reads the key (only now), builds the adapter and submits the
+`start` checks consent again, reads the key to use for the job, builds the adapter and submits the
 job. It returns a `Job` you poll.
 
 <!-- snippet: job -->
@@ -378,7 +413,7 @@ rendering still need your own platform test.
 
 Build a world with no network: a temporary store, an in-memory key store, the launcher's choice
 written with `ToolDesk::choose`, and a scripted adapter registered on a `ProviderFactory`. The
-test file `crates/ai-client/tests/support/adopting_scene.rs` does exactly this, and every block on
+test file `crates/app/ai-client/tests/support/adopting_scene.rs` does exactly this, and every block on
 this page runs on top of it.
 
 <!-- snippet: two_apps -->
@@ -404,7 +439,8 @@ tool and check what lands in the document.
 
 ## What not to do
 
-- Do not store, read or print a key. The layer reads it inside `start` and nowhere else.
+- Do not store, read or print a key. The layer uses a key only inside `start`; `status` only checks
+  that one is saved and drops it unused.
 - Do not hard-code a model id, a provider or an address. Read the choice.
 - Do not fall back to a different model when the chosen one fails.
 - Do not show engine or hardware words (Candle, Burn, CUDA, VRAM, wgpu) to a person.

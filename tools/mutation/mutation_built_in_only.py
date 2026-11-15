@@ -5,8 +5,8 @@ advised as one.
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-F = 'crates/ai-features/src/'
-CLS = 'crates/ai-client/src/'
+F = 'crates/foundation/ai-features/src/'
+CLS = 'crates/app/ai-client/src/'
 FE = 'craft-ai-features'
 CL = 'craft-ai-client'
 

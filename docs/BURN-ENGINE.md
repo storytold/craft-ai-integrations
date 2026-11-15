@@ -10,9 +10,9 @@ The pieces, and which crate owns each:
 |---|---|
 | Request handling (clicks, box, the picture kept between requests, empty-mask answer, size checks) | `craft-ai-engine-rten` (`Loaded` over a `Backend`), shared by both engines |
 | The model run on Burn, weight loading, the panic guard | `craft-ai-engine-burn` |
-| The compiled architecture (generated) | `crates/ai-engine-burn/src/model/` |
+| The compiled architecture (generated) | `crates/local/ai-engine-burn/src/model/` |
 | One-time local conversion of the published ONNX files to saved weights | `craft-ai-burn-setup` (`docs/LOCAL-BURN-PREPARATION.md`) |
-| The catalogue route | `crates/ai-features/src/catalogue/sam21.rs`: a `burn` route after `rten`, same two published files |
+| The catalogue route | `crates/foundation/ai-features/src/catalogue/sam21.rs`: a `burn` route after `rten`, same two published files |
 | The cargo feature | `craft-ai-client` feature `burn` |
 
 Nothing converted is hosted. The saved weights (`encoder.bpk`, `decoder.bpk`) are made on the
@@ -53,10 +53,10 @@ They are worth reporting upstream to `tracel-ai/burn-onnx`.
 ### The revision rule
 
 `REVISION` (in the script) names the compiled architecture and the converter that made its weights.
-It is part of the saved-weights cache key in `crates/ai-burn-setup/src/sam21.rs`. Change it in both
+It is part of the saved-weights cache key in `crates/local/ai-burn-setup/src/sam21.rs`. Change it in both
 places, and regenerate, whenever any of these changes: the `burn-onnx` or Burn version, a patch in
 the script, or the source ONNX files. Saved weights made for an older revision are then never reused.
-`crates/ai-engine-burn/tests/revision.rs` fails if the script, the generated `model/mod.rs` and the
+`crates/local/ai-engine-burn/tests/revision.rs` fails if the script, the generated `model/mod.rs` and the
 cache key disagree.
 
 ## Exercising it
@@ -122,7 +122,7 @@ connection takes only `.safetensors`, `.onnx` or `.bpk` weights.
 
 ### In the catalogue
 
-`remove-background` has one recipe, InSPyReNet (`crates/ai-features/src/catalogue/inspyrenet.rs`),
+`remove-background` has one recipe, InSPyReNet (`crates/foundation/ai-features/src/catalogue/inspyrenet.rs`),
 and it is **built in only**: `LocalRecipe::comfyui` is false, so it is never a ComfyUI setup option,
 plan, install offer or connection, and engine advice does not offer ComfyUI for the tool. Its one
 route is `burn` / `inspyrenet` with the pinned file above in the folder `inspyrenet`, so Set up AI
@@ -146,7 +146,7 @@ On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
 - **The whole runner on a real photo**, against the same port inside PhotoCraft (which runs it
   through the same pipeline): on a 3101 × 1613 PNG the two masks are identical, byte for byte. On a
   JPEG they differ by 0.003 on average (IoU 0.994), from the two JPEG decoders.
-- **Through the shared client** (`crates/ai-client/tests/burn_matte.rs`): the launcher sets up the
+- **Through the shared client** (`crates/app/ai-client/tests/burn_matte.rs`): the launcher sets up the
   catalogue's built-in route with the real file, then two app ids ask `AiClient` for Remove
   background only and each gets one grayscale mask at the picture's size (a 2848 × 4272 PNG). A
   file that is not the checkpoint is refused in words that point to Set up AI.
