@@ -209,6 +209,44 @@ fn a_flat_tile_leaves_the_global_map_alone() {
     }
 }
 
+/// A fitted tile beside a skipped (flat) one: its feather ramps to zero at the shared edge, so
+/// the merge must fade into the global map there instead of stepping to it.
+#[test]
+fn a_fitted_tile_fades_into_the_global_map_beside_a_skipped_one() {
+    let (w, h) = (40u32, 10u32);
+    // The fitted tile agrees with the ramp except in the first columns, next to the skipped tile:
+    // there, where its feather weight is near zero, it is off by up to 0.3. A hard cut at the
+    // edge would show that as a step.
+    let global = ramp(w, h);
+    let right = TileRect {
+        x0: 20,
+        y0: 0,
+        x1: 40,
+        y1: 10,
+    };
+    let mut real = crop(&global, right);
+    for (k, v) in real.data.iter_mut().enumerate() {
+        *v += 0.3 * (1.0 - (k % 20) as f32 / 4.0).max(0.0);
+    }
+    let left = TileRect {
+        x0: 0,
+        y0: 0,
+        x1: 20,
+        y1: 10,
+    };
+    let flat = DepthMap {
+        width: 20,
+        height: 10,
+        data: vec![0.4; 200],
+    };
+    let out = merge_tiles(&global, &[(left, flat), (right, real)]).unwrap();
+    let slope = 1.0 / (w - 1) as f32;
+    for x in 1..w as usize {
+        let d = (out.data[x] - out.data[x - 1]).abs();
+        assert!(d < slope * 3.0, "step {d} at x={x}");
+    }
+}
+
 #[test]
 fn a_tile_without_weight_or_a_finite_fit_is_not_fitted() {
     assert_eq!(fit_affine(&[], &[], &[]), None);

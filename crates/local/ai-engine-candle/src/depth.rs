@@ -52,12 +52,22 @@ pub const BACKBONE_FILE: &str = "dinov2_vits14.fp16.safetensors";
 const HIGH_LONG_SIDE: u32 = 2072;
 /// What the network's activations take beyond its weights while a picture runs, about.
 const ACTIVATION_BYTES: u64 = 300 * 1024 * 1024;
+/// A picture whose uncompressed 16-bit depth map is more than this many times the reply limit is
+/// refused before any inference (see the module doc).
+const MAX_RAW_FACTOR: u64 = 4;
 /// A weights file larger than this is not this model (the real ones are under 50 MB).
 const MAX_WEIGHTS_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// An error from the network or the maths around it, in words for the screen.
 fn backend(message: impl Into<String>) -> AiError {
     AiError::new(ErrorKind::Provider, message)
+}
+
+/// The refusal for a depth map that cannot be handed back.
+fn too_big_to_return() -> AiError {
+    AiError::unsupported(
+        "The depth map is too large to hand back (over 32 MiB). Use a smaller picture.",
+    )
 }
 
 /// Depth Anything V2 Small on the Candle engine.
@@ -152,11 +162,27 @@ fn read_quality(request: &Request) -> Result<Quality, AiError> {
 /// The model in memory.
 struct Loaded {
     net: Box<dyn Estimate>,
+    /// The most a reply may carry, in bytes.
+    max_reply_bytes: u64,
 }
 
 impl Loaded {
     fn new(net: Box<dyn Estimate>) -> Self {
-        Self { net }
+        Self {
+            net,
+            max_reply_bytes: DEFAULT_MAX_INLINE_BYTES,
+        }
+    }
+
+    /// Refuses, before any inference, a picture whose depth map is clearly too big to hand back.
+    fn check_output_size(&self, picture: &crate::image_io::Rgb) -> Result<(), AiError> {
+        let raw = (picture.width as u64)
+            .saturating_mul(picture.height as u64)
+            .saturating_mul(2);
+        if raw > self.max_reply_bytes.saturating_mul(MAX_RAW_FACTOR) {
+            return Err(too_big_to_return());
+        }
+        Ok(())
     }
 
     /// The depth map of an 8-bit RGB picture at the size the quality works at.
@@ -216,6 +242,7 @@ impl LoadedModel for Loaded {
             ));
         };
         let picture = decode_picture(data)?;
+        self.check_output_size(&picture)?;
         ctx.progress(5);
         ctx.check_cancelled()?;
 
@@ -230,10 +257,8 @@ impl LoadedModel for Loaded {
             |v| (v.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16,
         );
         let png = encode_depth16(&values, picture.width, picture.height)?;
-        if png.len() as u64 > DEFAULT_MAX_INLINE_BYTES {
-            return Err(AiError::unsupported(
-                "The depth map is too large to hand back (over 32 MiB). Use a smaller picture.",
-            ));
+        if png.len() as u64 > self.max_reply_bytes {
+            return Err(too_big_to_return());
         }
         Ok(vec![Output {
             payload: Payload::inline("image/png", png)?,

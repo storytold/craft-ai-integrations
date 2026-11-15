@@ -199,6 +199,33 @@ fn fast_is_one_pass_and_high_tiles_a_large_picture() {
     assert_eq!(passes.load(Ordering::SeqCst), 1);
 }
 
+/// A picture whose map is clearly too big to return is refused before the network runs; one
+/// inside the bound still runs and is checked exactly once encoded.
+#[test]
+fn an_oversized_picture_is_refused_before_inference() {
+    let (mut model, passes) = stand_in();
+    // 100 x 100 px is 20 000 raw bytes; with a 1000-byte reply limit the bound is 4000.
+    model.max_reply_bytes = 1000;
+    let e = model
+        .run(&request(100, 100), &RunContext::detached())
+        .err()
+        .unwrap();
+    assert_eq!(e.kind, ErrorKind::Unsupported);
+    assert!(e.message.contains("too large"), "{}", e.message);
+    assert_eq!(passes.load(Ordering::SeqCst), 0, "refused before any work");
+    // 10 x 10 px is 200 raw bytes, inside a 240-byte bound, but any PNG is over 60 bytes.
+    model.max_reply_bytes = 60;
+    let e = model
+        .run(&request(10, 10), &RunContext::detached())
+        .err()
+        .unwrap();
+    assert!(e.message.contains("too large"), "{}", e.message);
+    assert!(
+        passes.load(Ordering::SeqCst) > 0,
+        "refused only after encoding"
+    );
+}
+
 #[test]
 fn a_quality_that_is_not_fast_or_high_is_refused() {
     let (mut model, passes) = stand_in();

@@ -208,7 +208,9 @@ fn tile_matches(rect: &TileRect, map: &DepthMap, (w, h): (u32, u32)) -> bool {
 /// each tile is `(rect, map)` with `map` exactly `rect`-sized. Every tile with structure is
 /// fitted to the global map by weighted least squares and blended with separable raised-cosine
 /// feathers. A tile without structure is skipped, and pixels no usable tile covers keep the
-/// global value. The result is min-max normalised to 0..1.
+/// global value. The global map also counts as a background of weight `max(0, 1 - coverage)`, so
+/// where the tiles' feathers fade out (next to a skipped tile) the result fades into the global
+/// map rather than stepping to it. The result is min-max normalised to 0..1.
 pub(super) fn merge_tiles(
     global: &DepthMap,
     tiles: &[(TileRect, DepthMap)],
@@ -257,7 +259,13 @@ pub(super) fn merge_tiles(
         .iter()
         .zip(&den)
         .zip(&global.data)
-        .map(|((&n, &d), &g)| if d > 1e-6 { n / d } else { g })
+        .map(|((&n, &d), &g)| {
+            // Where the tiles' feathers sum to less than 1 (a tile edge facing a skipped
+            // neighbour, or a gap), the global map fills the rest of the weight, so the merge
+            // fades into it instead of stepping. Fully covered pixels keep the tile blend.
+            let fill = (1.0 - d).max(0.0);
+            (n + g * fill) / (d + fill)
+        })
         .collect();
     postprocess(&merged, w, h)
 }
