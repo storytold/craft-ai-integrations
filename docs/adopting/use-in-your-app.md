@@ -195,6 +195,12 @@ A local model needs no consent. Anything that leaves the computer does, and the 
 it. `start` refuses with `ConsentRequired` unless the ledger covers this app, this connection,
 this destination, this capability and each kind of data in the plan.
 
+A ComfyUI workflow on this computer counts as leaving it when it uses add-on steps outside
+ComfyUI's own known-local steps, because such a step can send what it is given anywhere. The
+plan then names those steps in `Disclosure::unknown_steps`, and agreement covers exactly those
+steps. Show them on your consent screen; the shared `disclosure_lines` already adds a line for
+them.
+
 A connection to a server on this computer that uses a key over plain `http` counts as leaving
 it. Whichever program holds that port receives the key, and on a computer shared by several
 accounts that can be another person's program. The plan is marked remote, so the person is asked

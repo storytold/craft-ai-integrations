@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use craft_ai_core::payload::Limits;
 use craft_ai_core::{
-    AiError, Connection, ConsentLedger, CostEstimate, Disclosure, ErrorKind, ModelId, Provider,
-    Request, Role,
+    AiError, Connection, ConsentLedger, CostEstimate, Disclosure, ErrorKind, Locality, ModelId,
+    Provider, Request, Role,
 };
 use craft_ai_native::secrets::secret_for;
 
@@ -34,6 +34,13 @@ impl AiClient {
         self.refuse_unsupported_route(resolved.connection, &resolved.model.id, &request)?;
         let mut disclosure = Disclosure::for_request(&self.app, resolved.connection, &request);
         crate::disclosed_size::measure_local_files(&mut disclosure, &request);
+        // A workflow on ComfyUI on this computer can still pass the picture and prompt to an
+        // add-on step that sends them elsewhere, so such steps are named and the person asked.
+        let steps = self.unknown_steps(resolved.connection, &resolved.model.id);
+        if !steps.is_empty() {
+            disclosure.locality = Locality::Remote;
+            disclosure.unknown_steps = steps;
+        }
         let estimate = craft_ai_core::cost::estimate(
             resolved.model.pricing.as_ref(),
             &request,
@@ -134,7 +141,8 @@ impl AiClient {
         }
     }
 
-    /// Reads the key and builds the adapter.
+    /// Checks the executable route and workflow snapshot before reading the key, then builds
+    /// from that checked snapshot or the app's registered adapter.
     fn prepare(&self, plan: &Plan) -> Result<Arc<dyn Provider>, AiError> {
         // Without an adapter there is nothing to give the key to, so do not fetch it.
         if !self.factory.knows(&plan.connection.provider) {
@@ -143,8 +151,40 @@ impl AiClient {
         // A plan can be made by another client of this app whose build says otherwise, so this
         // build's own check runs again before the key is read.
         self.refuse_unsupported_route(&plan.connection, &plan.model, &plan.request)?;
+        // Freeze the built-in workflow before the key is read: another import during that
+        // lookup must not replace the graph whose steps were checked for this job.
+        let snapshot = if is_comfyui(&plan.connection) {
+            self.factory
+                .prepare_comfyui_agreed(&plan.model, &plan.disclosure.unknown_steps)
+                .transpose()?
+        } else {
+            None
+        };
+        // App-owned adapters keep their original build path and the step comparison used by
+        // plans. Their own builder is never replaced by the built-in snapshot provider.
+        if snapshot.is_none()
+            && self.unknown_steps(&plan.connection, &plan.model) != plan.disclosure.unknown_steps
+        {
+            return Err(AiError::invalid(crate::factory::WORKFLOW_CHANGED));
+        }
         let secret = secret_for(&*self.secrets, &plan.connection)?;
-        self.factory.build(&plan.connection, secret)
+        match snapshot {
+            Some(snapshot) => snapshot.build(&self.factory, &plan.connection),
+            None => self.factory.build(&plan.connection, secret),
+        }
+    }
+
+    /// The steps of a ComfyUI workflow that are not known to keep data on this computer; empty
+    /// for every other kind of connection, and when the workflow cannot be read.
+    fn unknown_steps(&self, connection: &Connection, model: &ModelId) -> Vec<String> {
+        // Match the factory's case-insensitive name so a mixed-case connection cannot skip
+        // the agreement required for the same workflow.
+        if !is_comfyui(connection) {
+            return Vec::new();
+        }
+        self.factory
+            .comfyui_unknown_steps(model)
+            .unwrap_or_default()
     }
 
     /// Records a provider-stage refusal only after app scope and consent have passed.
@@ -153,4 +193,10 @@ impl AiClient {
             history::refused(file, plan, estimate, self.keep_prompts, e);
         }
     }
+}
+
+/// Whether `connection` uses the ComfyUI adapter. The factory matches names without regard to
+/// case, so this does too: a mixed-case name must not skip the workflow-step agreement.
+fn is_comfyui(connection: &Connection) -> bool {
+    connection.provider.eq_ignore_ascii_case("comfyui")
 }

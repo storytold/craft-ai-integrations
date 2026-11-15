@@ -8,13 +8,15 @@
 //! The key arrives here already fetched and is handed straight to the adapter. It is not stored in
 //! the factory.
 
+mod comfyui;
+pub(crate) use comfyui::WORKFLOW_CHANGED;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use craft_ai_artcraft::{ArtCraftConfig, ArtCraftProvider};
 use craft_ai_bfl::{BflConfig, BflProvider};
-use craft_ai_comfyui::{ComfyConfig, ComfyProvider, WorkflowLibrary};
 use craft_ai_core::{AiError, Backoff, Connection, Locality, Provider, SecretString};
 use craft_ai_features::GpuVendor;
 use craft_ai_gemini::{GeminiConfig, GeminiProvider};
@@ -69,6 +71,10 @@ pub struct ProviderFactory {
     /// family), which [`set_send_retry`](Self::set_send_retry) may rebuild. Registering or
     /// unregistering a name takes it off the list, so an app's own builder is never replaced.
     standard_senders: HashSet<String>,
+    /// The `comfyui` name is the built-in adapter, so a job can be built from the same read of
+    /// the workflow library that its agreement was checked against. False once an app registers
+    /// its own `comfyui` builder.
+    comfyui_built_in: bool,
     /// The provider cache of each registered built-in engine, by lowercase name, so loaded
     /// models can be listed and freed. Registering or unregistering a name drops its entry.
     pub(crate) engines: HashMap<String, Arc<crate::engines::Kept>>,
@@ -116,6 +122,7 @@ impl ProviderFactory {
             media: None,
             timeouts,
             standard_senders: HashSet::new(),
+            comfyui_built_in: false,
             engines: HashMap::new(),
             free_memory: None,
             load_admission: craft_ai_engine::LoadAdmission::default(),
@@ -209,13 +216,7 @@ impl ProviderFactory {
             }
             Ok(Arc::new(Sam3Provider::new(cfg)?))
         });
-        let comfyui_library = f.comfyui_library.clone();
-        let comfy_timeouts = f.timeouts;
-        f.register_comfyui(
-            comfyui_library,
-            f.comfyui_output_dir.clone(),
-            comfy_timeouts,
-        );
+        f.register_comfyui();
         f.standard_senders = OPENAI_FAMILY
             .iter()
             .copied()
@@ -240,6 +241,9 @@ impl ProviderFactory {
         + 'static,
     ) {
         let name = name.to_ascii_lowercase();
+        if name == comfyui::COMFYUI {
+            self.comfyui_built_in = false;
+        }
         // A different build of the adapter is not the one whose cards or limits were declared.
         self.accelerators.remove(&name);
         self.support.remove(&name);
@@ -253,6 +257,9 @@ impl ProviderFactory {
     /// name is then reported as one this app cannot run.
     pub fn unregister(&mut self, name: &str) {
         let name = name.to_ascii_lowercase();
+        if name == comfyui::COMFYUI {
+            self.comfyui_built_in = false;
+        }
         self.standard_senders.remove(&name);
         self.builders.remove(&name);
         self.accelerators.remove(&name);
@@ -281,22 +288,14 @@ impl ProviderFactory {
     /// shared default beside the connections store, so every app sees the same workflows.
     pub fn set_comfyui_library(&mut self, dir: impl Into<std::path::PathBuf>) {
         self.comfyui_library = Some(dir.into());
-        self.register_comfyui(
-            self.comfyui_library.clone(),
-            self.comfyui_output_dir.clone(),
-            self.timeouts,
-        );
+        self.register_comfyui();
     }
 
     /// Opt in to streamed, bounded local media files instead of inline output bytes.
     /// The app owns the directory and must clean up assets it no longer uses.
     pub fn with_comfyui_output_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.comfyui_output_dir = Some(dir.into());
-        self.register_comfyui(
-            self.comfyui_library.clone(),
-            self.comfyui_output_dir.clone(),
-            self.timeouts,
-        );
+        self.register_comfyui();
         self
     }
 
@@ -311,46 +310,6 @@ impl ProviderFactory {
         MediaStore::new(config.clone())?;
         self.media = Some(config);
         Ok(self)
-    }
-
-    /// Registers the ComfyUI adapter, which needs a workflow library and may save outputs to
-    /// `output_dir`.
-    fn register_comfyui(
-        &mut self,
-        comfyui_library: Option<std::path::PathBuf>,
-        output_dir: Option<std::path::PathBuf>,
-        timeouts: Option<(Duration, Duration)>,
-    ) {
-        self.register("comfyui", move |c, _| {
-            let base = c
-                .endpoint
-                .as_deref()
-                .ok_or_else(|| AiError::invalid("ComfyUI address is required"))?;
-            let library = match &comfyui_library {
-                Some(dir) => WorkflowLibrary::at(dir)?,
-                None => WorkflowLibrary::at_default_location().ok_or_else(|| {
-                    AiError::invalid("could not locate the workflow library directory")
-                })?,
-            };
-            let workflows = library.load()?;
-            if workflows.is_empty() {
-                return Err(AiError::unsupported(
-                    "the workflow library is empty; import a workflow JSON first",
-                ));
-            }
-            let mut cfg = ComfyConfig::new(base);
-            if let Some(dir) = &output_dir {
-                cfg = cfg.with_output_dir(dir);
-            }
-            for w in workflows {
-                cfg = cfg.with_workflow(w);
-            }
-            if let Some((connect, request)) = timeouts {
-                cfg.connect_timeout = connect;
-                cfg.request_timeout = request;
-            }
-            Ok(Arc::new(ComfyProvider::new(cfg)?))
-        });
     }
 
     /// States what the adapter `name` can carry out, for its status to be honest before anyone
@@ -444,6 +403,16 @@ impl ProviderFactory {
                 ))
             })?;
         let provider = build(connection, secret)?;
+        self.with_media(connection, provider)
+    }
+
+    /// Wraps `provider` so hosted result links are copied into the app's media folder, when the
+    /// app opted in to that.
+    fn with_media(
+        &self,
+        connection: &Connection,
+        provider: Arc<dyn Provider>,
+    ) -> Result<Arc<dyn Provider>, AiError> {
         match &self.media {
             Some(config) => {
                 let mut config = config.clone();
