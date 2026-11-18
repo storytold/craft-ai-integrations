@@ -13,6 +13,13 @@ fn remove_background() -> Feature {
         .unwrap()
 }
 
+fn remove_object() -> Feature {
+    craft_ai_features::builtin()
+        .into_iter()
+        .find(|f| f.id == "remove-object")
+        .unwrap()
+}
+
 fn windows() -> SystemProfile {
     SystemProfile {
         os: Os::Windows,
@@ -147,4 +154,57 @@ fn it_is_planned_and_installed_as_the_built_in_route_only() {
     assert_eq!(native.state, State::NeedsInstall);
     assert_eq!(native.recipe, "ben2-vitmatte-matte");
     assert_eq!(native.download_bytes, 714_189_538);
+}
+
+/// Remove objects runs LaMa on rten from one pinned Apache-2.0 ONNX file, built in only and never
+/// offered or planned as a ComfyUI workflow.
+#[test]
+fn remove_object_runs_lama_on_rten_from_one_pinned_file() {
+    let feature = remove_object();
+    assert_eq!(feature.locals.len(), 1);
+    let recipe = &feature.locals[0];
+    assert_eq!(recipe.workflow, "lama-remove");
+    assert!(
+        recipe.usable && !recipe.comfyui && recipe.models.is_empty() && recipe.packs.is_empty(),
+        "built in only, never a ComfyUI model"
+    );
+    assert_eq!(feature.engines(), ["rten"]);
+    assert_eq!(feature.comfyui_recipes().count(), 0);
+    let route = &recipe.native[0];
+    assert_eq!(
+        (route.provider.as_str(), route.model.as_str()),
+        ("rten", "lama")
+    );
+    let weights = route.weights().unwrap();
+    assert_eq!(weights.folder, "lama");
+    assert_eq!(weights.filename, "lama.onnx");
+    assert_eq!(weights.size_bytes, 208_044_816);
+    assert_eq!(
+        weights.sha256,
+        "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
+    );
+    assert!(!weights.licence.accept_required);
+    match &weights.source {
+        Source::HuggingFace { revision, .. } => {
+            assert_eq!(revision.as_deref().map(str::len), Some(40), "pinned");
+        }
+        Source::Url { .. } => panic!("expected a pinned Hugging Face file"),
+    }
+
+    let options = setup_options(&[remove_object()]);
+    assert_eq!(options.len(), 1, "{options:?}");
+    assert_eq!(options[0].id, "native:remove-object:rten");
+    assert!(matches!(&options[0].route, Route::Native { model, .. } if model == "lama"));
+    assert_eq!(options[0].size_bytes, Some(208_044_816));
+    assert_eq!(options[0].unlocks, ["remove-object"]);
+
+    let inventory = inventory();
+    assert_eq!(plan(&feature, &inventory).state, State::NoLocalRoute);
+    assert!(plans(&feature, &inventory).is_empty());
+    let native = plan_native(&feature, "rten", &inventory);
+    assert_eq!(native.state, State::NeedsInstall);
+    assert_eq!(native.recipe, "lama-remove");
+    assert_eq!(native.download_bytes, 208_044_816);
+    let offer = setup_offer_native(&feature, "rten", &windows(), &inventory).unwrap();
+    assert_eq!(offer.download_bytes, 208_044_816);
 }
