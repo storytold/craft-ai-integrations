@@ -31,6 +31,19 @@ fn mask() -> Vec<u8> {
     })
 }
 
+/// A smooth left-to-right gradient with a darker disc in the middle, enough structure for a depth
+/// model to answer with something other than a flat map.
+fn gradient() -> Vec<u8> {
+    png::grey(64, 64, |x, y| {
+        let (dx, dy) = (i64::from(x) - 32, i64::from(y) - 32);
+        if dx * dx + dy * dy <= 12 * 12 {
+            60
+        } else {
+            (60 + x * 3).min(255) as u8
+        }
+    })
+}
+
 fn image(bytes: Vec<u8>) -> Option<Payload> {
     Payload::inline("image/png", bytes).ok()
 }
@@ -43,6 +56,7 @@ pub fn sample_request(feature: &Feature) -> Option<Request> {
             base.with_input(InputRole::Source, image(picture())?)
                 .with_input(InputRole::Prompt, Payload::text("the grey disc")),
         ),
+        "estimate-depth" => Some(base.with_input(InputRole::Source, image(gradient())?)),
         "generate-image" => Some(base.with_input(
             InputRole::Prompt,
             Payload::text("A plain red circle on a white background"),

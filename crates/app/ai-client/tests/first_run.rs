@@ -118,12 +118,16 @@ fn without_a_folder_the_reason_is_the_folder_until_the_suggestion_is_taken() {
 #[test]
 fn a_plan_the_app_cannot_run_is_blocked_as_unavailable() {
     let (dir, desk, _) = world();
+    // A client with no Candle engine cannot run this option. A build with the `candle` feature
+    // registers one in the standard factory, so this client turns it off explicitly.
+    let mut factory = ProviderFactory::standard();
+    factory.unregister("candle");
     let bare = AiClient::new(
         AppId::new("bare").unwrap(),
         SharedStore::new(dir.path().join("connections.json")),
         Arc::new(MemoryStore::new()),
-    );
-    // A plain client has no Candle engine registered, so it cannot run this option.
+    )
+    .with_factory(factory);
     let plan = desk
         .prepare_native_setup(&no_licence(), "candle", &bare)
         .unwrap();

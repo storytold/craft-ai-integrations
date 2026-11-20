@@ -348,15 +348,18 @@ fn the_next_recipe_that_can_run_supplies_the_built_in_runtime() {
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
-/// Every tool other than Select subject and Remove background refuses a built-in runtime and
-/// writes nothing.
+/// Every tool other than Select subject, Remove background and Estimate depth refuses a built-in
+/// runtime and writes nothing.
 #[test]
 fn a_tool_without_a_built_in_runtime_is_refused() {
     let w = World::new();
     let file = w.weights("sam3.safetensors");
-    let others = craft_ai_features::builtin()
-        .into_iter()
-        .filter(|f| f.id != "select-subject" && f.id != "remove-background");
+    let others = craft_ai_features::builtin().into_iter().filter(|f| {
+        !matches!(
+            f.id.as_str(),
+            "select-subject" | "remove-background" | "estimate-depth"
+        )
+    });
     for f in others {
         assert!(
             w.desk("launcher").enable_native(&f, &file).is_err(),
@@ -365,6 +368,26 @@ fn a_tool_without_a_built_in_runtime_is_refused() {
         );
     }
     assert!(w.shared.load().unwrap().connections.is_empty());
+}
+
+/// Estimate depth reads the depth head file (the other file sits beside it): registered under its
+/// own Candle connection, bound to the Depth Anything model, and an app reads that exact file back.
+#[test]
+fn estimate_depth_is_registered_bound_and_carries_the_head_file() {
+    let w = World::new();
+    let file = w.weights("depth_anything_v2_vits.fp16.safetensors");
+    let f = feature("estimate-depth");
+    let done = w.desk("launcher").enable_native(&f, &file).unwrap();
+    assert!(done.bound);
+    assert_eq!(done.connection.as_str(), "local-estimate-depth-candle");
+    assert_eq!(done.model.as_str(), "depth-anything-v2-small");
+    let route = w
+        .client("photocraft")
+        .local_route_for(&f.role().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(route.provider, "candle");
+    assert_eq!(route.file.as_deref(), file.to_str());
 }
 
 /// A Candle weights file that has gone is an error naming that, not an unbound tool.
