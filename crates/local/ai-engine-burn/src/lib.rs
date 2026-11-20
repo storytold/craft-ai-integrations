@@ -50,6 +50,7 @@ mod inspyrenet;
 )]
 mod model;
 mod runner;
+mod stream;
 
 pub use backend::{DECODER_FILE, ENCODER_FILE, graphics_card_answers};
 pub use inspyrenet::{InspyrenetRunner, MODEL as INSPYRENET_MODEL};

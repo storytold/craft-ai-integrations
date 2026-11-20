@@ -224,7 +224,9 @@ fn the_published_checkpoint_fills_every_weight() {
 }
 
 /// The whole runner on a real photo, as an app calls it: the picture in, the mask PNG out, written
-/// to `CRAFT_TEST_INSPYRENET_OUT` for a look. Prints the times.
+/// to `CRAFT_TEST_INSPYRENET_OUT` for a look. Each run is on a new thread, as the provider starts
+/// one per job, and `CRAFT_TEST_INSPYRENET_RUNS` repeats it (default 2) to watch the graphics
+/// card's memory stay flat between runs. Prints the times.
 #[test]
 #[ignore = "needs CRAFT_TEST_INSPYRENET_WEIGHTS, CRAFT_TEST_INSPYRENET_IMAGE and CRAFT_TEST_INSPYRENET_OUT"]
 fn removes_the_background_of_a_real_photo() {
@@ -243,9 +245,19 @@ fn removes_the_background_of_a_real_photo() {
     let started = std::time::Instant::now();
     let mut model = InspyrenetRunner::new().load(&weights).unwrap();
     println!("load {:.2?}", started.elapsed());
-    for round in 0..2 {
+    let runs = std::env::var("CRAFT_TEST_INSPYRENET_RUNS")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(2);
+    for round in 0..runs {
         let started = std::time::Instant::now();
-        let answer = model.run(&request, &RunContext::detached()).unwrap();
+        let answer = std::thread::scope(|scope| {
+            scope
+                .spawn(|| model.run(&request, &RunContext::detached()))
+                .join()
+        })
+        .unwrap()
+        .unwrap();
         println!("run {round}: {:.2?}", started.elapsed());
         let Payload::Inline { data, .. } = &answer[0].payload else {
             panic!("not inline");
@@ -284,4 +296,16 @@ fn a_load_that_is_not_whole_is_refused() {
     let mut foreign = clean.clone();
     foreign.unused.push("head.classifier.weight".into());
     assert!(!weights::complete(&foreign));
+}
+
+/// The big-stack thread works on the stream of the thread that started it, so a model's runs
+/// stay on the model's stream.
+#[test]
+fn the_big_stack_thread_keeps_the_callers_stream() {
+    use burn::tensor::StreamId;
+    let stream = StreamId::allocate();
+    let inside = stream
+        .executes(|| on_big_stack(|| Ok(StreamId::current())))
+        .unwrap();
+    assert_eq!(inside, stream);
 }

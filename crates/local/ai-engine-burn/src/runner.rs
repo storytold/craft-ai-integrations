@@ -71,22 +71,27 @@ impl ModelRunner for Sam21Runner {
     }
 
     /// Loads both saved files when `weights` is the encoder and the decoder is beside it, and says
-    /// what to do otherwise.
+    /// what to do otherwise. The model keeps one GPU stream for all its runs (`stream`).
     fn load(&self, weights: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
-        if weights.file_name() == Some(OsStr::new("encoder.onnx")) {
-            let dir = prepare::prepared_folder(weights)?;
-            return Ok(Box::new(Loaded::new(Burn::load(&dir)?)));
-        }
-        let dir = weights
-            .parent()
-            .filter(|_| weights.file_name() == Some(OsStr::new(ENCODER_FILE)));
-        let Some(dir) = dir.filter(|d| d.join(DECODER_FILE).is_file() && weights.is_file()) else {
-            return Err(AiError::unsupported(
-                "SAM 2.1 needs its prepared files, encoder.bpk and decoder.bpk, together in one folder. Open Set up AI to prepare them.",
-            ));
-        };
-        Ok(Box::new(Loaded::new(Burn::load(dir)?)))
+        crate::stream::load_on_own_stream(|| load(weights))
     }
+}
+
+/// Loads SAM 2.1 from its prepared files beside `weights`.
+fn load(weights: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
+    if weights.file_name() == Some(OsStr::new("encoder.onnx")) {
+        let dir = prepare::prepared_folder(weights)?;
+        return Ok(Box::new(Loaded::new(Burn::load(&dir)?)));
+    }
+    let dir = weights
+        .parent()
+        .filter(|_| weights.file_name() == Some(OsStr::new(ENCODER_FILE)));
+    let Some(dir) = dir.filter(|d| d.join(DECODER_FILE).is_file() && weights.is_file()) else {
+        return Err(AiError::unsupported(
+            "SAM 2.1 needs its prepared files, encoder.bpk and decoder.bpk, together in one folder. Open Set up AI to prepare them.",
+        ));
+    };
+    Ok(Box::new(Loaded::new(Burn::load(dir)?)))
 }
 
 /// The model id, from a literal that always parses.
