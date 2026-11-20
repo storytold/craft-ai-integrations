@@ -23,35 +23,11 @@ Changes reach `main` through a pull request. Nothing is pushed to it directly.
 Review that matters happens at the boundaries: the shared contract goes to `craft-libs`, and each app
 reviews its own adoption in its own repository. A change here should not quietly widen that contract.
 
-## Commit messages
+## Rules
 
-Use a conventional prefix with the crate in brackets where one crate is affected:
-
-```
-feat(ai-client): resolve the selected local backend and model
-fix(ai-openai): stop retrying on a 4xx
-docs: add LAYOUT.md
-```
-
-## Rules for every change
-
-- **Tests.** Add a test when it guards a behaviour a plausible change could break and no other test
-  catches; a bug fix adds a test that fails without it. See
-  [testing standard](https://github.com/storytold/craft-contrib/blob/main/standards/testing.md).
-- **Safety rules get a deliberate-bug check.** Break the rule on purpose and confirm a test fails. No
-  surviving mutant is ignored. The harness and its case lists are in `tools/mutation/`.
-- **Small files.** Under 500 lines each, 700 at the very most. A file near the limit is doing too much,
-  so split it by responsibility.
-- **Keep `ai-core` small.** It uses serde only, with no I/O and no async runtime, and it must compile
-  for wasm. Desktop-only code belongs in `ai-native`.
-- **No unsafe code.** The workspace denies it. The one named exception is
-  `crates/foundation/ai-native/src/owner_only/win_acl.rs`: the Windows calls that make private files owner-only,
-  which std cannot do. `crates/foundation/ai-native/tests/unsafe_exception.rs` fails if `unsafe` is allowed
-  anywhere else.
-- **Time goes through `chrono`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string.
-- **No secrets in the repo or in logs.** Keys go through the secret stores in `ai-native`.
-- **Do not claim more than was run.** Say plainly what was tested live, what was tested against a
-  scripted server, and what is only proposed.
+The shared rules for every Craft repository are in [AGENTS.md](AGENTS.md) and the
+[craft-contrib standards](https://github.com/storytold/craft-contrib/tree/main/standards), including
+[testing](https://github.com/storytold/craft-contrib/blob/main/standards/testing.md).
 
 ## Building and testing
 
