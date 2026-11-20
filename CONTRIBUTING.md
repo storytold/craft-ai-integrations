@@ -12,16 +12,9 @@ cover the subsequent implementation.
 
 ## Branches and pull requests
 
-Changes reach `main` through a pull request. Nothing is pushed to it directly.
+Changes reach `main` through pull requests. The repository allows squash and rebase merges, not merge commits, and deletes the branch after merge.
 
-1. Branch off `main`. Keep the branch short-lived and focused on one change.
-2. Open a pull request into `main`. Explain what changed and why, and how you checked it.
-3. Resolve every review conversation before merging.
-4. Merge by squash or rebase. History stays linear, so merge commits are off.
-5. The branch is deleted after merge. Delete your local copy too.
-
-Review that matters happens at the boundaries: the shared contract goes to `craft-libs`, and each app
-reviews its own adoption in its own repository. A change here should not quietly widen that contract.
+The shared contract lives in `craft-libs`, and each app reviews its own adoption in its own repository.
 
 ## Rules
 
