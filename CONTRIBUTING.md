@@ -35,8 +35,9 @@ docs: add LAYOUT.md
 
 ## Rules for every change
 
-- **Test first.** Write the failing test, then the code. Ship tests with new logic, especially pure
-  functions.
+- **Tests.** Add a test when it guards a behaviour a plausible change could break and no other test
+  catches; a bug fix adds a test that fails without it. See
+  [testing standard](https://github.com/storytold/craft-contrib/blob/main/standards/testing.md).
 - **Safety rules get a deliberate-bug check.** Break the rule on purpose and confirm a test fails. No
   surviving mutant is ignored. The harness and its case lists are in `tools/mutation/`.
 - **Small files.** Under 500 lines each, 700 at the very most. A file near the limit is doing too much,
