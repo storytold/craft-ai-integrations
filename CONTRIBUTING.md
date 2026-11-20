@@ -12,45 +12,15 @@ cover the subsequent implementation.
 
 ## Branches and pull requests
 
-Changes reach `main` through a pull request. Nothing is pushed to it directly.
+Changes reach `main` through pull requests. The repository allows squash and rebase merges, not merge commits, and deletes the branch after merge.
 
-1. Branch off `main`. Keep the branch short-lived and focused on one change.
-2. Open a pull request into `main`. Explain what changed and why, and how you checked it.
-3. Resolve every review conversation before merging.
-4. Merge by squash or rebase. History stays linear, so merge commits are off.
-5. The branch is deleted after merge. Delete your local copy too.
+The shared `craft-ai-core` contract is accepted in `craft-libs`, but this workspace still builds against its own copy in `crates/foundation/ai-core`, which is not interchangeable with it yet ([docs/CORE-SYNC.md](docs/CORE-SYNC.md)). Each app reviews its own adoption in its own repository.
 
-Review that matters happens at the boundaries: the shared contract goes to `craft-libs`, and each app
-reviews its own adoption in its own repository. A change here should not quietly widen that contract.
+## Rules
 
-## Commit messages
-
-Use a conventional prefix with the crate in brackets where one crate is affected:
-
-```
-feat(ai-client): resolve the selected local backend and model
-fix(ai-openai): stop retrying on a 4xx
-docs: add LAYOUT.md
-```
-
-## Rules for every change
-
-- **Test first.** Write the failing test, then the code. Ship tests with new logic, especially pure
-  functions.
-- **Safety rules get a deliberate-bug check.** Break the rule on purpose and confirm a test fails. No
-  surviving mutant is ignored. The harness and its case lists are in `tools/mutation/`.
-- **Small files.** Under 500 lines each, 700 at the very most. A file near the limit is doing too much,
-  so split it by responsibility.
-- **Keep `ai-core` small.** It uses serde only, with no I/O and no async runtime, and it must compile
-  for wasm. Desktop-only code belongs in `ai-native`.
-- **No unsafe code.** The workspace denies it. The one named exception is
-  `crates/foundation/ai-native/src/owner_only/win_acl.rs`: the Windows calls that make private files owner-only,
-  which std cannot do. `crates/foundation/ai-native/tests/unsafe_exception.rs` fails if `unsafe` is allowed
-  anywhere else.
-- **Time goes through `time`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string.
-- **No secrets in the repo or in logs.** Keys go through the secret stores in `ai-native`.
-- **Do not claim more than was run.** Say plainly what was tested live, what was tested against a
-  scripted server, and what is only proposed.
+The shared rules for every Craft repository are in [AGENTS.md](AGENTS.md) and the
+[craft-contrib standards](https://github.com/storytold/craft-contrib/tree/main/standards), including
+[testing](https://github.com/storytold/craft-contrib/blob/main/standards/testing.md).
 
 ## Building and testing
 
