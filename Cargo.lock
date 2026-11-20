@@ -2046,7 +2046,6 @@ dependencies = [
 name = "craft-ai-client"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "craft-ai-artcraft",
  "craft-ai-bfl",
  "craft-ai-comfy-env",
@@ -2071,6 +2070,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
+ "time",
  "url",
 ]
 
@@ -2120,9 +2120,9 @@ dependencies = [
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]
@@ -2257,13 +2257,13 @@ dependencies = [
 name = "craft-ai-media"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "craft-ai-core",
  "craft-ai-http",
  "image",
  "png",
  "serde_json",
  "tempfile",
+ "time",
  "ureq 3.5.1",
  "url",
 ]

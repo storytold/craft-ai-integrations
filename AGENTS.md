@@ -69,6 +69,7 @@ The repository's shared crates own the contracts, adapters, catalogue, consent a
 
 - Every workspace crate's `Cargo.toml` has `[lints] workspace = true`, and production crate roots carry their crate-level lint attribute.
 - `unsafe` is allowed only in `crates/foundation/ai-native/src/owner_only/win_acl.rs` (the Win32 calls that give private files an owner-only access list). `crates/foundation/ai-native/tests/unsafe_exception.rs` checks this.
+- Dates and times go through the `time` workspace dependency, not `chrono` (shared rule 12's SHOULD): `chrono` is unmaintained ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)), and [ADR 0027](docs/adr/0027-time-goes-through-time.md) records the switch. Do not hand-roll calendar or UTC math; a crate owns only its output format string.
 - Checks: `cargo test -p <crate>` and `cargo clippy -p <crate>` for the crates you changed. Scripted services stand in for live ones. Safety rules also have deliberate-bug cases in `tools/mutation/`.
 - Tests that touch the real OS keychain are `#[ignore]`d; run `cargo test -p craft-ai-native -- --ignored keychain_round_trip`.
 - `ai-core` uses serde only and compiles for wasm; desktop-only code is in `ai-native`.

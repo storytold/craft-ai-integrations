@@ -26,7 +26,7 @@ decision that replaces an earlier one gets a new file, and the old one's Status 
 | [0009](0009-keys-travel-in-headers.md) | Keys travel in headers, never in a URL | 19/10/2026 |
 | [0010](0010-keep-local-craft-ai-core.md) | Keep a local `craft-ai-core` until craft-libs has what it lacks | 20/10/2026 |
 | [0011](0011-sam21-first-for-select-subject.md) | SAM 2.1 is offered first for Select subject | 21/10/2026 |
-| [0012](0012-time-goes-through-chrono.md) | Time goes through `chrono` | 21/10/2026 |
+| [0012](0012-time-goes-through-chrono.md) | Time goes through `chrono` (superseded by 0027) | 21/10/2026 |
 | [0013](0013-burn-optional-after-rten.md) | Burn is an optional engine after rten | 22/10/2026 |
 | [0014](0014-an-offer-never-chooses.md) | An offer never chooses a model | 23/10/2026 |
 | [0015](0015-developer-proposals-through-intake.md) | Developer suggestions go through the intake path | 23/10/2026 |
@@ -41,3 +41,4 @@ decision that replaces an earlier one gets a new file, and the old one's Status 
 | [0024](0024-encrypted-file-secret-store.md) | Encrypted file as the last secret store | 10/11/2026 |
 | [0025](0025-resume-against-named-version.md) | Resume a cut download only against a named file version | 11/11/2026 |
 | [0026](0026-downloads-reach-only-allowed-addresses.md) | Downloads connect only to addresses a link may reach | 11/11/2026 |
+| [0027](0027-time-goes-through-time.md) | Time goes through `time` | 20/11/2026 |

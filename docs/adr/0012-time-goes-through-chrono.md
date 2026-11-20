@@ -1,6 +1,6 @@
 # ADR 0012: Time goes through `chrono`
 
-- **Status:** accepted 21/10/2026
+- **Status:** superseded by 0027 (accepted 21/10/2026)
 - **Source:** [#74](https://github.com/storytold/craft-ai-integrations/pull/74)
 
 ## Context

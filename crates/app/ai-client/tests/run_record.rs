@@ -8,7 +8,6 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{TimeZone, Utc};
 use craft_ai_client::{
     AiClient, Finished, Plan, ProviderFactory, RunOutcome, RunOutput, RunRecord,
 };
@@ -22,6 +21,7 @@ use craft_ai_native::secrets::{MemoryStore, SecretStore};
 use craft_ai_native::shared::SharedStore;
 use serde_json::{Value, json};
 use support::{Reply, Server};
+use time::macros::datetime;
 
 const KEY: &str = "sk-live-record-needle-31";
 const PROMPT: &str = "a private sentence the record must not keep";
@@ -119,7 +119,7 @@ fn mock_world(script: Script) -> World {
 
 /// The record of `done`, with a fixed start time and duration so the fields can be compared.
 fn record(plan: &Plan, done: &Finished) -> RunRecord {
-    let started = Utc.with_ymd_and_hms(2026, 11, 10, 22, 30, 5).unwrap();
+    let started = datetime!(2026-11-10 22:30:05 UTC);
     RunRecord::new(plan, done, started, Duration::from_millis(1234), &[KEY])
 }
 
@@ -286,7 +286,7 @@ fn a_key_inside_the_request_text_takes_the_whole_text_with_it() {
         }],
         usage: None,
     };
-    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let started = datetime!(2026-11-11 09:00:00 UTC);
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[inner]);
     let want = "could not use [key removed].";
     assert_eq!(rec.error.unwrap().message, want);
@@ -312,7 +312,7 @@ fn request_text_repeated_with_overlap_is_removed_in_full() {
         }],
         usage: None,
     };
-    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let started = datetime!(2026-11-11 09:00:00 UTC);
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY]);
     let want = "saw [request text removed].";
     assert_eq!(rec.error.unwrap().message, want);
@@ -402,7 +402,7 @@ fn failed_with(request: Request, said: &str) -> RunRecord {
         }],
         usage: None,
     };
-    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let started = datetime!(2026-11-11 09:00:00 UTC);
     RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY])
 }
 
@@ -438,7 +438,7 @@ fn request_text_and_keys_are_removed_in_their_json_escaped_form() {
         events: Vec::new(),
         usage: None,
     };
-    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let started = datetime!(2026-11-11 09:00:00 UTC);
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[key]);
     assert_eq!(
         rec.error.unwrap().message,
@@ -490,7 +490,7 @@ fn returned_text_is_removed_from_messages() {
         ],
         usage: None,
     };
-    let started = Utc.with_ymd_and_hms(2026, 11, 11, 9, 0, 0).unwrap();
+    let started = datetime!(2026-11-11 09:00:00 UTC);
     let rec = RunRecord::new(&plan, &done, started, Duration::ZERO, &[KEY]);
     let want = "stopped after [result text removed]. Streamed [result text removed]";
     assert_eq!(rec.error.unwrap().message, want);

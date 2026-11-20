@@ -18,8 +18,8 @@
 //! shortcut: providers that state a lifetime in their docs but sign nothing into the link are
 //! not covered here; their adapter can set `PayloadHandle::expires_at` itself when one needs it.
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::time::{SystemTime, UNIX_EPOCH};
+use time::{Date, Month, OffsetDateTime, Time, Weekday};
 use url::Url;
 
 /// A link clearly past its expiry is refused before any request, but only once this much time
@@ -86,10 +86,19 @@ pub fn clearly_expired(expires_at: u64, now: u64) -> bool {
 pub fn utc_text(unix: u64) -> String {
     i64::try_from(unix)
         .ok()
-        .and_then(|secs| DateTime::from_timestamp(secs, 0))
+        .and_then(|secs| OffsetDateTime::from_unix_timestamp(secs).ok())
         .map_or_else(
             || format!("{unix} seconds after 1970 (UTC)"),
-            |at| at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            |at| {
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+                    at.year(),
+                    u8::from(at.month()),
+                    at.day(),
+                    at.hour(),
+                    at.minute()
+                )
+            },
         )
 }
 
@@ -139,8 +148,46 @@ pub(crate) fn http_date(s: &str) -> Option<u64> {
     if s.len() != 29 {
         return None;
     }
-    unix(NaiveDateTime::parse_from_str(s, "%a, %d %b %Y %H:%M:%S GMT").ok()?)
+    let b = s.as_bytes();
+    if &b[3..5] != b", " || b[7] != b' ' || b[11] != b' ' || b[16] != b' ' || &b[25..] != b" GMT" {
+        return None;
+    }
+    if b[19] != b':' || b[22] != b':' {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| digits(&b[r]);
+    let weekday = *WEEKDAYS
+        .iter()
+        .find(|(name, _)| name.as_bytes().eq_ignore_ascii_case(&b[..3]))?;
+    let month = MONTHS
+        .iter()
+        .position(|name| name.as_bytes().eq_ignore_ascii_case(&b[8..11]))?;
+    let (y, d) = (n(12..16)?, n(5..7)?);
+    let date = Date::from_calendar_date(
+        i32::try_from(y).ok()?,
+        Month::try_from(u8::try_from(month + 1).ok()?).ok()?,
+        u8::try_from(d).ok()?,
+    )
+    .ok()?;
+    if date.weekday() != weekday.1 {
+        return None;
+    }
+    unix_from(y, month as u64 + 1, d, n(17..19)?, n(20..22)?, n(23..25)?)
 }
+
+const WEEKDAYS: [(&str, Weekday); 7] = [
+    ("Mon", Weekday::Monday),
+    ("Tue", Weekday::Tuesday),
+    ("Wed", Weekday::Wednesday),
+    ("Thu", Weekday::Thursday),
+    ("Fri", Weekday::Friday),
+    ("Sat", Weekday::Saturday),
+    ("Sun", Weekday::Sunday),
+];
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 /// ASCII digits as a number, or `None` for anything else (an empty slice included).
 fn digits(b: &[u8]) -> Option<u64> {
@@ -150,17 +197,15 @@ fn digits(b: &[u8]) -> Option<u64> {
     std::str::from_utf8(b).ok()?.parse().ok()
 }
 
-/// A UTC date and time as Unix seconds, through `chrono`. A field out of range, a day the month
+/// A UTC date and time as Unix seconds, through `time`. A field out of range, a day the month
 /// does not have, or a time before 1970 give `None`.
 fn unix_from(y: u64, mo: u64, d: u64, h: u64, mi: u64, s: u64) -> Option<u64> {
-    let n = |v: u64| u32::try_from(v).ok();
-    let date = NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, n(mo)?, n(d)?)?;
-    unix(date.and_hms_opt(n(h)?, n(mi)?, n(s)?)?)
-}
-
-/// A UTC date and time as Unix seconds; `None` before 1970.
-fn unix(at: NaiveDateTime) -> Option<u64> {
-    u64::try_from(at.and_utc().timestamp()).ok()
+    let n = |v: u64| u8::try_from(v).ok();
+    let date =
+        Date::from_calendar_date(i32::try_from(y).ok()?, Month::try_from(n(mo)?).ok()?, n(d)?)
+            .ok()?;
+    let at = date.with_time(Time::from_hms(n(h)?, n(mi)?, n(s)?).ok()?);
+    u64::try_from(at.assume_utc().unix_timestamp()).ok()
 }
 
 #[cfg(test)]
