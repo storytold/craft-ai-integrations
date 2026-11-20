@@ -185,6 +185,28 @@ fn no_native_option_without_a_usable_recipe() {
     );
 }
 
+/// A runtime whose route names no files has nothing to download, so it gets no setup option.
+/// Other runtimes of the same tool are still offered.
+#[test]
+fn a_runtime_route_without_files_gets_no_option() {
+    let mut feature = builtin()
+        .into_iter()
+        .find(|f| f.id == "select-subject")
+        .unwrap();
+    for recipe in feature.locals.iter_mut() {
+        for native in recipe.native.iter_mut().filter(|n| n.provider == "burn") {
+            native.models.clear();
+        }
+    }
+    let options = setup_options(std::slice::from_ref(&feature));
+    assert!(options.iter().all(|o| o.id != "native:select-subject:burn"));
+    assert!(
+        options
+            .iter()
+            .any(|o| o.id == "native:select-subject:candle")
+    );
+}
+
 /// Every local model comes before any built-in runtime, whichever tool names each, and the
 /// runtimes come before hosted services.
 #[test]

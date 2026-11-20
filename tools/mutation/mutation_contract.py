@@ -110,9 +110,11 @@ CA = [
      '''self.accelerators.remove(&name);
         self.support.remove(&name);
         self.standard_senders.remove(&name);
+        self.engines.remove(&name);
         self.builders.insert''',
      '''self.accelerators.remove(&name);
         self.standard_senders.remove(&name);
+        self.engines.remove(&name);
         self.builders.insert''',
      CL, 'route_support', 'a_custom_adapter_replacing'),
     ('no-answer-counts-as-supported', 'crates/app/ai-client/src/factory.rs',
@@ -181,8 +183,8 @@ CA = [
      'None if false => now.tags.push(tag.clone()),',
      CL, 'model_refresh', 'a_declared_input_survives_two_refreshes'),
     ('store-writes-in-place', 'crates/foundation/ai-native/src/fsutil.rs',
-     'let result = write_tmp(&tmp, bytes).and_then(|()| fs::rename(&tmp, path));',
-     'let result = fs::write(path, bytes);',
+     'let result = write_tmp(&tmp, fill).and_then(|()| fs::rename(&tmp, path));',
+     'let result = File::create(path).and_then(|mut file| fill(&mut file));',
      CL, 'assignment_guards', 'a_failed_write_leaves_no_part_of_an_assignment'),
     ('private-write-reuses-a-leftover-temp-file', 'crates/foundation/ai-native/src/owner_only.rs',
      'options.write(true).create_new(true);',
