@@ -402,7 +402,10 @@ fn a_refused_range_does_not_cost_a_try() {
 }
 
 /// The time limit covers the whole save, not each try: the second try gets only what is left,
-/// and no further pause or try follows once it has run out.
+/// and no further pause or try follows once it has run out. The second answer cannot come
+/// before 1.3 s (200 ms, a 300 ms pause, then 800 ms), so a fresh 1 s limit per try would save
+/// the file. How slow the machine is changes only which step runs out of time, and every step
+/// that does reports the time limit.
 #[test]
 fn the_whole_save_has_one_time_limit() {
     let dir = tempfile::tempdir().unwrap();
@@ -419,11 +422,33 @@ fn the_whole_save_has_one_time_limit() {
     let mut cfg = config(dir.path());
     cfg.transfer_timeout = Duration::from_secs(1);
     cfg.retry.first_delay = Duration::from_millis(300);
+    let error = save_with(&server, cfg).unwrap_err();
+    assert!(error.message.contains("time limit"), "{error:?}");
+    // A third try would mean a pause and a try after the time ran out.
+    assert!(server.count() <= 2, "{} tries", server.count());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+/// A pause that carries the save past its time limit ends it with the time limit, not with the
+/// last try's own error, and no further pause follows. The first pause (2 s) is longer than the
+/// whole limit (1 s), so it always crosses the deadline. A first try that ends after the
+/// deadline, or never starts, ends the save with the time limit too. The fixed save takes at
+/// most about 3 s. Another pause would double to 4 s (at least 6 s in all), so the 5 s bound
+/// leaves seconds of slack, not milliseconds.
+#[test]
+fn time_running_out_during_a_pause_is_the_time_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = scripted(vec![Box::new(|_| cut_whole(""))]);
+    let mut cfg = config(dir.path());
+    cfg.transfer_timeout = Duration::from_secs(1);
+    cfg.retry.first_delay = Duration::from_secs(2);
     let started = std::time::Instant::now();
     let error = save_with(&server, cfg).unwrap_err();
     let took = started.elapsed();
     assert!(error.message.contains("time limit"), "{error:?}");
-    assert!(took < Duration::from_millis(1400), "{took:?}");
-    assert_eq!(server.count(), 2);
+    assert!(took < Duration::from_secs(5), "{took:?}");
+    // No try after the time ran out reaches the host. The first may not either, on a machine
+    // slow enough to pass the deadline before it is sent.
+    assert!(server.count() <= 1, "{} requests", server.count());
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
