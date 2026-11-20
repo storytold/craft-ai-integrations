@@ -226,7 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The person said go to this run, so the run grants consent for exactly this plan.
     let mut ledger = ConsentLedger::default();
     ledger.grant(plan.disclosure());
-    let started = chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now());
+    let started = time::OffsetDateTime::now_utc();
     let clock = std::time::Instant::now();
     let job = client.start(&plan, &ledger)?;
     let done = job.wait(Duration::from_millis(500), Duration::from_secs(300))?;
