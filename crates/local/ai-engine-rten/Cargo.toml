@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-engine-rten"
-description = "Built-in rten runners for Craft AI, reading the published ONNX files as they are: SAM 2.1 for image.segment and BEN2 + ViTMatte for image.matte. Native only."
+description = "Built-in rten runners for Craft AI, reading the published ONNX files as they are: SAM 2.1 for image.segment, BEN2 + ViTMatte for image.matte, and LaMa for image.inpaint. Native only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

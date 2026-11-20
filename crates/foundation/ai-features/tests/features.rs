@@ -308,8 +308,10 @@ fn each_photocraft_tool_has_one_shared_tool_with_the_right_job_and_inputs() {
 
 #[test]
 fn a_tool_without_a_checked_route_offers_none() {
-    // Remove objects has no verified local recipe and no hosted adapter that fills a masked area.
-    let f = feature("remove-object");
-    assert!(f.locals.is_empty());
-    assert!(f.cloud.is_empty());
+    // Generative expand and Extend sequence have no verified local or hosted route yet.
+    for id in ["generative-expand", "extend-sequence"] {
+        let f = feature(id);
+        assert!(f.locals.is_empty(), "{id}");
+        assert!(f.cloud.is_empty(), "{id}");
+    }
 }

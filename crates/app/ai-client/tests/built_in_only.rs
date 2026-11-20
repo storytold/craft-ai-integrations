@@ -16,6 +16,13 @@ fn remove_background() -> Feature {
         .unwrap()
 }
 
+fn remove_object() -> Feature {
+    craft_ai_features::builtin()
+        .into_iter()
+        .find(|f| f.id == "remove-object")
+        .unwrap()
+}
+
 fn windows_nvidia() -> SystemProfile {
     SystemProfile {
         os: Os::Windows,
@@ -125,4 +132,39 @@ fn engine_advice_offers_burn_and_never_comfyui() {
     assert_eq!(advice[0].provider, "burn");
     assert!(advice[0].usable && advice[0].recommended, "{advice:?}");
     assert!(!advice[1].usable && !advice[1].recommended, "{advice:?}");
+}
+
+/// Remove objects registers LaMa on rten with `lama.onnx`, refuses ComfyUI, and advises rten
+/// rather than ComfyUI when an app registers the rten engine.
+#[test]
+fn remove_object_registers_lama_on_rten_and_never_comfyui() {
+    let w = World::new();
+    let refused = w
+        .desk()
+        .enable_local(&remove_object(), "http://127.0.0.1:8188")
+        .err()
+        .unwrap();
+    assert_eq!(refused.kind, ErrorKind::Unsupported);
+    assert!(w.shared.load().unwrap().connections.is_empty());
+
+    let file = w.dir.path().join("lama.onnx");
+    std::fs::write(&file, b"not really weights").unwrap();
+    let done = w.desk().enable_native(&remove_object(), &file).unwrap();
+    assert!(done.bound);
+    assert_eq!(done.connection.as_str(), "local-remove-object-rten");
+    assert_eq!(done.model.as_str(), "lama");
+    let store = w.shared.load().unwrap();
+    assert_eq!(store.connections.len(), 1);
+    assert_eq!(store.connections[0].provider, "rten");
+
+    let mut factory = without_engines();
+    factory.register("rten", |_, _| {
+        Err(AiError::unsupported("advice never builds a provider"))
+    });
+    let advice = w
+        .client(factory)
+        .engine_advice(&remove_object(), &windows_nvidia());
+    assert_eq!(advice.len(), 1);
+    assert_eq!(advice[0].provider, "rten");
+    assert!(advice[0].usable && advice[0].recommended, "{advice:?}");
 }
