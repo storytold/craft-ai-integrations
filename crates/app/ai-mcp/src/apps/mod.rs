@@ -34,6 +34,16 @@ pub const MAX_CALL_TIMEOUT: Duration = Duration::from_secs(3600);
 type Connector = dyn Fn(&AppEntry) -> Result<Conn, String> + Send + Sync;
 /// Whether the person still lets agents use the Craft apps ([`registry::switched_on`]).
 type Switch = dyn Fn() -> bool + Send + Sync;
+/// Whether the person still lets agents use one app, by id ([`registry::allowed`]). The app list
+/// is read once at start, so an app taken off it later is refused by asking this.
+type Allow = dyn Fn(&str) -> bool + Send + Sync;
+
+/// What an agent is told about an app the person took off the list after the gateway started.
+fn not_offered(name: &str) -> String {
+    format!(
+        "{name} is no longer available to AI agents: the ArtCraft Launcher's list does not name it any more"
+    )
+}
 
 /// What an agent is told while the launcher's switch is off.
 pub const SWITCHED_OFF: &str = "AI agents are turned off for the Craft apps. Turn on ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps, then try again.";
@@ -82,6 +92,7 @@ pub struct Hub {
     slots: Vec<Slot>,
     connect: Box<Connector>,
     switch: Box<Switch>,
+    allow: Box<Allow>,
 }
 
 impl std::fmt::Debug for Hub {
@@ -93,16 +104,38 @@ impl std::fmt::Debug for Hub {
 }
 
 impl Hub {
-    /// A hub that starts each app's real CLI while the launcher's switch is on.
+    /// A hub that starts each app's real CLI while the launcher's switch is on and its list
+    /// still names that app.
     pub fn new(apps: Vec<AppEntry>, notes: Vec<String>) -> Self {
         Self::with_connector(apps, notes, Box::new(child::spawn))
             .with_switch(Box::new(registry::switched_on))
+            .with_allow(Box::new(registry::allowed))
     }
 
     /// Ask `switch` before every tool call (tests; [`Hub::new`] asks the launcher's app list).
     pub fn with_switch(mut self, switch: Box<Switch>) -> Self {
         self.switch = switch;
         self
+    }
+
+    /// Ask `allow` whether each app may still be used, before it is listed, searched, started
+    /// or called (tests; [`Hub::new`] asks the launcher's app list).
+    pub fn with_allow(mut self, allow: Box<Allow>) -> Self {
+        self.allow = allow;
+        self
+    }
+
+    /// `Err` when the person took app `i` off the list. Its server is stopped then; one a call
+    /// holds is stopped when that call ends ([`Self::with_conn`]).
+    fn offered(&self, i: usize) -> Result<(), String> {
+        let (Some(app), Some(slot)) = (self.apps.get(i), self.slots.get(i)) else {
+            return Err("no such app".into());
+        };
+        if (self.allow)(&app.id) {
+            return Ok(());
+        }
+        self.hold(slot, false, |conn| slot.close(conn));
+        Err(not_offered(&app.name))
     }
 
     /// `Err` while the person has turned agents off. Every app server this gateway started is
@@ -165,19 +198,31 @@ impl Hub {
             slots,
             connect,
             switch: Box::new(|| true),
+            allow: Box::new(|_| true),
         }
     }
 
+    /// The apps the person still lets agents use, by index.
+    fn offered_apps(&self) -> impl Iterator<Item = (usize, &AppEntry)> {
+        self.apps
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| (self.allow)(&a.id))
+    }
+
+    /// The index of app `app`, if the list still names it ([`Self::offered`]).
     fn index(&self, app: &str) -> Result<usize, String> {
         let id = app.trim().to_lowercase();
-        self.apps.iter().position(|a| a.id == id).ok_or_else(|| {
-            let known: Vec<&str> = self.apps.iter().map(|a| a.id.as_str()).collect();
+        let i = self.apps.iter().position(|a| a.id == id).ok_or_else(|| {
+            let known: Vec<&str> = self.offered_apps().map(|(_, a)| a.id.as_str()).collect();
             if known.is_empty() {
                 format!("no Craft app is available to agents (asked for `{app}`); turn agents on in the ArtCraft Launcher")
             } else {
                 format!("no app `{app}`; available: {}", known.join(", "))
             }
-        })
+        })?;
+        self.offered(i)?;
+        Ok(i)
     }
 
     /// Run `f` on `app`'s connection and its tool list, starting it (or replacing a dead one) and
@@ -198,6 +243,11 @@ impl Hub {
             if !(self.switch)() {
                 slot.close(conn);
                 return Err(SWITCHED_OFF.into());
+            }
+            // Asked again here: the app may have been taken off the list while this waited.
+            if !(self.allow)(&app.id) {
+                slot.close(conn);
+                return Err(not_offered(&app.name));
             }
             if conn.as_mut().is_some_and(Conn::take_tools_changed) {
                 *lock(&slot.tools) = None;
@@ -220,7 +270,7 @@ impl Hub {
                 }
             };
             let out = f(c, &list);
-            if !(self.switch)() {
+            if !(self.switch)() || !(self.allow)(&app.id) {
                 slot.close(conn);
             }
             out
@@ -250,12 +300,13 @@ impl Hub {
         self.with_conn(i, |_, list| Ok(Arc::clone(list)))
     }
 
-    /// `craft_list_apps`.
+    /// `craft_list_apps`: the apps the list still names.
     pub fn list_apps(&self) -> Value {
         let apps: Vec<Value> = self
             .apps
             .iter()
             .zip(&self.slots)
+            .filter(|(a, _)| (self.allow)(&a.id))
             .map(|(a, s)| {
                 let mut o = Map::new();
                 o.insert("app".into(), json!(a.id));
@@ -294,7 +345,7 @@ impl Hub {
     ) -> Result<Value, String> {
         let which: Vec<usize> = match app {
             Some(a) => vec![self.index(a)?],
-            None => (0..self.apps.len()).collect(),
+            None => self.offered_apps().map(|(i, _)| i).collect(),
         };
         // Every app is started at once, so one that hangs in its start does not hold up the
         // others; the answer waits at most for the slowest one's own deadline.
@@ -404,3 +455,7 @@ pub mod tools;
 #[cfg(test)]
 #[path = "hub_tests.rs"]
 mod hub_tests;
+
+#[cfg(test)]
+#[path = "hub_consent_tests.rs"]
+mod hub_consent_tests;

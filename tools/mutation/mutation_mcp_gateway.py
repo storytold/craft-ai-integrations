@@ -29,4 +29,11 @@ MG = [
     ('held-app-not-stopped', A + 'mod.rs', '        if slot.stop.load(Ordering::SeqCst)\n', '        if false\n', P, 'lib', 'an_app_held_for_a_moment_is_stopped'),
     ('restarted-app-list-not-kept', A + 'mod.rs', '                    *lock(&slot.tools) = Some(Arc::clone(&list));\n                    list', '                    list', P, 'lib', 'a_call_that_restarts_its_app_does_not_hold_up'),
     ('invalid-id-dispatched', 'crates/app/ai-mcp/src/mcp.rs', '|| id.as_ref().is_some_and(|v| !valid_id(v))', '|| false', P, 'lib', 'malformed_envelopes_are_invalid_requests'),
+    # #208: an app taken off the list after the gateway started.
+    ('removed-app-still-offered', A + 'mod.rs', '        self.offered(i)?;\n        Ok(i)', '        Ok(i)', P, 'lib', 'an_app_taken_off_the_list_is_no_longer_offered'),
+    ('removed-app-still-listed', A + 'mod.rs', '            .filter(|(a, _)| (self.allow)(&a.id))\n', '', P, 'lib', 'an_app_taken_off_the_list_is_no_longer_offered'),
+    ('removed-app-still-searched', A + 'mod.rs', 'None => self.offered_apps().map(|(i, _)| i).collect(),', 'None => (0..self.apps.len()).collect(),', P, 'lib', 'an_app_taken_off_the_list_is_no_longer_offered'),
+    ('removed-app-server-kept', A + 'mod.rs', 'self.hold(slot, false, |conn| slot.close(conn));', '', P, 'lib', 'an_app_taken_off_the_list_is_no_longer_offered'),
+    ('queued-call-runs-after-app-removed', A + 'mod.rs', '            if !(self.allow)(&app.id) {\n                slot.close(conn);', '            if false {\n                slot.close(conn);', P, 'lib', 'a_call_waiting_for_an_app_taken_off_the_list'),
+    ('removed-app-kept-after-call', A + 'mod.rs', 'if !(self.switch)() || !(self.allow)(&app.id) {', 'if !(self.switch)() {', P, 'lib', 'a_running_call_finishes_then_its_app_is_stopped'),
 ]
