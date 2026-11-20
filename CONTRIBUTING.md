@@ -47,7 +47,7 @@ docs: add LAYOUT.md
   `crates/foundation/ai-native/src/owner_only/win_acl.rs`: the Windows calls that make private files owner-only,
   which std cannot do. `crates/foundation/ai-native/tests/unsafe_exception.rs` fails if `unsafe` is allowed
   anywhere else.
-- **Time goes through `chrono`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string.
+- **Time goes through `time`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string.
 - **No secrets in the repo or in logs.** Keys go through the secret stores in `ai-native`.
 - **Do not claim more than was run.** Say plainly what was tested live, what was tested against a
   scripted server, and what is only proposed.

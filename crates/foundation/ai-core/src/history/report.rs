@@ -24,19 +24,18 @@ pub struct Day {
 impl Day {
     /// Days since 1970-01-01 (negative before it); a day that doesn't exist (2025-02-30) reads as 0.
     pub fn to_days(self) -> i64 {
-        use chrono::Datelike;
-        // chrono covers years up to about ±262143, but `Day` holds any `i32` year. The Gregorian
-        // calendar repeats every 400 years, so chrono handles the year within its cycle and
+        // `time` covers years up to about ±999999, but `Day` holds any `i32` year. The Gregorian
+        // calendar repeats every 400 years, so `time` handles the year within its cycle and
         // whole cycles are added back.
         let cycles = i64::from(self.year.div_euclid(400));
-        chrono::NaiveDate::from_ymd_opt(
-            self.year.rem_euclid(400),
-            u32::from(self.month),
-            u32::from(self.day),
-        )
-        .map_or(0, |d| {
-            i64::from(d.num_days_from_ce()) - UNIX_EPOCH_DAYS_FROM_CE + cycles * DAYS_PER_400_YEARS
-        })
+        time::Month::try_from(self.month)
+            .ok()
+            .and_then(|month| {
+                time::Date::from_calendar_date(self.year.rem_euclid(400), month, self.day).ok()
+            })
+            .map_or(0, |d| {
+                i64::from(d.to_julian_day()) - UNIX_EPOCH_JULIAN_DAY + cycles * DAYS_PER_400_YEARS
+            })
     }
 
     /// The calendar day at `days` since 1970-01-01; a day whose year doesn't fit `i32` reads as 0000-01-01.
@@ -71,8 +70,8 @@ impl fmt::Display for Month {
     }
 }
 
-/// `NaiveDate::num_days_from_ce` of 1970-01-01, so the count can be rebased onto the Unix epoch.
-const UNIX_EPOCH_DAYS_FROM_CE: i64 = 719_163;
+/// The Julian day number of 1970-01-01, so the count can be rebased onto the Unix epoch.
+const UNIX_EPOCH_JULIAN_DAY: i64 = 2_440_588;
 
 /// Days in one 400-year Gregorian cycle (the calendar repeats after it).
 const DAYS_PER_400_YEARS: i64 = 146_097;
@@ -81,20 +80,19 @@ const DAYS_PER_400_YEARS: i64 = 146_097;
 /// within its 400-year cycle and whole cycles are added back as years, so every `i64` count
 /// works; a year that doesn't fit `i32` reads as 0000-01-01.
 fn civil_from_days(days: i64) -> Day {
-    use chrono::Datelike;
     let (cycles, rest) = (
         days.div_euclid(DAYS_PER_400_YEARS),
         days.rem_euclid(DAYS_PER_400_YEARS),
     );
-    let date = i32::try_from(rest + UNIX_EPOCH_DAYS_FROM_CE)
+    let date = i32::try_from(rest + UNIX_EPOCH_JULIAN_DAY)
         .ok()
-        .and_then(chrono::NaiveDate::from_num_days_from_ce_opt);
+        .and_then(|julian_day| time::Date::from_julian_day(julian_day).ok());
     let year = date.and_then(|d| i32::try_from(i64::from(d.year()) + cycles * 400).ok());
     match (date, year) {
         (Some(d), Some(year)) => Day {
             year,
-            month: u8::try_from(d.month()).unwrap_or(1),
-            day: u8::try_from(d.day()).unwrap_or(1),
+            month: u8::from(d.month()),
+            day: d.day(),
         },
         _ => Day {
             year: 0,

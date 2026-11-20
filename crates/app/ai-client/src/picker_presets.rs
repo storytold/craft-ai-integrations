@@ -75,15 +75,15 @@ pub(crate) fn dollars(micros: u64) -> String {
     }
 }
 
-/// Unix seconds as `12 Mar 2026` (UTC). A time outside chrono's range reads as the epoch.
+/// Unix seconds as `12 Mar 2026` (UTC). A time outside the calendar's range reads as the epoch.
 pub(crate) fn date(seconds: u64) -> String {
-    use chrono::Datelike;
     let t = i64::try_from(seconds)
         .ok()
-        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
-        .unwrap_or_default();
-    // A plain year (as the old hand-rolled code wrote), not `%Y`, which prefixes a `+` past 9999.
-    format!("{} {}", t.format("%-d %b"), t.year())
+        .and_then(|s| time::OffsetDateTime::from_unix_timestamp(s).ok())
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    // `Month` displays its full name; the first three letters are the abbreviation.
+    let month = t.month().to_string();
+    format!("{} {} {}", t.day(), &month[..3], t.year())
 }
 
 #[cfg(test)]
@@ -132,9 +132,9 @@ mod tests {
         assert_eq!(date(0), "1 Jan 1970");
         assert_eq!(date(1_692_901_234), "24 Aug 2023");
         assert_eq!(date(1_709_164_800), "29 Feb 2024");
-        // Years past 9999 keep the plain year (no `+`), as the hand-rolled code wrote.
+        // Years past 9999 keep the plain year (no `+`).
         assert_eq!(date(253_402_300_800), "1 Jan 10000");
-        // Past chrono's range reads as the epoch instead of panicking.
+        // Past the calendar's range reads as the epoch instead of panicking.
         assert_eq!(date(u64::MAX), "1 Jan 1970");
     }
 }

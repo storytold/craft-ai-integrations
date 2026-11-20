@@ -20,12 +20,12 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use craft_ai_core::consent::DisclosureItem;
 use craft_ai_core::{AiError, ErrorKind, Event, JobState, Locality, Payload, Usage};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 
 use crate::client::{Finished, Plan};
 
@@ -152,7 +152,7 @@ impl RunRecord {
     pub fn new(
         plan: &Plan,
         finished: &Finished,
-        started: DateTime<Utc>,
+        started: OffsetDateTime,
         elapsed: Duration,
         secrets: &[&str],
     ) -> Self {
@@ -222,7 +222,7 @@ impl RunRecord {
             destination: disclosure.destination.clone(),
             sent: disclosure.items.clone(),
             param_names: disclosure.param_names.clone(),
-            started_at: started.to_rfc3339_opts(SecondsFormat::Millis, true),
+            started_at: rfc3339_millis(started),
             elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
             outcome,
             error,
@@ -432,4 +432,19 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
         s
     })
+}
+
+/// `2026-11-10T22:30:05.123Z`: the instant in UTC, to the millisecond.
+fn rfc3339_millis(at: OffsetDateTime) -> String {
+    let at = at.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second(),
+        at.millisecond()
+    )
 }
