@@ -63,7 +63,7 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119
 ## This repository
 <!-- craft-agents:end -->
 
-## Craft AI integrations
+### Craft AI integrations
 
 The repository's shared crates own the contracts, adapters, catalogue, consent and client. Each Craft app owns its own interface, document conversion and result storage. Layout: `docs/LAYOUT.md`; development: `CONTRIBUTING.md`; adopting guides: `docs/`. For a developer suggestion about a model, connection, engine or workflow, start at `docs/PROPOSE-AN-INTEGRATION.md` and `tools/intake/propose.py`. A suggestion is not a built-in recommendation, a working integration or a user account.
 

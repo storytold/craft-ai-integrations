@@ -14,7 +14,7 @@ cover the subsequent implementation.
 
 Changes reach `main` through pull requests. The repository allows squash and rebase merges, not merge commits, and deletes the branch after merge.
 
-The shared contract lives in `craft-libs`, and each app reviews its own adoption in its own repository.
+The shared `craft-ai-core` contract is accepted in `craft-libs`, but this workspace still builds against its own copy in `crates/foundation/ai-core`, which is not interchangeable with it yet ([docs/CORE-SYNC.md](docs/CORE-SYNC.md)). Each app reviews its own adoption in its own repository.
 
 ## Rules
 
