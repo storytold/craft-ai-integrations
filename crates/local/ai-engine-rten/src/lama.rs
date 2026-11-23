@@ -7,9 +7,17 @@
 //!
 //! The published ONNX export (`Carve/LaMa-ONNX`, `lama_fp32.onnx`, Apache-2.0, opset 17) takes
 //! `image` `[1, 3, 512, 512]` (`0..1`) and `mask` `[1, 1, 512, 512]` (`0` or `1`) and returns
-//! `output` `[1, 3, 512, 512]` (`0..255`). [`pipeline`] crops around the marked region with
-//! surrounding context, pads or resamples to 512 x 512, and blends across a narrow dilated rim so
-//! untouched pixels outside the rim stay identical.
+//! `output` `[1, 3, 512, 512]` (`0..255`). [`pipeline`] fills each separate marked area from a
+//! window of its own: it crops around the area with surrounding context, scales a larger window
+//! down without changing its shape, pads to 512 x 512, and blends across a narrow dilated rim so
+//! untouched pixels outside the rim stay identical. The model runs once for each area, 16 at most.
+//!
+//! The answer is 8-bit RGB, as every picture this crate reads is: a source's transparency and
+//! any colour profile it carries are not in it, so the app that owns the document puts the filled
+//! pixels back into its own copy. It travels inline, under the shared inline limit
+//! ([`Limits::default`]), and is checked against it before it is returned. A lossless picture of
+//! a large photograph can be over that limit, and is then refused only after the model has run;
+//! an app with a large document sends the part around the marks.
 
 use std::path::Path;
 use std::sync::Arc;
