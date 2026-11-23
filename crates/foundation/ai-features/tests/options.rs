@@ -88,7 +88,7 @@ fn every_hosted_route_in_the_catalogue_shows_up_as_an_option() {
 fn a_feature_with_nothing_to_set_up_unlocks_from_nothing() {
     let features = builtin();
     let options = setup_options(&features);
-    for id in ["generative-expand", "extend-sequence", "remove-object"] {
+    for id in ["generative-expand", "extend-sequence"] {
         assert!(
             options.iter().all(|o| !o.unlocks.iter().any(|u| u == id)),
             "{id} has no route yet, so nothing can unlock it"

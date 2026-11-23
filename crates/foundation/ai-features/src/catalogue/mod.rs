@@ -11,12 +11,14 @@ use crate::recipe::CloudOption;
 mod ben2_vitmatte;
 mod florence2;
 mod inspyrenet;
+mod lama;
 mod sam21;
 mod sam3;
 use ben2_vitmatte::ben2_vitmatte;
 use craft_ai_core::{CapabilityId, InputRole};
 pub use florence2::FLORENCE2_LARGE_DIR;
 use inspyrenet::inspyrenet;
+use lama::lama;
 use sam3::sam3;
 use sam21::sam21;
 
@@ -100,6 +102,8 @@ fn try_builtin() -> Option<Vec<Feature>> {
         ("PhotoCraft", "Remove tool"),
         ("LightCraft", "Generative remove"),
     ]);
+    // Built in only: LaMa (rten, on the processor); no hosted route without a prompt yet.
+    remove.locals = vec![lama()];
 
     let mut fill = feature(
         "generative-fill",
