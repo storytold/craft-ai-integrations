@@ -7,7 +7,7 @@ a change needs a `SCHEMA_VERSION` bump.
 ## What an older build does
 
 - **It keeps fields it does not know.** `SharedStore` carries them through a rewrite at every depth.
-  See `crates/ai-native/src/shared/keep_unknown.rs`.
+  See `crates/foundation/ai-native/src/shared/keep_unknown.rs`.
 - **It matches list items by identity:** `id`, then `role`, then `capability`. Items can be reordered.
   An item it removes takes its unknown fields with it.
 - **It leaves an item as written when it cannot match it safely:** when the identity appears twice, or

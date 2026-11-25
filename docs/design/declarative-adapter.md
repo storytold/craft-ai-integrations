@@ -155,8 +155,8 @@ tests), none above 500.
 
 ## As built (13/10/2026)
 
-Code: `crates/ai-core/src/spec.rs` and `spec/` (types, checker, substitutions; wasm-safe),
-`crates/ai-declarative` (the runner), `crates/ai-client/src/declarative.rs` (the factory entry).
+Code: `crates/foundation/ai-core/src/spec.rs` and `spec/` (types, checker, substitutions; wasm-safe),
+`crates/api/ai-declarative` (the runner), `crates/app/ai-client/src/declarative.rs` (the factory entry).
 Tests: `ai-core/tests/spec_*.rs`, `ai-declarative/tests/{queue,direct}.rs`,
 `ai-client/tests/declarative.rs`. Deliberate-bug cases: mutation group `u2` in
 `tools/mutation/mutation_check.py` (cases in `mutation_u2.py`).

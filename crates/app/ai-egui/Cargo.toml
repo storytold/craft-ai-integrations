@@ -1,0 +1,30 @@
+[package]
+name = "craft-ai-egui"
+description = "Shared egui widgets for the Craft AI layer: connection status and model picker, consent prompt, job progress with cancel."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+repository.workspace = true
+publish = false
+
+[dependencies]
+craft-ai-core.workspace = true
+craft-ai-client = { path = "../ai-client" }
+craft-ai-features = { path = "../../foundation/ai-features" }
+craft-ai-native = { path = "../../foundation/ai-native", package = "craft-ai-native" }
+# The workspace root's [patch.crates-io] resolves this to the reviewed storytold 0.37 family.
+# Bundled fonts stay off in the library; tests/examples opt in and hosts own their font policy.
+egui = { version = "0.37", default-features = false }
+
+[dev-dependencies]
+# Tests need bundled fonts for the missing-glyph fixture; the library dependency stays font-free.
+egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+craft-ai-features = { path = "../../foundation/ai-features", package = "craft-ai-features" }
+tempfile = "3"
+serde_json.workspace = true
+
+[lints]
+workspace = true

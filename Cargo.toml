@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,15 +10,19 @@ rust-version = "1.90"
 repository = "https://github.com/storytold/craft-ai-integrations"
 
 [workspace.dependencies]
-craft-ai-core = { path = "crates/ai-core" }
-craft-ai-http = { path = "crates/ai-http" }
+craft-ai-agents = { path = "crates/app/ai-agents" }
+craft-ai-core = { path = "crates/foundation/ai-core" }
+craft-ai-http = { path = "crates/foundation/ai-http" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# All date/time conversion goes through chrono (no hand-rolled calendar code; CONTRIBUTING.md).
-chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# All date/time conversion goes through time (no hand-rolled calendar code; CONTRIBUTING.md).
+# large-dates keeps years beyond 9999 convertible.
+time = { version = "0.3.55", default-features = false, features = ["std", "large-dates"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, so the one named exception can allow it (see AGENTS.md).
+# `crates/foundation/ai-native/tests/unsafe_exception.rs` fails if `unsafe` is allowed anywhere else.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"

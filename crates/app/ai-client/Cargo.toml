@@ -1,0 +1,57 @@
+[package]
+name = "craft-ai-client"
+description = "App-facing entry point of the Craft AI layer: resolve a role, check consent, fetch the key, start a job. Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# Built-in engines. Off by default so an app that does not run models itself stays light. Turning
+# one on is the whole of adopting it: `ProviderFactory::standard()` then knows the engine.
+candle = ["dep:craft-ai-engine-candle"]
+rten = ["dep:craft-ai-engine-rten"]
+burn = ["dep:craft-ai-engine-burn"]
+
+[dependencies]
+craft-ai-core.workspace = true
+craft-ai-native = { path = "../../foundation/ai-native", package = "craft-ai-native" }
+craft-ai-openai = { path = "../../api/ai-openai", package = "craft-ai-openai" }
+craft-ai-artcraft = { path = "../../api/ai-artcraft", package = "craft-ai-artcraft" }
+craft-ai-bfl = { path = "../../api/ai-bfl", package = "craft-ai-bfl" }
+craft-ai-gemini = { path = "../../api/ai-gemini", package = "craft-ai-gemini" }
+craft-ai-features = { path = "../../foundation/ai-features", package = "craft-ai-features" }
+craft-ai-media = { path = "../../foundation/ai-media", package = "craft-ai-media" }
+craft-ai-comfyui = { path = "../../local/ai-comfyui", package = "craft-ai-comfyui" }
+craft-ai-comfy-env = { path = "../../local/ai-comfy-env", package = "craft-ai-comfy-env" }
+craft-ai-seedance = { path = "../../api/ai-seedance", package = "craft-ai-seedance" }
+craft-ai-vertex = { path = "../../api/ai-vertex", package = "craft-ai-vertex" }
+craft-ai-sam3 = { path = "../../local/ai-sam3", package = "craft-ai-sam3" }
+craft-ai-declarative = { path = "../../api/ai-declarative", package = "craft-ai-declarative" }
+craft-ai-engine = { path = "../../local/ai-engine", package = "craft-ai-engine" }
+craft-ai-engine-candle = { path = "../../local/ai-engine-candle", package = "craft-ai-engine-candle", optional = true }
+# The picker-preset "Released …" date goes through time (no hand-rolled calendar code).
+time = { workspace = true }
+craft-ai-engine-rten = { path = "../../local/ai-engine-rten", package = "craft-ai-engine-rten", optional = true }
+craft-ai-engine-burn = { path = "../../local/ai-engine-burn", package = "craft-ai-engine-burn", optional = true }
+# Reads `file:` addresses to measure what the consent prompt shows.
+url = "2"
+# Run records (`run_record.rs`): JSON lines with a SHA-256 of each result. sha2 0.11 is already
+# in the tree through craft-ai-comfy-env.
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.11"
+
+[dev-dependencies]
+# The live example checks existing output aliases, including Windows hardlinks, without unsafe.
+# same-file 1.0.6 is already locked through walkdir; use its provided MIT licence.
+same-file = "=1.0.6"
+serde_json.workspace = true
+tempfile = "3"
+time = { workspace = true, features = ["macros"] }
+png = "0.18"
+
+[lints]
+workspace = true

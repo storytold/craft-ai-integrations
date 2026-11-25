@@ -3,7 +3,7 @@
 Loaded by mutation_check.py. Each case breaks one rule and names the test that should notice.
 Format: (name, file, old, new, package, test target, test filter).
 """
-C = 'crates/ai-features/src/catalogue/'
+C = 'crates/foundation/ai-features/src/catalogue/'
 FE = 'craft-ai-features'
 CU = 'craft-ai-comfyui'
 

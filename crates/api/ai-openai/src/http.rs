@@ -1,0 +1,481 @@
+//! The HTTP layer: one agent per provider, bearer auth, no redirects, capped bodies, and a
+//! mapping from HTTP failures to [`AiError`] kinds an app can act on.
+//!
+//! - **Redirects are never followed.** A server cannot bounce the request, and the key with it, to
+//!   another host.
+//! - **The key is sent only in the `Authorization` header** to the configured base URL.
+//! - **Error text is redacted** with the key before it leaves this module, and capped in length.
+
+use std::io::Read;
+use std::time::Duration;
+
+use craft_ai_core::secret::redact;
+use craft_ai_core::{AiError, ErrorKind, SecretString, Usage};
+use craft_ai_http::json::ReplyError;
+use serde_json::Value;
+use ureq::Body;
+use ureq::http::Response;
+
+/// Largest error body read, in bytes.
+const MAX_ERROR_BODY: usize = 64 * 1024;
+
+/// What one kind of reply may cost: its bytes on the wire, and the estimated memory of the
+/// parsed tree ([`craft_ai_http::json::parse`]). A byte cap alone does not bound memory: a reply
+/// of many tiny objects costs about a hundred times its size once parsed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ReplyLimit {
+    pub bytes: usize,
+    pub parsed: usize,
+}
+
+/// A model list. The longest real lists (OpenRouter's, with prices and descriptions) are a few
+/// MiB; a list of thousands of entries costs well under the parse budget.
+pub(crate) const MODELS_REPLY: ReplyLimit = ReplyLimit {
+    bytes: 8 * 1024 * 1024,
+    parsed: 64 * 1024 * 1024,
+};
+/// A whole chat completion, mostly text. Also the most a stream may keep.
+pub(crate) const CHAT_REPLY: ReplyLimit = ReplyLimit {
+    bytes: 32 * 1024 * 1024,
+    parsed: 64 * 1024 * 1024,
+};
+/// An images reply: several large base64 pictures fit. Long strings cost about their length,
+/// so the parse budget only needs room above the byte cap for the reply's structure.
+pub(crate) const IMAGES_REPLY: ReplyLimit = ReplyLimit {
+    bytes: 128 * 1024 * 1024,
+    parsed: 160 * 1024 * 1024,
+};
+
+/// The message for a reply over its byte cap or its parse budget.
+const TOO_LARGE: &str = "the server's reply was too large";
+
+pub(crate) struct Http {
+    agent: ureq::Agent,
+    base: String,
+    key: Option<SecretString>,
+    /// Header that carries the key; `None` is `Authorization: Bearer`.
+    key_header: Option<String>,
+}
+
+impl Http {
+    pub fn new(
+        base: String,
+        key: Option<SecretString>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Self {
+        let config = ureq::Agent::config_builder()
+            .tls_config(craft_ai_http::tls_config())
+            .proxy(craft_ai_http::proxy_for(&base))
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .max_redirects_will_error(false)
+            .timeout_connect(Some(connect_timeout))
+            .timeout_global(Some(request_timeout))
+            .user_agent("craft-ai/0.1")
+            .build();
+        Self {
+            agent: ureq::Agent::new_with_config(config),
+            base,
+            key,
+            key_header: None,
+        }
+    }
+
+    /// Sends the key as the bare value of this header instead of as a bearer token.
+    pub fn with_key_header(mut self, name: Option<String>) -> Self {
+        self.key_header = name;
+        self
+    }
+
+    /// Whether this is OpenRouter's own address, the only server whose `/models` prices are read.
+    pub fn is_openrouter(&self) -> bool {
+        is_openrouter(&self.base)
+    }
+
+    /// Keeps a cost the server reported only if the server is OpenRouter, whose `usage.cost` is
+    /// documented as credits in US dollars. Any other server's `cost` field could mean anything,
+    /// so it is dropped rather than shown as money.
+    pub fn trust_cost(&self, usage: Option<Usage>) -> Option<Usage> {
+        usage.map(|mut u| {
+            if !is_openrouter(&self.base) {
+                u.cost_micros = None;
+                u.currency = None;
+            }
+            u
+        })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
+
+    /// The header that carries the key, and its value. Only ever added to a request for this
+    /// connection's own base address; redirects are not followed.
+    fn credential(&self) -> Option<(String, String)> {
+        let key = self.key.as_ref().filter(|k| !k.is_empty())?;
+        Some(match &self.key_header {
+            Some(name) => (name.clone(), key.expose().to_owned()),
+            None => (
+                "Authorization".to_owned(),
+                format!("Bearer {}", key.expose()),
+            ),
+        })
+    }
+
+    pub fn get_json(&self, path: &str, limit: ReplyLimit) -> Result<Value, AiError> {
+        let mut req = self.agent.get(self.url(path));
+        if let Some((name, value)) = self.credential() {
+            req = req.header(name, value);
+        }
+        let resp = self.checked(req.call())?;
+        self.read_json(resp, limit)
+    }
+
+    pub fn post(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<Response<Body>, AiError> {
+        let mut req = self.agent.post(self.url(path)).content_type(content_type);
+        if let Some((name, value)) = self.credential() {
+            req = req.header(name, value);
+        }
+        self.checked(req.send(body))
+    }
+
+    pub fn read_json(&self, resp: Response<Body>, limit: ReplyLimit) -> Result<Value, AiError> {
+        let bytes =
+            read_capped(resp.into_body().into_reader(), limit.bytes).map_err(|e| self.scrub(e))?;
+        parse_json(
+            &bytes,
+            limit.parsed,
+            "the server returned a reply that is not JSON",
+        )
+    }
+
+    /// Passes 2xx through and turns everything else into an error.
+    fn checked(&self, r: Result<Response<Body>, ureq::Error>) -> Result<Response<Body>, AiError> {
+        match r {
+            Ok(resp) if resp.status().is_success() => Ok(resp),
+            Ok(resp) => Err(self.status_error(resp)),
+            Err(e) => Err(self.transport_error(&e)),
+        }
+    }
+
+    fn status_error(&self, resp: Response<Body>) -> AiError {
+        let status = resp.status().as_u16();
+        let retry_after = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        let body = read_capped(resp.into_body().into_reader(), MAX_ERROR_BODY).unwrap_or_default();
+        map_status(
+            status,
+            retry_after,
+            &String::from_utf8_lossy(&body),
+            self.key.as_ref(),
+        )
+    }
+
+    fn transport_error(&self, e: &ureq::Error) -> AiError {
+        let kind = match e {
+            ureq::Error::BadUri(_) => ErrorKind::InvalidRequest,
+            ureq::Error::TooManyRedirects => ErrorKind::Provider,
+            _ => ErrorKind::Network,
+        };
+        let text = if matches!(e, ureq::Error::TooManyRedirects) {
+            "the server tried to redirect the request, which is not followed".to_owned()
+        } else {
+            format!("could not reach the server: {e}")
+        };
+        self.scrub(AiError::new(kind, text))
+    }
+
+    /// Removes the key from an error before it is shown or logged.
+    pub fn scrub(&self, e: AiError) -> AiError {
+        scrub(e, self.key.as_ref())
+    }
+}
+
+/// Whether `base` is OpenRouter's own https address (the host must match exactly).
+pub(crate) fn is_openrouter(base: &str) -> bool {
+    base.strip_prefix("https://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .is_some_and(|host| host == "openrouter.ai")
+}
+
+/// Longest error message passed on, in characters.
+const MAX_ERROR_CHARS: usize = 360;
+
+/// Redacts the key from an error and only then caps its length: capping first could cut a key in
+/// two and leave a prefix that no longer matches it.
+pub(crate) fn scrub(mut e: AiError, key: Option<&SecretString>) -> AiError {
+    if let Some(k) = key {
+        e.message = redact(&e.message, &[k]);
+    }
+    if e.message.chars().count() > MAX_ERROR_CHARS {
+        e.message = e.message.chars().take(MAX_ERROR_CHARS).collect();
+    }
+    e
+}
+
+/// Parses a reply within `budget`; `not_json` is the message for a reply that is not JSON.
+pub(crate) fn parse_json(bytes: &[u8], budget: usize, not_json: &str) -> Result<Value, AiError> {
+    craft_ai_http::json::parse(bytes, budget).map_err(|e| match e {
+        ReplyError::TooLarge => AiError::new(ErrorKind::Provider, TOO_LARGE),
+        ReplyError::NotJson => AiError::new(ErrorKind::Provider, not_json),
+    })
+}
+
+/// Reads at most `max` bytes; more than that is an error rather than a truncated reply.
+pub(crate) fn read_capped(reader: impl Read, max: usize) -> Result<Vec<u8>, AiError> {
+    let mut buf = Vec::new();
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    reader.take(limit).read_to_end(&mut buf).map_err(|_| {
+        AiError::new(
+            ErrorKind::Network,
+            "the connection broke while reading the reply",
+        )
+    })?;
+    if buf.len() > max {
+        return Err(AiError::new(ErrorKind::Provider, TOO_LARGE));
+    }
+    Ok(buf)
+}
+
+/// Maps an HTTP failure to an error kind and a short, redacted message.
+pub(crate) fn map_status(
+    status: u16,
+    retry_after: Option<u64>,
+    body: &str,
+    key: Option<&SecretString>,
+) -> AiError {
+    let parsed: Option<Value> = serde_json::from_str(body).ok();
+    let err = parsed.as_ref().and_then(|v| v.get("error"));
+    let upstream = err.map(crate::chat::error_text).unwrap_or_default();
+    let code = err
+        .and_then(|e| e.get("code").or_else(|| e.get("type")))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    // OpenAI answers an account with no credit with a 429, the same status as "slow down". Waiting
+    // does not help there, so tell the two apart by the code or, as seen on a live account, by the
+    // words ("You have no credits remaining"): out of credit is `Quota`, not `RateLimited`.
+    // A code that says rate limit wins over any words: a plain per-minute limit on a new account
+    // can mention billing (it suggests adding a payment method), and that must still be retried.
+    // Single words such as "billing" or "balance" are not evidence on their own; only phrases are.
+    const OUT_OF_CREDIT: [&str; 7] = [
+        "no credits",
+        "out of credits",
+        "insufficient funds",
+        "insufficient credit",
+        "exceeded your current quota",
+        "credit balance is too low",
+        "billing hard limit",
+    ];
+    let words = upstream.to_ascii_lowercase();
+    let out_of_credit = !code.contains("rate_limit")
+        && (code.contains("quota")
+            || code.contains("billing")
+            || code.contains("insufficient_funds")
+            || OUT_OF_CREDIT.iter().any(|w| words.contains(w)));
+    let kind = match status {
+        401 | 403 => ErrorKind::Auth,
+        402 => ErrorKind::Quota,
+        429 if out_of_credit => ErrorKind::Quota,
+        429 => ErrorKind::RateLimited,
+        400 | 404 | 405 | 413 | 415 | 422 => ErrorKind::InvalidRequest,
+        _ => ErrorKind::Provider,
+    };
+    let message = if upstream.is_empty() {
+        format!("the server answered {status}")
+    } else {
+        format!("the server answered {status}: {upstream}")
+    };
+    let mut e = scrub(AiError::new(kind, message), key);
+    if kind == ErrorKind::RateLimited {
+        e.retry_after_secs = retry_after;
+    }
+    e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_openrouters_own_https_address_is_trusted_for_cost() {
+        for yes in [
+            "https://openrouter.ai/api/v1",
+            "https://openrouter.ai",
+            "https://openrouter.ai?x=1",
+        ] {
+            assert!(is_openrouter(yes), "{yes}");
+        }
+        for no in [
+            "http://openrouter.ai/api/v1",
+            "https://openrouter.ai.evil.com/v1",
+            "https://evil.com/openrouter.ai/v1",
+            "https://notopenrouter.ai/v1",
+            "https://user@openrouter.ai/v1",
+            "http://127.0.0.1:11434/v1",
+            "",
+        ] {
+            assert!(!is_openrouter(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_cost_survives_for_openrouter_and_is_dropped_elsewhere() {
+        let usage = || {
+            Some(Usage {
+                input_units: Some(1),
+                output_units: None,
+                cost_micros: Some(5),
+                currency: Some("USD".into()),
+            })
+        };
+        let http = |base: &str| {
+            Http::new(
+                base.to_owned(),
+                None,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+        };
+        assert_eq!(
+            http("https://openrouter.ai/api/v1")
+                .trust_cost(usage())
+                .unwrap()
+                .cost_micros,
+            Some(5)
+        );
+        let other = http("http://localhost:1234/v1")
+            .trust_cost(usage())
+            .unwrap();
+        assert_eq!(
+            (other.cost_micros, other.currency, other.input_units),
+            (None, None, Some(1))
+        );
+        assert!(http("http://localhost:1234/v1").trust_cost(None).is_none());
+    }
+
+    fn body(msg: &str, code: &str) -> String {
+        format!(r#"{{"error":{{"message":"{msg}","code":"{code}"}}}}"#)
+    }
+
+    #[test]
+    fn statuses_map_to_actionable_kinds() {
+        let k = |s, b: &str| map_status(s, None, b, None).kind;
+        assert_eq!(k(401, ""), ErrorKind::Auth);
+        assert_eq!(k(403, ""), ErrorKind::Auth);
+        assert_eq!(k(402, ""), ErrorKind::Quota);
+        assert_eq!(
+            k(429, &body("slow", "rate_limit_exceeded")),
+            ErrorKind::RateLimited
+        );
+        assert_eq!(
+            k(429, &body("pay up", "insufficient_quota")),
+            ErrorKind::Quota
+        );
+        // As a live account with no credit answered: no code worth matching, only the words.
+        assert_eq!(
+            k(
+                429,
+                &body(
+                    "You have no credits remaining. Add credits to continue using the API.",
+                    "some_new_code"
+                )
+            ),
+            ErrorKind::Quota
+        );
+        // A real rate limit that happens to mention tokens is still a rate limit.
+        assert_eq!(
+            k(
+                429,
+                &body(
+                    "Rate limit reached for gpt-4o on tokens per min. Please try again in 6s.",
+                    "rate_limit_exceeded"
+                )
+            ),
+            ErrorKind::RateLimited
+        );
+        // A new account's per-minute limit that points at the billing page is still only a limit,
+        // whether or not the code is one we know.
+        let billing_hint = "Rate limit reached for gpt-4o on requests per min (RPM): Limit 3, Used 3. \
+             Please try again in 20s. Add a payment method at https://platform.openai.com/account/billing \
+             to increase your rate limit.";
+        assert_eq!(
+            k(429, &body(billing_hint, "rate_limit_exceeded")),
+            ErrorKind::RateLimited
+        );
+        assert_eq!(
+            k(429, &body(billing_hint, "some_new_code")),
+            ErrorKind::RateLimited
+        );
+        // The classic out-of-credit answer says quota in both places.
+        assert_eq!(
+            k(
+                429,
+                &body(
+                    "You exceeded your current quota, please check your plan and billing details.",
+                    "insufficient_quota"
+                )
+            ),
+            ErrorKind::Quota
+        );
+        assert_eq!(k(400, ""), ErrorKind::InvalidRequest);
+        assert_eq!(k(404, ""), ErrorKind::InvalidRequest);
+        assert_eq!(k(500, ""), ErrorKind::Provider);
+        assert_eq!(k(503, "<html>down</html>"), ErrorKind::Provider);
+    }
+
+    #[test]
+    fn retry_after_only_on_rate_limits() {
+        assert_eq!(map_status(429, Some(7), "", None).retry_after_secs, Some(7));
+        assert_eq!(map_status(500, Some(7), "", None).retry_after_secs, None);
+    }
+
+    #[test]
+    fn echoed_keys_are_redacted_and_long_messages_capped() {
+        let key = SecretString::new("sk-live-needle");
+        let e = map_status(
+            401,
+            None,
+            &body("Incorrect API key: sk-live-needle", "x"),
+            Some(&key),
+        );
+        assert!(!e.message.contains("needle"), "{}", e.message);
+        assert!(e.message.contains("[redacted]"));
+        let long = "x".repeat(5000);
+        assert!(map_status(500, None, &body(&long, "x"), None).message.len() < 400);
+    }
+
+    #[test]
+    fn a_key_across_the_length_cap_is_still_redacted() {
+        let key = SecretString::new("sk-live-0123456789abcdef");
+        for at in [280, 300, 330, 350, 355] {
+            let text = format!("{}{}{}", "x".repeat(at), key.expose(), "y".repeat(200));
+            let e = map_status(401, None, &body(&text, "x"), Some(&key));
+            assert!(!e.message.contains("sk-live"), "{at}: {}", e.message);
+            let e = scrub(AiError::new(ErrorKind::Provider, text), Some(&key));
+            assert!(!e.message.contains("sk-live"), "{at}: {}", e.message);
+            assert!(e.message.chars().count() <= MAX_ERROR_CHARS);
+        }
+    }
+
+    #[test]
+    fn non_json_error_bodies_do_not_leak_or_panic() {
+        let e = map_status(502, None, "<html>bad gateway</html>", None);
+        assert_eq!(e.message, "the server answered 502");
+    }
+
+    #[test]
+    fn read_capped_refuses_more_than_the_cap() {
+        assert!(read_capped(&b"12345"[..], 5).is_ok());
+        assert!(read_capped(&b"123456"[..], 5).is_err());
+    }
+}

@@ -4,7 +4,7 @@ The real converter and tensor parity need the ignored live test and the standalo
 The dependency cannot cancel mid-component; the cache must discard a late answer instead.
 Case shape: name, file, old, new, package, target, test filter.
 """
-FILE = 'crates/ai-burn-setup/src/cache.rs'
+FILE = 'crates/local/ai-burn-setup/src/cache.rs'
 PACKAGE = 'craft-ai-burn-setup'
 
 

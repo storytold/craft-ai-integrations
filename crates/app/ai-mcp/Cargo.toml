@@ -1,0 +1,25 @@
+[package]
+name = "craft-ai-mcp"
+description = "One MCP server for every installed Craft app: four tools that find and run each app's own MCP tools."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "craft-ai-mcp"
+path = "src/main.rs"
+
+[dependencies]
+craft-ai-agents.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs = "7"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
