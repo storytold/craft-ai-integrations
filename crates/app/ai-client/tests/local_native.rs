@@ -348,15 +348,33 @@ fn the_next_recipe_that_can_run_supplies_the_built_in_runtime() {
     assert_eq!(w.shared.load().unwrap().connections.len(), 1);
 }
 
-/// Every tool other than Select subject and Remove background refuses a built-in runtime and
-/// writes nothing.
+/// Isolate voice registers DeepFilterNet 3 on rten from its encoder file and binds the tool.
+#[test]
+fn isolate_voice_registers_deepfilternet3_on_rten() {
+    let w = World::new();
+    let weights = w.weights("enc.onnx");
+    w.desk("launcher")
+        .enable_native(&feature("isolate-voice"), &weights)
+        .unwrap();
+    let store = w.shared.load().unwrap();
+    let [connection] = store.connections.as_slice() else {
+        panic!("one connection")
+    };
+    assert_eq!(connection.provider, "rten");
+    assert_eq!(connection.models[0].id.as_str(), "deepfilternet3");
+    assert_eq!(connection.models[0].local_file.as_deref(), weights.to_str());
+}
+
+/// Every tool other than Select subject, Remove background and Isolate voice refuses a built-in
+/// runtime and writes nothing.
 #[test]
 fn a_tool_without_a_built_in_runtime_is_refused() {
     let w = World::new();
     let file = w.weights("sam3.safetensors");
+    let built_in = ["select-subject", "remove-background", "isolate-voice"];
     let others = craft_ai_features::builtin()
         .into_iter()
-        .filter(|f| f.id != "select-subject" && f.id != "remove-background");
+        .filter(|f| !built_in.contains(&f.id.as_str()));
     for f in others {
         assert!(
             w.desk("launcher").enable_native(&f, &file).is_err(),

@@ -18,6 +18,7 @@ use craft_ai_core::{AiError, ErrorKind};
 use rten::{Model, NodeId, Value};
 use rten_tensor::{AsView, Tensor};
 
+use crate::model_file;
 use crate::resample::{MASK_SIDE, SIDE};
 
 /// The two files, side by side in one folder. The first is the weights file the connection records.
@@ -68,31 +69,11 @@ fn failed(what: &str, e: impl std::fmt::Display) -> AiError {
 /// loaded from these bytes alone: the published export keeps its weights inside the file, so no
 /// external-data file is ever opened, and a model that names one (with whatever length it likes)
 /// is refused instead of having that length reserved.
-pub(crate) fn read_model_file(path: &Path) -> Result<Vec<u8>, AiError> {
-    read_bounded(path, MAX_MODEL_FILE_BYTES).map_err(|e| match e {
-        Some(e) => failed("could not be read", e),
-        None => not_this_model(),
+fn read_model_file(path: &Path) -> Result<Vec<u8>, AiError> {
+    model_file::read_bounded(path, MAX_MODEL_FILE_BYTES).map_err(|e| match e {
+        model_file::Refused::TooBig => not_this_model(),
+        model_file::Refused::Unreadable(e) => failed("could not be read", e),
     })
-}
-
-/// A plain file's bytes, at most `max` of them. `Err(None)` when it is not a plain file or is
-/// larger; `Err(Some(_))` with the reason when it cannot be read.
-pub(crate) fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, Option<std::io::Error>> {
-    use std::io::Read;
-    let unreadable = Some;
-    let file = std::fs::File::open(path).map_err(unreadable)?;
-    let meta = file.metadata().map_err(unreadable)?;
-    if !meta.is_file() || meta.len() > max {
-        return Err(None);
-    }
-    let mut bytes = Vec::new();
-    file.take(max + 1)
-        .read_to_end(&mut bytes)
-        .map_err(unreadable)?;
-    if bytes.len() as u64 > max {
-        return Err(None);
-    }
-    Ok(bytes)
 }
 
 /// Said when the files load but are not the export this runner knows.

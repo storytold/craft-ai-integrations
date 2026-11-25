@@ -1,6 +1,6 @@
 [package]
 name = "craft-ai-engine-rten"
-description = "Built-in rten runners for Craft AI, reading the published ONNX files as they are: SAM 2.1 for image.segment and BEN2 + ViTMatte for image.matte. Native only."
+description = "Built-in rten runners for Craft AI, reading the published ONNX files as they are: SAM 2.1 for image.segment, BEN2 + ViTMatte for image.matte and DeepFilterNet 3 for audio.enhance. Native only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +18,9 @@ rten-tensor = "=0.28.0"
 png = "0.18"
 # JPEG only: the decoder (zune-jpeg) and the EXIF turn come through this crate.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# DeepFilterNet 3: the STFT around the model, and WAV in and out. Pure Rust.
+realfft = "3"
+hound = "3"
 
 [dev-dependencies]
 tempfile = "3"

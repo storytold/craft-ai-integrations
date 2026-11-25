@@ -20,9 +20,9 @@ use rten::Model;
 use rten_tensor::NdTensor;
 use rten_tensor::prelude::*;
 
+use crate::model_file::{self, read_bounded};
 use crate::picture::{decode_picture, encode_mask};
 use crate::runner::ENGINE;
-use crate::sam21::read_bounded;
 
 pub(crate) mod pipeline;
 pub(crate) mod plane;
@@ -120,8 +120,8 @@ impl Rten {
     /// One file's bytes, refused unread when it is over [`MAX_FILE_BYTES`].
     fn read(dir: &Path, file: &str) -> Result<Vec<u8>, AiError> {
         read_bounded(&dir.join(file), MAX_FILE_BYTES).map_err(|e| match e {
-            Some(e) => failed("could not be read", e),
-            None => not_this_model(),
+            model_file::Refused::TooBig => not_this_model(),
+            model_file::Refused::Unreadable(e) => failed("could not be read", e),
         })
     }
 }
